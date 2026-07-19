@@ -1,1 +1,12 @@
 
+name = "ya7-online"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[[durable_objects.bindings]]
+name = "MAFIA_ROOM"
+class_name = "MafiaRoom"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["MafiaRoom"]
