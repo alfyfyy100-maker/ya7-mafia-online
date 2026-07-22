@@ -1,5 +1,5 @@
 
-name = "ya7-online"
+name = "ya7-mafia-online"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
