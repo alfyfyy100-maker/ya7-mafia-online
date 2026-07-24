@@ -1184,15 +1184,19 @@ export class MawwihRoom {
     this.room.options = shuffleArr(opts);
     this.room.phase = 'voting';
     await this.persist();
-    this.broadcastPublic({
-      type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text,
-      options: this.room.options.map(o => ({ key: o.k, text: o.text })),
-    });
+    // كل لاعب يستلم قائمة خاصة فيه، بدون إجابته هو — يمنع تصويت غلط لا يُحتسب بصمت
+    for (const p of this.room.players) {
+      const myOptions = this.room.options.filter(o => !o.by.includes(p.id)).map(o => ({ key: o.k, text: o.text }));
+      this.sendPrivate(p.id, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: myOptions });
+    }
   }
 
   async submitVote(playerId, key) {
     const opt = this.room.options.find(o => o.k === key);
-    if (!opt || opt.by.includes(playerId)) return; // ما تقدر تصوت لإجابتك
+    if (!opt || opt.by.includes(playerId)) {
+      this.sendPrivate(playerId, { type: 'error', message: 'ما تقدر تصوّت لإجابتك — اختر غيرها' });
+      return;
+    }
     this.room.votes[playerId] = key;
     await this.persist();
     this.broadcastPublic({ type: 'voteProgress', submitted: Object.keys(this.room.votes).length, total: this.room.players.length });
@@ -1240,7 +1244,10 @@ export class MawwihRoom {
     // إعادة اتصال أثناء اللعب — نرسل الحالة العامة الحالية بدل ما يعلق باللوبي
     if (this.room.phase === 'picking') this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'picking', round: this.room.round, rounds: this.room.rounds, chooserId: this.chooser().id, chooserName: this.chooser().name });
     else if (this.room.phase === 'writing') this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'writing', cat: this.room.q.cat, text: this.room.q.text, chooserName: this.chooser().name });
-    else if (this.room.phase === 'voting') this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: this.room.options.map(o => ({ key: o.k, text: o.text })) });
+    else if (this.room.phase === 'voting') {
+      const myOptions = this.room.options.filter(o => !o.by.includes(playerId)).map(o => ({ key: o.k, text: o.text }));
+      this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: myOptions });
+    }
   }
 
   broadcastLobby() {
