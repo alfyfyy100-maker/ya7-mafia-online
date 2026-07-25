@@ -32,10 +32,12 @@ const ROLES = {
   spy:        { team: 'good', name: 'الجاسوس' },
   witch:      { team: 'good', name: 'الساحرة' },
   avenger:    { team: 'good', name: 'المنتقم الأعمى' },
-  trap:       { team: 'evil', name: 'الفخ الصامت' },
+  trap:       { team: 'good', name: 'الفخ الصامت' },
   twin_good:  { team: 'good', name: 'التوأم' },
   twin_evil:  { team: 'evil', name: 'التوأم' },
 };
+const BOT_NAMES = ['فهد','سارة','عبدالله','نورة','خالد','ريم','تركي','لمى','سلطان','هند','ماجد','جود','بندر','شهد','ناصر','دانة','راكان','العنود','مشعل','غلا'];
+function pickRandom(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -56,15 +58,23 @@ function buildRoleList(config, playerCount) {
   if (config.witch) roles.push('witch');
   if (config.avenger) roles.push('avenger');
   if (config.trap) roles.push('trap');
-  let twinPair = null;
-  if (config.twins && Math.random() < 0.3) {
-    const evilTwin = Math.random() < 0.5;
+  let hasTwins = false;
+  if (config.twins) {
+    const evilTwin = Math.random() < 0.3; // ٣٠٪ أن أحد التوأمين شرير
     roles.push(evilTwin ? 'twin_evil' : 'twin_good');
     roles.push('twin_good');
-    twinPair = [roles.length - 2, roles.length - 1];
+    hasTwins = true;
   }
   while (roles.length < playerCount) roles.push('citizen');
-  return { roles: roles.slice(0, playerCount), twinPair };
+  return { roles: roles.slice(0, playerCount), hasTwins };
+}
+
+// يحسب عدد المقاعد اللي تحتاجها الأدوار المفعّلة
+function neededSeats(config) {
+  let n = config.mafia;
+  for (const k of ['doctor','detective','heir','spy','witch','avenger','trap']) if (config[k]) n++;
+  if (config.twins) n += 2;
+  return n;
 }
 
 // ══════════════════════ Durable Object: غرفة واحدة ══════════════════════
@@ -175,6 +185,14 @@ export class MafiaRoom {
       await this.kickPlayer(msg.targetId);
     }
 
+    if (msg.type === 'addBot' && playerId === this.room.hostId && this.room.phase === 'lobby') {
+      await this.addBot();
+    }
+
+    if (msg.type === 'removeBot' && playerId === this.room.hostId && this.room.phase === 'lobby') {
+      await this.removeBot(msg.targetId);
+    }
+
     if (msg.type === 'startGame' && playerId === this.room.hostId) {
       await this.startGame();
     }
@@ -220,23 +238,55 @@ export class MafiaRoom {
     this.broadcastLobby();
   }
 
+  async addBot() {
+    const used = new Set(this.room.players.map(p => p.name));
+    const name = BOT_NAMES.find(n => !used.has(n)) || ('بوت' + (this.room.players.length + 1));
+    const gender = Math.random() < 0.5 ? 'm' : 'f';
+    this.room.players.push({
+      id: 'bot-' + crypto.randomUUID(), name, gender, alive: true,
+      role: null, twinId: null, connected: true, isBot: true,
+    });
+    await this.persist();
+    this.broadcastLobby();
+  }
+
+  async removeBot(targetId) {
+    const target = this.room.players.find(p => p.id === targetId);
+    if (!target || !target.isBot) return;
+    this.room.players = this.room.players.filter(p => p.id !== targetId);
+    await this.persist();
+    this.broadcastLobby();
+  }
+
   async startGame() {
     const n = this.room.players.length;
     if (n < 4) {
       this.sendPrivate(this.room.hostId, { type: 'error', message: 'أقل عدد للبدء ٤ لاعبين' });
       return;
     }
-    const { roles, twinPair } = buildRoleList(this.room.config, n);
+    const need = neededSeats(this.room.config);
+    if (need > n) {
+      this.sendPrivate(this.room.hostId, { type: 'error',
+        message: `الأدوار المفعّلة تحتاج ${need} لاعبين وعندك ${n} — قلّل الأدوار أو زد اللاعبين` });
+      return;
+    }
+    const { roles, hasTwins } = buildRoleList(this.room.config, n);
     shuffle(roles);
     this.room.players.forEach((p, i) => {
       p.role = roles[i];
       p.alive = true;
+      p.twinId = null;
+      p.usedSave = false; p.usedPoison = false; p.usedStrike = false;
     });
-    if (twinPair) {
-      const [a, b] = twinPair;
-      this.room.players[a].twinId = this.room.players[b].id;
-      this.room.players[b].twinId = this.room.players[a].id;
+    // ربط التوأمين حسب الدور الفعلي بعد الخلط (مو حسب موضعهم قبله)
+    if (hasTwins) {
+      const twins = this.room.players.filter(p => p.role === 'twin_good' || p.role === 'twin_evil');
+      if (twins.length === 2) {
+        twins[0].twinId = twins[1].id;
+        twins[1].twinId = twins[0].id;
+      }
     }
+    this.room.firstDeathDone = false;
     this.room.phase = 'night';
     this.room.dayNum = 1;
     await this.persist();
@@ -245,7 +295,9 @@ export class MafiaRoom {
     for (const p of this.room.players) {
       this.sendPrivate(p.id, this.roleMessageFor(p));
     }
+    this.autoBotNightActions();
     this.broadcastPublic({ type: 'phaseChanged', phase: 'night', dayNum: 1 });
+    if (this.allNightActionsIn()) await this.resolveNight();
   }
 
   // ═══════════ مساعدات ═══════════
@@ -253,6 +305,50 @@ export class MafiaRoom {
   findPlayer(id) { return this.room.players.find(p => p.id === id); }
   isAliveRole(role) {
     return this.alivePlayers().some(p => p.role === role);
+  }
+
+  // البوتات تقرر أفعالها تلقائيًا فور دخول الليل — بنفس شكل رسائل اللاعبين الحقيقيين
+  autoBotNightActions() {
+    const na = this.room.nightActions;
+    const alive = this.alivePlayers();
+    for (const bot of alive.filter(p => p.isBot)) {
+      const others = alive.filter(p => p.id !== bot.id);
+      if (!others.length) continue;
+      switch (bot.role) {
+        case 'mafia': {
+          const targets = alive.filter(p => p.role !== 'mafia');
+          if (targets.length) { na.mafiaVotes = na.mafiaVotes || {}; na.mafiaVotes[bot.id] = pickRandom(targets).id; }
+          break;
+        }
+        case 'doctor':
+          if (na.doctorTarget === undefined) na.doctorTarget = pickRandom(alive).id;
+          break;
+        case 'detective':
+          if (na.detectiveTarget === undefined) na.detectiveTarget = pickRandom(others).id;
+          break;
+        case 'spy':
+          if (na.spyTarget === undefined) na.spyTarget = pickRandom(others).id;
+          break;
+        case 'witch':
+          if (!bot.usedSave && Math.random() < 0.4) { na.witchSaveTarget = pickRandom(alive).id; bot.pendingWitchSave = true; }
+          else if (!bot.usedPoison && Math.random() < 0.25) { na.witchPoisonTarget = pickRandom(others).id; bot.pendingWitchPoison = true; }
+          break;
+        case 'avenger':
+          if (!bot.usedStrike && Math.random() < 0.15) { na.avengerTarget = pickRandom(others).id; bot.pendingAvengerStrike = true; }
+          break;
+      }
+    }
+  }
+
+  // البوتات تصوّت تلقائيًا فور دخول مرحلة التصويت
+  autoBotVotes() {
+    const alive = this.alivePlayers();
+    for (const bot of alive.filter(p => p.isBot)) {
+      if (this.room.dayVotes[bot.id] !== undefined) continue;
+      const others = alive.filter(p => p.id !== bot.id);
+      // ٨٠٪ يصوّتون لأحد، ٢٠٪ يمتنعون — لتنويع طبيعي
+      this.room.dayVotes[bot.id] = (others.length && Math.random() < 0.8) ? pickRandom(others).id : null;
+    }
   }
 
   // ═══════════ مرحلة الليل ═══════════
@@ -363,19 +459,13 @@ export class MafiaRoom {
     // تنفيذ الوفيات + ترقية الوريث لو المحقق مات
     const deadNames = [];
     for (const id of deaths) {
-      const p = this.findPlayer(id);
-      if (p && p.alive) {
-        p.alive = false;
-        deadNames.push({ id: p.id, name: p.name, role: p.role, roleName: ROLES[p.role].name });
-        if (p.role === 'detective') this.promoteHeir();
-        this.handleTwinLink(p);
-      }
+      this.killPlayer(this.findPlayer(id), deadNames);
     }
 
     // إرسال النتائج الخاصة (المحقق/الجاسوس) لأصحابها فقط قبل ما نصفّر أفعال الليل
-    const detectivePlayer = this.room.players.find(p => p.role === 'detective');
+    const detectivePlayer = this.alivePlayers().find(p => p.role === 'detective');
     if (detectiveResult && detectivePlayer) this.sendPrivate(detectivePlayer.id, { type: 'investigateResult', ...detectiveResult });
-    const spyPlayer = this.room.players.find(p => p.role === 'spy');
+    const spyPlayer = this.alivePlayers().find(p => p.role === 'spy');
     if (spyResult && spyPlayer) this.sendPrivate(spyPlayer.id, { type: 'spyResult', ...spyResult });
 
     this.room.nightActions = {};
@@ -391,30 +481,48 @@ export class MafiaRoom {
     this.broadcastLobby(); // لتحديث حالة alive بواجهة كل لاعب
 
     const winner = this.checkWinCondition();
-    if (winner) this.endGame(winner);
+    if (winner) await this.endGame(winner);
   }
 
-  promoteHeir() {
-    const heir = this.room.players.find(p => p.alive && p.role === 'heir');
-    if (heir) {
-      heir.role = 'detective'; // الوريث يصير محققًا فعليًا بعد وفاة المحقق
-      this.sendPrivate(heir.id, { type: 'roleChanged', role: 'detective', roleName: ROLES.detective.name,
-        note: 'توفي المحقق — صرت أنت المحقق الجديد' });
+  // قتل موحّد: يطبّق وراثة الوريث على أول وفاة، ويسحب التوأم معه
+  killPlayer(p, out) {
+    if (!p || !p.alive) return;
+    p.alive = false;
+    out.push({ id: p.id, name: p.name, role: p.role, roleName: ROLES[p.role].name });
+    this.tryInherit(p);
+    if (p.twinId) {
+      const twin = this.findPlayer(p.twinId);
+      if (twin && twin.alive) {
+        twin.alive = false;
+        out.push({ id: twin.id, name: twin.name, role: twin.role, roleName: ROLES[twin.role].name, twin: true });
+        this.tryInherit(twin);
+        this.sendPrivate(twin.id, { type: 'twinDied' });
+      }
     }
   }
 
-  handleTwinLink(deadPlayer) {
-    if (!deadPlayer.twinId) return;
-    const twin = this.findPlayer(deadPlayer.twinId);
-    if (twin) this.sendPrivate(twin.id, { type: 'twinDied' });
+  // الوريث يرث دور وفريق أول من يموت باللعبة — مرة واحدة فقط، أيًّا كان دوره أو فريقه
+  tryInherit(deadPlayer) {
+    if (this.room.firstDeathDone) return;
+    this.room.firstDeathDone = true;
+    const heir = this.room.players.find(p => p.alive && p.role === 'heir');
+    if (!heir || heir.id === deadPlayer.id) return;
+    heir.role = deadPlayer.role;
+    const info = ROLES[heir.role];
+    this.sendPrivate(heir.id, {
+      type: 'roleChanged', role: heir.role, roleName: info.name, team: info.team,
+      note: `مات ${deadPlayer.name} — ورثت دوره: ${info.name}`,
+    });
   }
 
   // ═══════════ مرحلة النهار / التصويت ═══════════
   async startVoting() {
     this.room.phase = 'voting';
     this.room.dayVotes = {};
+    this.autoBotVotes();
     await this.persist();
     this.broadcastPublic({ type: 'phaseChanged', phase: 'voting', dayNum: this.room.dayNum });
+    if (Object.keys(this.room.dayVotes).length >= this.alivePlayers().length) await this.resolveVote();
   }
 
   async handleVote(playerId, targetId) {
@@ -447,12 +555,14 @@ export class MafiaRoom {
     }
     if (executedId) {
       const p = this.findPlayer(executedId);
-      if (p) {
-        p.alive = false;
+      if (p && p.alive) {
+        const execDead = [];
+        this.killPlayer(p, execDead);
         executedName = p.name;
-        if (p.role === 'detective') this.promoteHeir();
-        this.handleTwinLink(p);
-        this.broadcastPublic({ type: 'executionResult', id: p.id, name: p.name, role: p.role, roleName: ROLES[p.role].name });
+        this.broadcastPublic({
+          type: 'executionResult', id: p.id, name: p.name, role: p.role, roleName: ROLES[p.role].name,
+          alsoDead: execDead.filter(d => d.twin).map(d => ({ id: d.id, name: d.name, roleName: d.roleName })),
+        });
       }
     } else {
       this.broadcastPublic({ type: 'executionResult', id: null, name: null, message: 'تعادل الأصوات — ما حد أُعدم اليوم' });
@@ -460,13 +570,15 @@ export class MafiaRoom {
 
     this.broadcastLobby();
     const winner = this.checkWinCondition();
-    if (winner) { this.endGame(winner); return; }
+    if (winner) { await this.endGame(winner); return; }
 
     this.room.dayNum++;
     this.room.phase = 'night';
     this.room.nightActions = {};
+    this.autoBotNightActions();
     await this.persist();
     this.broadcastPublic({ type: 'phaseChanged', phase: 'night', dayNum: this.room.dayNum });
+    if (this.allNightActionsIn()) await this.resolveNight();
   }
 
   checkWinCondition() {
@@ -478,9 +590,9 @@ export class MafiaRoom {
     return null;
   }
 
-  endGame(winner) {
+  async endGame(winner) {
     this.room.phase = 'over';
-    this.persist();
+    await this.persist();
     this.broadcastPublic({
       type: 'gameOver',
       winner, // 'good' | 'evil'
@@ -506,7 +618,7 @@ export class MafiaRoom {
   // بث حالة اللوبي العلنية (بدون أي معلومات أدوار)
   broadcastLobby() {
     const publicPlayers = this.room.players.map(p => ({
-      id: p.id, name: p.name, gender: p.gender, connected: p.connected,
+      id: p.id, name: p.name, gender: p.gender, connected: p.connected, alive: p.alive, isBot: !!p.isBot,
     }));
     this.broadcastPublic({
       type: 'lobbyUpdate',
@@ -835,7 +947,7 @@ export class GotRoom {
     this.maybePromptBaelish();
 
     const winner = this.checkWin();
-    if (winner) this.endGame(winner);
+    if (winner) await this.endGame(winner);
   }
 
   maybePromptBaelish(){
@@ -918,7 +1030,7 @@ export class GotRoom {
     this.broadcastLobby();
     this.maybePromptBaelish();
     const winner = this.checkWin();
-    if (winner) { this.endGame(winner); return; }
+    if (winner) { await this.endGame(winner); return; }
     await this.startNextNight();
   }
 
@@ -1153,9 +1265,28 @@ export class MawwihRoom {
     server.accept();
 
     let player = this.room.players.find(p => p.id === playerId);
+
+    // استعادة المقعد بالاسم لمن ضاعت هويته (سكّر المتصفح مثلًا) — يمنع القفل خارج اللعبة
+    if (!player && name) {
+      const nn = norm(name);
+      const seat = this.room.players.find(p => norm(p.name) === nn && !p.connected);
+      if (seat) {
+        const oldId = seat.id;
+        const newId = playerId || crypto.randomUUID();
+        seat.id = newId;
+        // ننقل كل ما هو مرتبط بالمعرّف القديم
+        if (this.room.subs && oldId in this.room.subs) { this.room.subs[newId] = this.room.subs[oldId]; delete this.room.subs[oldId]; }
+        if (this.room.votes && oldId in this.room.votes) { this.room.votes[newId] = this.room.votes[oldId]; delete this.room.votes[oldId]; }
+        if (this.room.options) this.room.options.forEach(o => { o.by = o.by.map(b => b === oldId ? newId : b); });
+        if (this.room.hostId === oldId) this.room.hostId = newId;
+        this.sockets.delete(oldId);
+        player = seat;
+      }
+    }
+
     if (!player) {
       if (this.room.phase !== 'lobby') {
-        server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت، ما تقدر تنضم الحين' }));
+        server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — اكتب نفس اسمك السابق للرجوع لمقعدك' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
@@ -1182,6 +1313,17 @@ export class MawwihRoom {
     try { msg = JSON.parse(evt.data); } catch { return; }
 
     if (msg.type === 'setAvatar') { const p = this.findPlayer(playerId); if (p) { p.av = msg.av; await this.persist(); this.broadcastLobby(); } }
+
+    if (msg.type === 'updateProfile' && this.room.phase === 'lobby') {
+      const p = this.findPlayer(playerId);
+      if (p) {
+        if (typeof msg.name === 'string' && msg.name.trim()) p.name = msg.name.trim().slice(0, 14);
+        if (typeof msg.av === 'string' && msg.av) p.av = msg.av;
+        if (msg.gender === 'm' || msg.gender === 'f') p.gender = msg.gender;
+        await this.persist();
+        this.broadcastLobby();
+      }
+    }
     if (msg.type === 'updateSettings' && playerId === this.room.hostId) {
       if (Array.isArray(msg.cats)) this.room.cats = msg.cats;
       if (msg.rounds) this.room.rounds = msg.rounds;
@@ -1256,9 +1398,20 @@ export class MawwihRoom {
 
   async submitAnswer(playerId, text) {
     const t = (text || '').trim();
-    if (!t) return;
-    if (norm(t) === norm(this.room.q.ans)) { this.sendPrivate(playerId, { type: 'error', message: 'هذي هي الإجابة الصحيحة — اكتب غيرها' }); return; }
+    if (!t) { this.sendPrivate(playerId, { type: 'answerRejected', message: 'اكتب إجابة أولًا' }); return; }
+    if (norm(t) === norm(this.room.q.ans)) {
+      this.sendPrivate(playerId, { type: 'answerRejected', message: 'هذي هي الإجابة الصحيحة — موّه بغيرها 😉' });
+      return;
+    }
+    // منع تكرار نفس إجابة لاعب آخر حرفيًا (تلخبط الكشف)
+    for (const [otherId, otherText] of Object.entries(this.room.subs)) {
+      if (otherId !== playerId && norm(otherText) === norm(t)) {
+        this.sendPrivate(playerId, { type: 'answerRejected', message: 'لاعب ثاني كتب نفس الإجابة — غيّرها' });
+        return;
+      }
+    }
     this.room.subs[playerId] = t;
+    this.sendPrivate(playerId, { type: 'answerAccepted' });
     await this.persist();
     this.broadcastPublic({ type: 'writeProgress', submitted: Object.keys(this.room.subs).length, total: this.room.players.length });
     if (Object.keys(this.room.subs).length >= this.room.players.length) await this.startVoting();
@@ -1371,7 +1524,19 @@ export class MawwihRoom {
 }
 
 function shuffleArr(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; }
-function norm(s) { return (s || '').trim().replace(/[\u064B-\u0652]/g, '').replace(/[إأآا]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').toLowerCase(); }
+function norm(s) {
+  return (s || '')
+    .trim()
+    .replace(/[\u064B-\u0652\u0640]/g, '')        // تشكيل وتطويل
+    .replace(/[إأآٱا]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/[ىی]/g, 'ي')
+    .replace(/ؤ/g, 'و')
+    .replace(/ئ/g, 'ي')
+    .replace(/^(ال|أل)/, '')                       // أداة التعريف بالبداية
+    .replace(/[^\p{L}\p{N}]+/gu, '')               // مسافات وترقيم ورموز
+    .toLowerCase();
+}
 
 export default {
   async fetch(request, env) {
