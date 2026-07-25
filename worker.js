@@ -86,6 +86,7 @@ export class MafiaRoom {
         nightActions: {},
         dayVotes: {},
         dayNum: 1,
+        lastDeaths: [],
       };
     });
   }
@@ -155,6 +156,7 @@ export class MafiaRoom {
     // إرسال حالة اللاعب الحالية له (مهم لو أعاد الاتصال بعد انقطاع)
     this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code });
     if (player.role) this.sendPrivate(player.id, this.roleMessageFor(player));
+    if (this.room.phase !== 'lobby') this.sendRoundStateTo(player.id);
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -167,6 +169,10 @@ export class MafiaRoom {
       Object.assign(this.room.config, msg.config);
       await this.persist();
       this.broadcastLobby();
+    }
+
+    if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') {
+      await this.kickPlayer(msg.targetId);
     }
 
     if (msg.type === 'startGame' && playerId === this.room.hostId) {
@@ -188,6 +194,10 @@ export class MafiaRoom {
     if (msg.type === 'skipVote' && this.room.phase === 'voting') {
       await this.handleVote(playerId, null);
     }
+
+    if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) {
+      await this.forceAdvance();
+    }
   }
 
   onClose(playerId) {
@@ -195,6 +205,18 @@ export class MafiaRoom {
     if (player) player.connected = false;
     this.sockets.delete(playerId);
     this.persist();
+    this.broadcastLobby();
+  }
+
+  async kickPlayer(targetId) {
+    if (targetId === this.room.hostId) return; // المضيف ما يقدر يطرد نفسه
+    const target = this.room.players.find(p => p.id === targetId);
+    if (!target) return;
+    this.sendPrivate(targetId, { type: 'kicked' });
+    const ws = this.sockets.get(targetId);
+    if (ws) { try { ws.close(); } catch {} this.sockets.delete(targetId); }
+    this.room.players = this.room.players.filter(p => p.id !== targetId);
+    await this.persist();
     this.broadcastLobby();
   }
 
@@ -358,12 +380,13 @@ export class MafiaRoom {
 
     this.room.nightActions = {};
     this.room.phase = 'day';
+    this.room.lastDeaths = deadNames.map(d => ({ id: d.id, name: d.name }));
     await this.persist();
 
     this.broadcastPublic({
       type: 'dawnResult',
       dayNum: this.room.dayNum,
-      deaths: deadNames.map(d => ({ id: d.id, name: d.name })), // بالعلن: الاسم بس، بدون كشف الدور
+      deaths: this.room.lastDeaths, // بالعلن: الاسم بس، بدون كشف الدور
     });
     this.broadcastLobby(); // لتحديث حالة alive بواجهة كل لاعب
 
@@ -493,6 +516,21 @@ export class MafiaRoom {
     });
   }
 
+  // إعادة إرسال حالة الجولة الحالية لمن أعاد الاتصال أثناء اللعب
+  sendRoundStateTo(playerId) {
+    if (this.room.phase === 'night' || this.room.phase === 'voting') {
+      this.sendPrivate(playerId, { type: 'phaseChanged', phase: this.room.phase, dayNum: this.room.dayNum });
+    } else if (this.room.phase === 'day') {
+      this.sendPrivate(playerId, { type: 'dawnResult', dayNum: this.room.dayNum, deaths: this.room.lastDeaths || [] });
+    }
+  }
+
+  // صمام أمان: المضيف يقدر يفرض حسم المرحلة لو علقت (مثلًا لاعب انقطع وما رجع)
+  async forceAdvance() {
+    if (this.room.phase === 'night') await this.resolveNight();
+    else if (this.room.phase === 'voting') await this.resolveVote();
+  }
+
   broadcastPublic(payload) {
     const json = JSON.stringify(payload);
     for (const ws of this.sockets.values()) {
@@ -562,6 +600,7 @@ export class GotRoom {
         nightActions: {}, nightNum: 0, deathsTotal: 0,
         crasterTransformed: false, bronnArrowUsed: false, bronnContract: null, baelishSide: null,
         accuseVotes: {}, accusedId: null, finalVotes: {},
+        lastDeaths: [],
       };
     });
   }
@@ -615,6 +654,7 @@ export class GotRoom {
     this.broadcastLobby();
     this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code });
     if (player.role) this.sendPrivate(player.id, this.roleMessageFor(player));
+    if (this.room.phase !== 'lobby') this.sendRoundStateTo(player.id);
 
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -627,6 +667,7 @@ export class GotRoom {
       Object.assign(this.room.config, msg.config);
       await this.persist(); this.broadcastLobby();
     }
+    if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') await this.kickPlayer(msg.targetId);
     if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
     if (msg.type === 'nightAction' && this.room.phase === 'night') await this.handleNightAction(playerId, msg);
     if (msg.type === 'baelishAlign') await this.handleBaelishAlign(playerId, msg.side);
@@ -634,6 +675,7 @@ export class GotRoom {
     if (msg.type === 'accuseVote' && this.room.phase === 'accusing') await this.handleAccuseVote(playerId, msg.targetId);
     if (msg.type === 'startFinalVote' && playerId === this.room.hostId && this.room.phase === 'trial') await this.startFinalVote();
     if (msg.type === 'finalVote' && this.room.phase === 'finalVoting') await this.handleFinalVote(playerId, msg.guilty);
+    if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
 
   onClose(playerId) {
@@ -641,6 +683,18 @@ export class GotRoom {
     if (p) p.connected = false;
     this.sockets.delete(playerId);
     this.persist(); this.broadcastLobby();
+  }
+
+  async kickPlayer(targetId) {
+    if (targetId === this.room.hostId) return;
+    const target = this.findPlayer(targetId);
+    if (!target) return;
+    this.sendPrivate(targetId, { type: 'kicked' });
+    const ws = this.sockets.get(targetId);
+    if (ws) { try { ws.close(); } catch {} this.sockets.delete(targetId); }
+    this.room.players = this.room.players.filter(p => p.id !== targetId);
+    await this.persist();
+    this.broadcastLobby();
   }
 
   alivePlayers(){ return this.room.players.filter(p=>p.alive); }
@@ -773,8 +827,10 @@ export class GotRoom {
 
     this.room.nightActions = {};
     this.room.phase = 'day';
+    this.room.lastDeaths = deadNames;
+    this.room.lastNightNum = this.room.nightNum - 1;
     await this.persist();
-    this.broadcastPublic({ type:'dawnResult', nightNum:this.room.nightNum-1, deaths:deadNames });
+    this.broadcastPublic({ type:'dawnResult', nightNum:this.room.lastNightNum, deaths:deadNames });
     this.broadcastLobby();
     this.maybePromptBaelish();
 
@@ -902,6 +958,30 @@ export class GotRoom {
     const publicPlayers = this.room.players.map(p=>({ id:p.id, name:p.name, gender:p.gender, connected:p.connected }));
     this.broadcastPublic({ type:'lobbyUpdate', players:publicPlayers, hostId:this.room.hostId, config:this.room.config });
   }
+
+  // إعادة إرسال حالة الجولة لمن أعاد الاتصال أثناء اللعب
+  sendRoundStateTo(playerId){
+    if (this.room.phase === 'night') {
+      this.sendPrivate(playerId, { type:'phaseChanged', phase:'night', nightNum:this.room.nightNum });
+    } else if (this.room.phase === 'day') {
+      this.sendPrivate(playerId, { type:'dawnResult', nightNum:this.room.lastNightNum||this.room.nightNum, deaths:this.room.lastDeaths||[] });
+    } else if (this.room.phase === 'accusing') {
+      this.sendPrivate(playerId, { type:'phaseChanged', phase:'accusing' });
+    } else if (this.room.phase === 'trial') {
+      const p = this.findPlayer(this.room.accusedId);
+      this.sendPrivate(playerId, { type:'trialStarted', accusedId:this.room.accusedId, accusedName:p?p.name:'' });
+    } else if (this.room.phase === 'finalVoting') {
+      this.sendPrivate(playerId, { type:'phaseChanged', phase:'finalVoting' });
+    }
+  }
+
+  // صمام أمان: المضيف يقدر يفرض حسم المرحلة لو علقت
+  async forceAdvance(){
+    if (this.room.phase === 'night') await this.resolveNight();
+    else if (this.room.phase === 'accusing') await this.resolveAccusation();
+    else if (this.room.phase === 'finalVoting') await this.resolveFinalVote();
+  }
+
   broadcastPublic(payload){
     const json = JSON.stringify(payload);
     for (const ws of this.sockets.values()) { try { ws.send(json); } catch {} }
@@ -1107,11 +1187,13 @@ export class MawwihRoom {
       if (msg.rounds) this.room.rounds = msg.rounds;
       await this.persist(); this.broadcastLobby();
     }
+    if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') await this.kickPlayer(msg.targetId);
     if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
     if (msg.type === 'pickCategory' && this.room.phase === 'picking' && playerId === this.chooser().id) await this.pickCategory(msg.catIndex);
     if (msg.type === 'submitAnswer' && this.room.phase === 'writing') await this.submitAnswer(playerId, msg.text);
     if (msg.type === 'submitVote' && this.room.phase === 'voting') await this.submitVote(playerId, msg.key);
     if (msg.type === 'nextRound' && playerId === this.room.hostId && this.room.phase === 'reveal') await this.nextRound();
+    if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
 
   onClose(playerId) {
@@ -1119,6 +1201,18 @@ export class MawwihRoom {
     if (p) p.connected = false;
     this.sockets.delete(playerId);
     this.persist(); this.broadcastLobby();
+  }
+
+  async kickPlayer(targetId) {
+    if (targetId === this.room.hostId) return;
+    const target = this.findPlayer(targetId);
+    if (!target) return;
+    this.sendPrivate(targetId, { type: 'kicked' });
+    const ws = this.sockets.get(targetId);
+    if (ws) { try { ws.close(); } catch {} this.sockets.delete(targetId); }
+    this.room.players = this.room.players.filter(p => p.id !== targetId);
+    await this.persist();
+    this.broadcastLobby();
   }
 
   findPlayer(id) { return this.room.players.find(p => p.id === id); }
@@ -1247,6 +1341,17 @@ export class MawwihRoom {
     else if (this.room.phase === 'voting') {
       const myOptions = this.room.options.filter(o => !o.by.includes(playerId)).map(o => ({ key: o.k, text: o.text }));
       this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: myOptions });
+    }
+  }
+
+  // صمام أمان: المضيف يقدر يفرض حسم المرحلة لو علقت (مثلًا لاعب انقطع وما رجع)
+  async forceAdvance() {
+    if (this.room.phase === 'picking') {
+      if (this.room.choices && this.room.choices.length) await this.pickCategory(this.room.choices[0]);
+    } else if (this.room.phase === 'writing') {
+      await this.startVoting();
+    } else if (this.room.phase === 'voting') {
+      await this.reveal();
     }
   }
 
