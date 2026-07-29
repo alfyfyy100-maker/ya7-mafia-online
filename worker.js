@@ -32,7 +32,7 @@ const ROLES = {
   spy:        { team: 'good', name: 'الجاسوس' },
   witch:      { team: 'good', name: 'الساحرة' },
   avenger:    { team: 'good', name: 'المنتقم الأعمى' },
-  trap:       { team: 'good', name: 'الفخ الصامت' },
+  trap:       { team: 'evil', name: 'الفخ الصامت' },
   twin_good:  { team: 'good', name: 'التوأم' },
   twin_evil:  { team: 'evil', name: 'التوأم' },
 };
@@ -276,7 +276,8 @@ export class MafiaRoom {
       p.role = roles[i];
       p.alive = true;
       p.twinId = null;
-      p.usedSave = false; p.usedPoison = false; p.usedStrike = false;
+      p.usedSave = false; p.usedPoison = false;
+      p.revengeTargetId = null;
     });
     // ربط التوأمين حسب الدور الفعلي بعد الخلط (مو حسب موضعهم قبله)
     if (hasTwins) {
@@ -297,6 +298,7 @@ export class MafiaRoom {
     }
     this.autoBotNightActions();
     this.broadcastPublic({ type: 'phaseChanged', phase: 'night', dayNum: 1 });
+    this.sendAvengerInfo();
     if (this.allNightActionsIn()) await this.resolveNight();
   }
 
@@ -332,9 +334,12 @@ export class MafiaRoom {
         case 'witch':
           if (!bot.usedSave && Math.random() < 0.4) { na.witchSaveTarget = pickRandom(alive).id; bot.pendingWitchSave = true; }
           else if (!bot.usedPoison && Math.random() < 0.25) { na.witchPoisonTarget = pickRandom(others).id; bot.pendingWitchPoison = true; }
+          na.witchResponded = true; // البوت حسم أمره — عشان ما يعلّق الليل
           break;
         case 'avenger':
-          if (!bot.usedStrike && Math.random() < 0.15) { na.avengerTarget = pickRandom(others).id; bot.pendingAvengerStrike = true; }
+          // المنتقم يختار/يغيّر هدف انتقامه، أو يتخطّى ويبقي هدفه السابق
+          if (Math.random() < 0.7) bot.revengeTargetId = pickRandom(others).id;
+          na.avengerResponded = true;
           break;
       }
     }
@@ -372,14 +377,30 @@ export class MafiaRoom {
         na.spyTarget = msg.targetId;
         break;
       case 'witch':
+        // لازم ردّ صريح كل ليلة: إنقاذ أو سُم أو تخطّي — عشان ما يُحسم الليل من تحتها
         if (msg.action === 'save' && !player.usedSave) {
           na.witchSaveTarget = msg.targetId; player.pendingWitchSave = true;
         } else if (msg.action === 'poison' && !player.usedPoison) {
           na.witchPoisonTarget = msg.targetId; player.pendingWitchPoison = true;
+        } else if (msg.action === 'skip') {
+          // تخطّي: ما تستخدم شي هذي الليلة
+        } else {
+          this.sendPrivate(playerId, { type: 'error', message: 'هذي القدرة انتهت — اختر غيرها أو تخطَّ' });
+          return;
         }
+        na.witchResponded = true;
         break;
       case 'avenger':
-        if (!player.usedStrike) { na.avengerTarget = msg.targetId; player.pendingAvengerStrike = true; }
+        // يختار/يغيّر هدف انتقامه (يموت معه لو مات)، أو يتخطّى فيبقى هدفه السابق
+        if (msg.action === 'skip') {
+          // تخطّي: الهدف السابق يبقى كما هو
+        } else if (msg.targetId && msg.targetId !== playerId) {
+          player.revengeTargetId = msg.targetId;
+        } else {
+          this.sendPrivate(playerId, { type: 'error', message: 'اختر شخصًا غيرك أو تخطَّ' });
+          return;
+        }
+        na.avengerResponded = true;
         break;
     }
     await this.persist();
@@ -396,11 +417,18 @@ export class MafiaRoom {
     if (this.isAliveRole('doctor') && na.doctorTarget === undefined) return false;
     if (this.isAliveRole('detective') && na.detectiveTarget === undefined) return false;
     if (this.isAliveRole('spy') && na.spyTarget === undefined) return false;
-    // الساحرة والمنتقم أفعالهم اختيارية (مرة واحدة بالمباراة)، ما نوقف عليهم
+    // ننتظر ردًّا صريحًا من الساحرة (إلا لو انتهت قدرتاها) ومن المنتقم كل ليلة
+    const witch = alive.find(p => p.role === 'witch');
+    if (witch && !(witch.usedSave && witch.usedPoison) && !na.witchResponded) return false;
+    const avenger = alive.find(p => p.role === 'avenger');
+    if (avenger && !na.avengerResponded) return false;
     return true;
   }
 
   async resolveNight() {
+    // حماية من الحسم المزدوج (مثلًا آخر فعل يصل بنفس لحظة "تقديم قسري")
+    if (this.room.phase !== 'night') return;
+    this.room.phase = 'resolvingNight';
     const na = this.room.nightActions;
     const deaths = new Set();
 
@@ -414,27 +442,27 @@ export class MafiaRoom {
       killedByMafia = top[Math.floor(Math.random() * top.length)];
     }
 
-    // الفخ الصامت: لو المحقق أو الجاسوس حقق فيه، الفاحص يموت بدل الفخ
-    let detectiveResult = null, spyResult = null, trapBackfire = false;
+    // نثبّت الفاحصين الحقيقيين قبل تنفيذ أي وفاة — عشان لا تُسلّم النتيجة لوريث ورث الدور توًّا
+    const detectiveActor = this.alivePlayers().find(p => p.role === 'detective');
+    const spyActor = this.alivePlayers().find(p => p.role === 'spy');
+
+    // الفخ الصامت: لو المحقق أو الجاسوس حقق فيه، الفاحص نفسه يموت ولا يحصل على نتيجة
+    let detectiveResult = null, spyResult = null;
     if (na.detectiveTarget) {
       const target = this.findPlayer(na.detectiveTarget);
       if (target && target.role === 'trap') {
-        trapBackfire = true;
-        deaths.add(na.detectiveTarget); // بالخطأ — نصححها بالأسفل (المحقق نفسه يموت)
+        if (detectiveActor) deaths.add(detectiveActor.id);
       } else if (target) {
         detectiveResult = { targetId: target.id, targetName: target.name, team: ROLES[target.role].team };
       }
     }
     if (na.spyTarget) {
       const target = this.findPlayer(na.spyTarget);
-      if (target) spyResult = { targetId: target.id, targetName: target.name, role: target.role, roleName: ROLES[target.role].name };
-    }
-    // تصحيح: الفخ يقتل الفاحص (المحقق) نفسه، مو الهدف
-    if (trapBackfire) {
-      deaths.delete(na.detectiveTarget);
-      const detectivePlayer = this.alivePlayers().find(p => p.role === 'detective');
-      if (detectivePlayer) deaths.add(detectivePlayer.id);
-      detectiveResult = null;
+      if (target && target.role === 'trap') {
+        if (spyActor) deaths.add(spyActor.id);
+      } else if (target) {
+        spyResult = { targetId: target.id, targetName: target.name, role: target.role, roleName: ROLES[target.role].name };
+      }
     }
 
     // تطبيق قتل المافيا، إلا لو الطبيب أنقذ نفس الهدف أو الساحرة أنقذته
@@ -443,18 +471,14 @@ export class MafiaRoom {
     }
     // سُم الساحرة
     if (na.witchPoisonTarget) deaths.add(na.witchPoisonTarget);
-    // ضربة المنتقم الأعمى
-    if (na.avengerTarget) deaths.add(na.avengerTarget);
 
-    // تثبيت استخدام قدرات الساحرة/المنتقم لمرة واحدة
+    // تثبيت استخدام قدرات الساحرة لمرة واحدة
     const witch = this.room.players.find(p => p.pendingWitchSave || p.pendingWitchPoison);
     if (witch) {
       if (witch.pendingWitchSave) witch.usedSave = true;
       if (witch.pendingWitchPoison) witch.usedPoison = true;
       witch.pendingWitchSave = false; witch.pendingWitchPoison = false;
     }
-    const avenger = this.room.players.find(p => p.pendingAvengerStrike);
-    if (avenger) { avenger.usedStrike = true; avenger.pendingAvengerStrike = false; }
 
     // تنفيذ الوفيات + ترقية الوريث لو المحقق مات
     const deadNames = [];
@@ -462,15 +486,17 @@ export class MafiaRoom {
       this.killPlayer(this.findPlayer(id), deadNames);
     }
 
-    // إرسال النتائج الخاصة (المحقق/الجاسوس) لأصحابها فقط قبل ما نصفّر أفعال الليل
-    const detectivePlayer = this.alivePlayers().find(p => p.role === 'detective');
-    if (detectiveResult && detectivePlayer) this.sendPrivate(detectivePlayer.id, { type: 'investigateResult', ...detectiveResult });
-    const spyPlayer = this.alivePlayers().find(p => p.role === 'spy');
-    if (spyResult && spyPlayer) this.sendPrivate(spyPlayer.id, { type: 'spyResult', ...spyResult });
+    // النتيجة تروح للفاحص الحقيقي نفسه، وفقط لو نجا هذي الليلة — لا تُورَّث
+    if (detectiveResult && detectiveActor && detectiveActor.alive) {
+      this.sendPrivate(detectiveActor.id, { type: 'investigateResult', ...detectiveResult });
+    }
+    if (spyResult && spyActor && spyActor.alive) {
+      this.sendPrivate(spyActor.id, { type: 'spyResult', ...spyResult });
+    }
 
     this.room.nightActions = {};
     this.room.phase = 'day';
-    this.room.lastDeaths = deadNames.map(d => ({ id: d.id, name: d.name }));
+    this.room.lastDeaths = deadNames.map(d => ({ id: d.id, name: d.name, twin: !!d.twin, revenge: !!d.revenge }));
     await this.persist();
 
     this.broadcastPublic({
@@ -484,20 +510,28 @@ export class MafiaRoom {
     if (winner) await this.endGame(winner);
   }
 
-  // قتل موحّد: يطبّق وراثة الوريث على أول وفاة، ويسحب التوأم معه
-  killPlayer(p, out) {
+  // قتل موحّد: وراثة الوريث على أول وفاة، يسحب التوأم معه، والمنتقم يسحب هدف انتقامه
+  killPlayer(p, out, reason) {
     if (!p || !p.alive) return;
     p.alive = false;
-    out.push({ id: p.id, name: p.name, role: p.role, roleName: ROLES[p.role].name });
+    const entry = { id: p.id, name: p.name, role: p.role, roleName: ROLES[p.role].name };
+    if (reason) entry[reason] = true;
+    out.push(entry);
     this.tryInherit(p);
+
+    // التوأم يموت مع توأمه
     if (p.twinId) {
       const twin = this.findPlayer(p.twinId);
       if (twin && twin.alive) {
-        twin.alive = false;
-        out.push({ id: twin.id, name: twin.name, role: twin.role, roleName: ROLES[twin.role].name, twin: true });
-        this.tryInherit(twin);
+        this.killPlayer(twin, out, 'twin');
         this.sendPrivate(twin.id, { type: 'twinDied' });
       }
+    }
+
+    // المنتقم الأعمى: أي سبب موت يسحب هدف انتقامه معه، والسلسلة تُطبّق تعاقبيًا
+    if (p.role === 'avenger' && p.revengeTargetId) {
+      const victim = this.findPlayer(p.revengeTargetId);
+      if (victim && victim.alive) this.killPlayer(victim, out, 'revenge');
     }
   }
 
@@ -541,6 +575,8 @@ export class MafiaRoom {
   }
 
   async resolveVote() {
+    if (this.room.phase !== 'voting') return;
+    this.room.phase = 'resolvingVote';
     const tally = {};
     for (const t of Object.values(this.room.dayVotes)) {
       if (!t) continue;
@@ -561,7 +597,10 @@ export class MafiaRoom {
         executedName = p.name;
         this.broadcastPublic({
           type: 'executionResult', id: p.id, name: p.name, role: p.role, roleName: ROLES[p.role].name,
-          alsoDead: execDead.filter(d => d.twin).map(d => ({ id: d.id, name: d.name, roleName: d.roleName })),
+          // كل من سُحب معه — توأمًا كان أو هدف انتقام — لازم يُعلن، وإلا بقي ظاهرًا حيًّا
+          alsoDead: execDead
+            .filter(d => d.id !== p.id)
+            .map(d => ({ id: d.id, name: d.name, roleName: d.roleName, twin: !!d.twin, revenge: !!d.revenge })),
         });
       }
     } else {
@@ -578,6 +617,7 @@ export class MafiaRoom {
     this.autoBotNightActions();
     await this.persist();
     this.broadcastPublic({ type: 'phaseChanged', phase: 'night', dayNum: this.room.dayNum });
+    this.sendAvengerInfo();
     if (this.allNightActionsIn()) await this.resolveNight();
   }
 
@@ -632,9 +672,23 @@ export class MafiaRoom {
   sendRoundStateTo(playerId) {
     if (this.room.phase === 'night' || this.room.phase === 'voting') {
       this.sendPrivate(playerId, { type: 'phaseChanged', phase: this.room.phase, dayNum: this.room.dayNum });
+      const me = this.findPlayer(playerId);
+      if (me && me.alive && me.role === 'avenger' && this.room.phase === 'night') this.sendAvengerInfo();
     } else if (this.room.phase === 'day') {
       this.sendPrivate(playerId, { type: 'dawnResult', dayNum: this.room.dayNum, deaths: this.room.lastDeaths || [] });
     }
+  }
+
+  // يخبر المنتقم بهدف انتقامه الحالي عشان الواجهة تعرضه وما يظن إنه ما اختار
+  sendAvengerInfo() {
+    const avenger = this.alivePlayers().find(p => p.role === 'avenger');
+    if (!avenger) return;
+    const t = avenger.revengeTargetId ? this.findPlayer(avenger.revengeTargetId) : null;
+    this.sendPrivate(avenger.id, {
+      type: 'avengerTargetInfo',
+      targetId: (t && t.alive) ? t.id : null,
+      targetName: (t && t.alive) ? t.name : null,
+    });
   }
 
   // صمام أمان: المضيف يقدر يفرض حسم المرحلة لو علقت (مثلًا لاعب انقطع وما رجع)
@@ -833,6 +887,7 @@ export class GotRoom {
     await this.persist();
     for (const p of this.room.players) this.sendPrivate(p.id, this.roleMessageFor(p));
     this.broadcastPublic({ type:'phaseChanged', phase:'night', nightNum:1 });
+    this.sendNightState();
   }
 
   roleMessageFor(player){
@@ -862,12 +917,33 @@ export class GotRoom {
       this.sendPrivate(p.id, { type:'investigateResult', targetId:target.id, targetName:target.name, team:res });
     }
     else if (p.role==='melisandre') {
-      if (msg.action==='revive' && !p.usedRevive) { na.reviveTarget = msg.targetId; p.usedRevive = true; na.protectTarget = null; }
-      else { na.protectTarget = msg.targetId; na.reviveTarget = null; }
+      if (msg.action==='revive') {
+        // لو الإحياء انتهى، ما نسقط بصمت على حماية ميت — نرجّع خطأ وننتظر اختيارًا صحيحًا
+        if (p.usedRevive) {
+          this.sendPrivate(p.id, { type:'error', message:'استخدمتِ الإحياء مرة واحدة — اختاري حماية بدلًا منه' });
+          return;
+        }
+        na.reviveTarget = msg.targetId; p.usedRevive = true; na.protectTarget = null;
+      } else { na.protectTarget = msg.targetId; na.reviveTarget = null; }
     }
     else if (p.role==='hound') na.guardTarget = msg.targetId;
-    else if (p.role==='craster' && this.room.crasterTransformed) na.crasterKill = msg.targetId;
-    else if (p.role==='bronn' && !this.room.bronnArrowUsed) na.bronnTarget = msg.targetId;
+    else if (p.role==='craster') {
+      if (!this.room.crasterTransformed) {
+        this.sendPrivate(p.id, { type:'error', message:'ما تحوّلت بعد — ما عندك قتل هذي الليلة' });
+        return;
+      }
+      na.crasterKill = msg.targetId;
+    }
+    else if (p.role==='bronn') {
+      // لازم ردّ صريح: يرمي سهمه أو يتخطّى — عشان ما يُحسم الليل من تحته
+      if (this.room.bronnArrowUsed) {
+        this.sendPrivate(p.id, { type:'error', message:'صرفت سهمك الوحيد — ما عندك فعل هذي الليلة' });
+        return;
+      }
+      if (msg.action==='skip') na.bronnTarget = null;
+      else na.bronnTarget = msg.targetId;
+      na.bronnResponded = true;
+    }
 
     await this.persist();
     if (this.allNightActionsIn()) await this.resolveNight();
@@ -881,11 +957,15 @@ export class GotRoom {
     if (this.alivePlayers().some(p=>p.role==='melisandre') && na.protectTarget===undefined && na.reviveTarget===undefined) return false;
     if (this.alivePlayers().some(p=>p.role==='hound') && na.guardTarget===undefined) return false;
     if (this.room.crasterTransformed && this.alivePlayers().some(p=>p.role==='craster') && na.crasterKill===undefined) return false;
-    // برون اختياري تمامًا، ما نوقف عليه
+    // ننتظر ردًّا من برون ما دام سهمه موجود
+    const bronn = this.alivePlayers().find(p=>p.role==='bronn');
+    if (bronn && !this.room.bronnArrowUsed && !na.bronnResponded) return false;
     return true;
   }
 
   async resolveNight(){
+    if (this.room.phase !== 'night') return;
+    this.room.phase = 'resolvingNight';
     const na = this.room.nightActions;
     const deaths = new Set();
     const attempts = [];
@@ -950,6 +1030,18 @@ export class GotRoom {
     if (winner) await this.endGame(winner);
   }
 
+  // يخبر كل لاعب بحالة الليل اللي تحدّد أهليته — بدونها تضيع أدوار كراستر وبرون وميليساندرا
+  sendNightState(){
+    for (const p of this.alivePlayers()) {
+      this.sendPrivate(p.id, {
+        type: 'nightState',
+        crasterTransformed: this.room.crasterTransformed,
+        bronnArrowUsed: this.room.bronnArrowUsed,
+        usedRevive: !!p.usedRevive,
+      });
+    }
+  }
+
   maybePromptBaelish(){
     if (this.room.baelishSide===null && this.room.deathsTotal>=2) {
       const bae = this.alivePlayers().find(p=>p.role==='baelish');
@@ -979,6 +1071,8 @@ export class GotRoom {
     if (Object.keys(this.room.accuseVotes).length >= this.alivePlayers().length) await this.resolveAccusation();
   }
   async resolveAccusation(){
+    if (this.room.phase !== 'accusing') return;
+    this.room.phase = 'resolvingAccusation';
     const tally = {};
     for (const t of Object.values(this.room.accuseVotes)) { if (t) tally[t]=(tally[t]||0)+1; }
     const entries = Object.entries(tally);
@@ -1016,17 +1110,28 @@ export class GotRoom {
     if (Object.keys(this.room.finalVotes).length >= eligible) await this.resolveFinalVote();
   }
   async resolveFinalVote(){
+    if (this.room.phase !== 'finalVoting') return;
+    this.room.phase = 'resolvingFinalVote';
     const votes = Object.values(this.room.finalVotes);
     const guiltyCount = votes.filter(v=>v).length;
     const executed = guiltyCount > votes.length/2;
     let name=null, roleName=null;
+    const alsoDead = [];
     if (executed) {
       const p = this.findPlayer(this.room.accusedId);
       p.alive = false; this.room.deathsTotal++;
       name = p.name; roleName = GOT_ROLES[p.role].name;
-      if (p.partnerId) { const partner=this.findPlayer(p.partnerId); if (partner && partner.alive) { partner.alive=false; this.room.deathsTotal++; } }
+      // الشريك يموت معه — ولازم يُعلن، وإلا بقي ظاهرًا حيًّا للجماعة وبنوا تصويتهم على معلومة غلط
+      if (p.partnerId) {
+        const partner = this.findPlayer(p.partnerId);
+        if (partner && partner.alive) {
+          partner.alive = false; this.room.deathsTotal++;
+          alsoDead.push({ id: partner.id, name: partner.name, roleName: GOT_ROLES[partner.role].name });
+        }
+      }
     }
-    this.broadcastPublic({ type:'verdictResult', executed, name, roleName });
+    await this.persist();
+    this.broadcastPublic({ type:'verdictResult', executed, name, roleName, alsoDead });
     this.broadcastLobby();
     this.maybePromptBaelish();
     const winner = this.checkWin();
@@ -1038,6 +1143,7 @@ export class GotRoom {
     this.room.phase = 'night'; this.room.nightActions = {};
     await this.persist();
     this.broadcastPublic({ type:'phaseChanged', phase:'night', nightNum:this.room.nightNum });
+    this.sendNightState();
   }
 
   checkWin(){
@@ -1055,9 +1161,9 @@ export class GotRoom {
     return null;
   }
 
-  endGame(winner){
+  async endGame(winner){
     this.room.phase = 'over';
-    this.persist();
+    await this.persist();
     this.broadcastPublic({
       type:'gameOver', winner,
       players: this.room.players.map(p=>({ id:p.id, name:p.name, role:p.role, roleName:GOT_ROLES[p.role].name, alive:p.alive })),
@@ -1067,7 +1173,7 @@ export class GotRoom {
 
   /* ═══════════ بث ═══════════ */
   broadcastLobby(){
-    const publicPlayers = this.room.players.map(p=>({ id:p.id, name:p.name, gender:p.gender, connected:p.connected }));
+    const publicPlayers = this.room.players.map(p=>({ id:p.id, name:p.name, gender:p.gender, connected:p.connected, alive:p.alive }));
     this.broadcastPublic({ type:'lobbyUpdate', players:publicPlayers, hostId:this.room.hostId, config:this.room.config });
   }
 
@@ -1075,6 +1181,15 @@ export class GotRoom {
   sendRoundStateTo(playerId){
     if (this.room.phase === 'night') {
       this.sendPrivate(playerId, { type:'phaseChanged', phase:'night', nightNum:this.room.nightNum });
+      const me = this.findPlayer(playerId);
+      if (me && me.alive) {
+        this.sendPrivate(playerId, {
+          type: 'nightState',
+          crasterTransformed: this.room.crasterTransformed,
+          bronnArrowUsed: this.room.bronnArrowUsed,
+          usedRevive: !!me.usedRevive,
+        });
+      }
     } else if (this.room.phase === 'day') {
       this.sendPrivate(playerId, { type:'dawnResult', nightNum:this.room.lastNightNum||this.room.nightNum, deaths:this.room.lastDeaths||[] });
     } else if (this.room.phase === 'accusing') {
@@ -1418,6 +1533,7 @@ export class MawwihRoom {
   }
 
   async startVoting() {
+    if (this.room.phase !== 'writing') return;
     const nT = norm(this.room.q.ans);
     const opts = [{ k: 'T', text: this.room.q.ans, by: [] }];
     const seen = { [nT]: 'T' };
@@ -1451,6 +1567,7 @@ export class MawwihRoom {
   }
 
   async reveal() {
+    if (this.room.phase !== 'voting') return;
     const gain = {};
     const add = (id, n) => { gain[id] = (gain[id] || 0) + n; };
     const voters = {}; this.room.options.forEach(o => { voters[o.k] = []; });
@@ -1475,12 +1592,12 @@ export class MawwihRoom {
       gains: this.room.players.map(p => ({ id: p.id, name: p.name, gain: p.gain, score: p.score })),
       isLast,
     });
-    if (isLast) this.endGame();
+    if (isLast) await this.endGame();
   }
 
-  endGame() {
+  async endGame() {
     this.room.phase = 'over';
-    this.persist();
+    await this.persist();
     this.broadcastPublic({
       type: 'gameOver',
       players: [...this.room.players].sort((a, b) => b.score - a.score).map(p => ({ id: p.id, name: p.name, score: p.score })),
