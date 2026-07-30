@@ -11,15 +11,45 @@
  */
 
 // ══════════════════════ أعلام ══════════════════════
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
-function withCors(resp) {
+const ALLOWED_ORIGINS = [
+  'https://games.playsmart2030.com',
+];
+
+function isAllowedOrigin(origin) {
+  return !!origin && ALLOWED_ORIGINS.includes(origin);
+}
+
+function corsFor(origin) {
+  return {
+    'Access-Control-Allow-Origin': isAllowedOrigin(origin) ? origin : ALLOWED_ORIGINS[0],
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Vary': 'Origin',
+  };
+}
+
+function withCors(resp, origin) {
   const h = new Headers(resp.headers);
-  for (const [k, v] of Object.entries(CORS)) h.set(k, v);
+  for (const [k, v] of Object.entries(corsFor(origin))) h.set(k, v);
   return new Response(resp.body, { status: resp.status, headers: h });
+}
+
+// ══════════════════════ حدود وتنقية عامة ══════════════════════
+const MAX_PLAYERS = 20;
+
+// تنقية الاسم في الخادم: يمنع الحقن في الواجهة ويحدّ الطول
+function cleanName(raw) {
+  const s = String(raw == null ? '' : raw)
+    .replace(/[<>&"'`\\]/g, '')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 14);
+  return s || 'لاعب';
+}
+
+function newSeatToken() {
+  return crypto.randomUUID().replace(/-/g, '');
 }
 
 // ══════════════════════ تعريف الأدوار (نفس منطق اللعبة الأصلي) ══════════════════════
@@ -115,11 +145,14 @@ export class MafiaRoom {
 
   async handleCreate(request) {
     const { name, gender, roomCode } = await request.json();
+    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
+      return new Response('room-exists', { status: 409 });
+    }
     this.room.code = roomCode;
     const hostId = crypto.randomUUID();
     this.room.hostId = hostId;
     this.room.players = [{
-      id: hostId, name, gender: gender || 'm', alive: true,
+      id: hostId, name: cleanName(name), gender: gender || 'm', alive: true,
       role: null, twinId: null, connected: false,
     }];
     await this.persist();
@@ -148,8 +181,13 @@ export class MafiaRoom {
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
+      if (this.room.players.length >= MAX_PLAYERS) {
+        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
       player = {
-        id: playerId || crypto.randomUUID(), name, gender,
+        id: playerId || crypto.randomUUID(), name: cleanName(name), gender,
         alive: true, role: null, twinId: null, connected: true,
       };
       this.room.players.push(player);
@@ -218,12 +256,31 @@ export class MafiaRoom {
     }
   }
 
-  onClose(playerId) {
+  async onClose(playerId) {
     const player = this.room.players.find(p => p.id === playerId);
     if (player) player.connected = false;
     this.sockets.delete(playerId);
-    this.persist();
+    this.migrateHostIfNeeded();
+    await this.persist();
     this.broadcastLobby();
+    await this.maybeAdvanceOnDisconnect();
+  }
+
+  // نقل المضيف تلقائيًا لو انقطع — بدونها تتجمّد الغرفة نهائيًا
+  migrateHostIfNeeded() {
+    const host = this.room.players.find(p => p.id === this.room.hostId);
+    if (host && host.connected) return false;
+    const next = this.room.players.find(p => p.connected && !p.isBot && p.id !== this.room.hostId);
+    if (!next) return false;
+    this.room.hostId = next.id;
+    this.broadcastPublic({ type: 'hostChanged', hostId: next.id, hostName: next.name });
+    return true;
+  }
+
+  // لو كان المنقطع آخر من ننتظره، نحسم المرحلة بدل ما تعلّق
+  async maybeAdvanceOnDisconnect() {
+    if (this.room.phase === 'night' && this.allNightActionsIn()) await this.resolveNight();
+    else if (this.room.phase === 'voting' && this.votesComplete()) await this.resolveVote();
   }
 
   async kickPlayer(targetId) {
@@ -307,6 +364,14 @@ export class MafiaRoom {
   findPlayer(id) { return this.room.players.find(p => p.id === id); }
   isAliveRole(role) {
     return this.alivePlayers().some(p => p.role === role);
+  }
+  // البوت حاضر دائمًا؛ اللاعب الحقيقي لازم يكون متصلًا — وإلا علّق الدور اللعبة
+  isHere(p) { return !!p && (p.isBot || p.connected); }
+  presentRole(role) { return this.alivePlayers().some(p => p.role === role && this.isHere(p)); }
+  votersExpected() { return this.alivePlayers().filter(p => this.isHere(p)).length; }
+  votesComplete() {
+    const exp = this.votersExpected();
+    return exp > 0 && Object.keys(this.room.dayVotes).length >= exp;
   }
 
   // البوتات تقرر أفعالها تلقائيًا فور دخول الليل — بنفس شكل رسائل اللاعبين الحقيقيين
@@ -412,15 +477,15 @@ export class MafiaRoom {
   allNightActionsIn() {
     const na = this.room.nightActions;
     const alive = this.alivePlayers();
-    const mafiaAlive = alive.filter(p => p.role === 'mafia');
+    const mafiaAlive = alive.filter(p => p.role === 'mafia' && this.isHere(p));
     if (mafiaAlive.length && !mafiaAlive.every(p => (na.mafiaVotes || {})[p.id])) return false;
-    if (this.isAliveRole('doctor') && na.doctorTarget === undefined) return false;
-    if (this.isAliveRole('detective') && na.detectiveTarget === undefined) return false;
-    if (this.isAliveRole('spy') && na.spyTarget === undefined) return false;
+    if (this.presentRole('doctor') && na.doctorTarget === undefined) return false;
+    if (this.presentRole('detective') && na.detectiveTarget === undefined) return false;
+    if (this.presentRole('spy') && na.spyTarget === undefined) return false;
     // ننتظر ردًّا صريحًا من الساحرة (إلا لو انتهت قدرتاها) ومن المنتقم كل ليلة
-    const witch = alive.find(p => p.role === 'witch');
+    const witch = alive.find(p => p.role === 'witch' && this.isHere(p));
     if (witch && !(witch.usedSave && witch.usedPoison) && !na.witchResponded) return false;
-    const avenger = alive.find(p => p.role === 'avenger');
+    const avenger = alive.find(p => p.role === 'avenger' && this.isHere(p));
     if (avenger && !na.avengerResponded) return false;
     return true;
   }
@@ -542,11 +607,19 @@ export class MafiaRoom {
     const heir = this.room.players.find(p => p.alive && p.role === 'heir');
     if (!heir || heir.id === deadPlayer.id) return;
     heir.role = deadPlayer.role;
+    heir.twinId = null; // ما يرث ارتباط التوأم — التوأم الآخر مات معه أصلًا
     const info = ROLES[heir.role];
-    this.sendPrivate(heir.id, {
+    const payload = {
       type: 'roleChanged', role: heir.role, roleName: info.name, team: info.team,
       note: `مات ${deadPlayer.name} — ورثت دوره: ${info.name}`,
-    });
+    };
+    // لو ورث المافيا لازم يعرف رفاقه، وإلا ما عرف يصوّت وعلّقت الليلة
+    if (heir.role === 'mafia') {
+      payload.mafiaNames = this.room.players
+        .filter(p => p.alive && p.role === 'mafia' && p.id !== heir.id)
+        .map(p => p.name);
+    }
+    this.sendPrivate(heir.id, payload);
   }
 
   // ═══════════ مرحلة النهار / التصويت ═══════════
@@ -556,7 +629,7 @@ export class MafiaRoom {
     this.autoBotVotes();
     await this.persist();
     this.broadcastPublic({ type: 'phaseChanged', phase: 'voting', dayNum: this.room.dayNum });
-    if (Object.keys(this.room.dayVotes).length >= this.alivePlayers().length) await this.resolveVote();
+    if (this.votesComplete()) await this.resolveVote();
   }
 
   async handleVote(playerId, targetId) {
@@ -567,9 +640,9 @@ export class MafiaRoom {
     this.broadcastPublic({
       type: 'voteUpdate',
       votesIn: Object.keys(this.room.dayVotes).length,
-      totalAlive: this.alivePlayers().length,
+      totalAlive: this.votersExpected(),
     });
-    if (Object.keys(this.room.dayVotes).length >= this.alivePlayers().length) {
+    if (this.votesComplete()) {
       await this.resolveVote();
     }
   }
@@ -780,10 +853,13 @@ export class GotRoom {
 
   async handleCreate(request) {
     const { name, gender, roomCode } = await request.json();
+    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
+      return new Response('room-exists', { status: 409 });
+    }
     this.room.code = roomCode;
     const hostId = crypto.randomUUID();
     this.room.hostId = hostId;
-    this.room.players = [{ id: hostId, name, gender: gender || 'm', alive: true, role: null, partnerId: null, connected: false, usedRevive: false }];
+    this.room.players = [{ id: hostId, name: cleanName(name), gender: gender || 'm', alive: true, role: null, partnerId: null, connected: false, usedRevive: false }];
     await this.persist();
     return Response.json({ roomCode: this.room.code, playerId: hostId });
   }
@@ -806,7 +882,12 @@ export class GotRoom {
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
-      player = { id: playerId || crypto.randomUUID(), name, gender, alive: true, role: null, partnerId: null, connected: true, usedRevive: false };
+      if (this.room.players.length >= MAX_PLAYERS) {
+        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      player = { id: playerId || crypto.randomUUID(), name: cleanName(name), gender, alive: true, role: null, partnerId: null, connected: true, usedRevive: false };
       this.room.players.push(player);
     } else {
       player.connected = true;
@@ -844,11 +925,25 @@ export class GotRoom {
     if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
 
-  onClose(playerId) {
+  async onClose(playerId) {
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
-    this.persist(); this.broadcastLobby();
+    this.migrateHostIfNeeded();
+    await this.persist();
+    this.broadcastLobby();
+    await this.maybeAdvanceOnDisconnect();
+  }
+
+  // نقل المضيف تلقائيًا لو انقطع — بدونها تتجمّد الغرفة نهائيًا
+  migrateHostIfNeeded() {
+    const host = this.room.players.find(p => p.id === this.room.hostId);
+    if (host && host.connected) return false;
+    const next = this.room.players.find(p => p.connected && p.id !== this.room.hostId);
+    if (!next) return false;
+    this.room.hostId = next.id;
+    this.broadcastPublic({ type: 'hostChanged', hostId: next.id, hostName: next.name });
+    return true;
   }
 
   async kickPlayer(targetId) {
@@ -865,6 +960,15 @@ export class GotRoom {
 
   alivePlayers(){ return this.room.players.filter(p=>p.alive); }
   findPlayer(id){ return this.room.players.find(p=>p.id===id); }
+  // المنقطع ما نُنتظره — وإلا تجمّدت الليلة أو التصويت
+  presentRole(role){ return this.alivePlayers().some(p=>p.role===role && p.connected); }
+  votersExpected(){ return this.alivePlayers().filter(p=>p.connected).length; }
+  finalVotersExpected(){ return this.alivePlayers().filter(p=>p.connected && p.id!==this.room.accusedId).length; }
+  async maybeAdvanceOnDisconnect(){
+    if (this.room.phase==='night' && this.allNightActionsIn()) await this.resolveNight();
+    else if (this.room.phase==='accusing' && this.votersExpected()>0 && Object.keys(this.room.accuseVotes).length>=this.votersExpected()) await this.resolveAccusation();
+    else if (this.room.phase==='finalVoting' && this.finalVotersExpected()>0 && Object.keys(this.room.finalVotes).length>=this.finalVotersExpected()) await this.resolveFinalVote();
+  }
   leaderPlayer(){
     for (const r of ['tywin','cersei','joffrey']) {
       const p = this.alivePlayers().find(x=>x.role===r);
@@ -906,15 +1010,8 @@ export class GotRoom {
 
     if (leader && p.id===leader.id) na.kill = msg.targetId ?? null;
     else if (p.role==='varys') {
+      // النتيجة تُؤجَّل لحسم الليل: لو مات فاريس هذي الليلة ما ياخذ المعلومة ولا يسرّبها
       na.inspectTarget = msg.targetId;
-      const target = this.findPlayer(msg.targetId);
-      let res;
-      if (target.role==='tywin') res='stark';
-      else if (target.role==='baelish') res = this.room.baelishSide || null;
-      else if (target.role==='craster') res = this.room.crasterTransformed ? null : 'stark';
-      else if (target.role==='bronn') res = this.room.bronnArrowUsed ? (this.room.bronnContract||null) : null;
-      else res = GOT_ROLES[target.role].team==='lannister' ? 'lannister' : 'stark';
-      this.sendPrivate(p.id, { type:'investigateResult', targetId:target.id, targetName:target.name, team:res });
     }
     else if (p.role==='melisandre') {
       if (msg.action==='revive') {
@@ -952,13 +1049,13 @@ export class GotRoom {
   allNightActionsIn(){
     const na = this.room.nightActions;
     const leader = this.leaderPlayer();
-    if (leader && na.kill===undefined) return false;
-    if (this.alivePlayers().some(p=>p.role==='varys') && na.inspectTarget===undefined) return false;
-    if (this.alivePlayers().some(p=>p.role==='melisandre') && na.protectTarget===undefined && na.reviveTarget===undefined) return false;
-    if (this.alivePlayers().some(p=>p.role==='hound') && na.guardTarget===undefined) return false;
-    if (this.room.crasterTransformed && this.alivePlayers().some(p=>p.role==='craster') && na.crasterKill===undefined) return false;
+    if (leader && leader.connected && na.kill===undefined) return false;
+    if (this.presentRole('varys') && na.inspectTarget===undefined) return false;
+    if (this.presentRole('melisandre') && na.protectTarget===undefined && na.reviveTarget===undefined) return false;
+    if (this.presentRole('hound') && na.guardTarget===undefined) return false;
+    if (this.room.crasterTransformed && this.presentRole('craster') && na.crasterKill===undefined) return false;
     // ننتظر ردًّا من برون ما دام سهمه موجود
-    const bronn = this.alivePlayers().find(p=>p.role==='bronn');
+    const bronn = this.alivePlayers().find(p=>p.role==='bronn' && p.connected);
     if (bronn && !this.room.bronnArrowUsed && !na.bronnResponded) return false;
     return true;
   }
@@ -967,6 +1064,23 @@ export class GotRoom {
     if (this.room.phase !== 'night') return;
     this.room.phase = 'resolvingNight';
     const na = this.room.nightActions;
+
+    // نثبّت فاريس ونتيجته قبل أي وفاة أو تغيّر حالة (كراستر/برون) — كما في منطق المحقق بمافيا
+    const varysActor = this.alivePlayers().find(p=>p.role==='varys');
+    let varysResult = null;
+    if (na.inspectTarget) {
+      const t = this.findPlayer(na.inspectTarget);
+      if (t) {
+        let res;
+        if (t.role==='tywin') res='stark';
+        else if (t.role==='baelish') res = this.room.baelishSide || null;
+        else if (t.role==='craster') res = this.room.crasterTransformed ? null : 'stark';
+        else if (t.role==='bronn') res = this.room.bronnArrowUsed ? (this.room.bronnContract||null) : null;
+        else res = GOT_ROLES[t.role].team==='lannister' ? 'lannister' : 'stark';
+        varysResult = { targetId:t.id, targetName:t.name, team:res };
+      }
+    }
+
     const deaths = new Set();
     const attempts = [];
     if (na.kill!==null && na.kill!==undefined) attempts.push(na.kill);
@@ -1009,6 +1123,11 @@ export class GotRoom {
     if (na.reviveTarget!==null && na.reviveTarget!==undefined) {
       const p = this.findPlayer(na.reviveTarget);
       if (p && !p.alive) { p.alive = true; this.room.deathsTotal = Math.max(0,this.room.deathsTotal-1); }
+    }
+
+    // تُسلَّم لفاريس فقط لو نجا الليلة (والإحياء يُحتسب)
+    if (varysResult && varysActor && varysActor.alive) {
+      this.sendPrivate(varysActor.id, { type:'investigateResult', ...varysResult });
     }
 
     this.room.nightNum++;
@@ -1067,8 +1186,9 @@ export class GotRoom {
     if (!voter || !voter.alive) return;
     this.room.accuseVotes[playerId] = targetId;
     await this.persist();
-    this.broadcastPublic({ type:'voteUpdate', votesIn:Object.keys(this.room.accuseVotes).length, totalAlive:this.alivePlayers().length });
-    if (Object.keys(this.room.accuseVotes).length >= this.alivePlayers().length) await this.resolveAccusation();
+    const expA = this.votersExpected();
+    this.broadcastPublic({ type:'voteUpdate', votesIn:Object.keys(this.room.accuseVotes).length, totalAlive:expA });
+    if (expA > 0 && Object.keys(this.room.accuseVotes).length >= expA) await this.resolveAccusation();
   }
   async resolveAccusation(){
     if (this.room.phase !== 'accusing') return;
@@ -1105,9 +1225,9 @@ export class GotRoom {
     if (!voter || !voter.alive || voter.id===this.room.accusedId) return;
     this.room.finalVotes[playerId] = !!guilty;
     await this.persist();
-    const eligible = this.alivePlayers().filter(p=>p.id!==this.room.accusedId).length;
+    const eligible = this.finalVotersExpected();
     this.broadcastPublic({ type:'voteUpdate', votesIn:Object.keys(this.room.finalVotes).length, totalAlive:eligible });
-    if (Object.keys(this.room.finalVotes).length >= eligible) await this.resolveFinalVote();
+    if (eligible > 0 && Object.keys(this.room.finalVotes).length >= eligible) await this.resolveFinalVote();
   }
   async resolveFinalVote(){
     if (this.room.phase !== 'finalVoting') return;
@@ -1481,7 +1601,7 @@ export class MawwihRoom {
         code: null, hostId: null, phase: 'lobby',
         players: [], // {id,name,gender,connected,score,av}
         cats: null, rounds: 8, teams: 0,
-        round: 0, chooserIdx: 0, used: [],
+        round: 0, chooserId: null, used: [],
         q: null, subs: {}, options: null, votes: {},
       };
     });
@@ -1496,10 +1616,13 @@ export class MawwihRoom {
 
   async handleCreate(request) {
     const { name, gender, roomCode } = await request.json();
+    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
+      return new Response('room-exists', { status: 409 });
+    }
     this.room.code = roomCode;
     const hostId = crypto.randomUUID();
     this.room.hostId = hostId;
-    this.room.players = [{ id: hostId, name, gender: gender || 'm', connected: false, score: 0, av: null, team: null }];
+    this.room.players = [{ id: hostId, name: cleanName(name), gender: gender || 'm', connected: false, score: 0, av: null, team: null, seatToken: newSeatToken() }];
     await this.persist();
     return Response.json({ roomCode: this.room.code, playerId: hostId });
   }
@@ -1515,12 +1638,13 @@ export class MawwihRoom {
     const [client, server] = Object.values(pair);
     server.accept();
 
+    const token = url.searchParams.get('token');
+
     let player = this.room.players.find(p => p.id === playerId);
 
-    // استعادة المقعد بالاسم لمن ضاعت هويته (سكّر المتصفح مثلًا) — يمنع القفل خارج اللعبة
-    if (!player && name) {
-      const nn = norm(name);
-      const seat = this.room.players.find(p => norm(p.name) === nn && !p.connected);
+    // استعادة المقعد بتوكن سري فقط — الاسم وحده كان يسمح بسرقة مقعد أي لاعب منقطع
+    if (!player && token) {
+      const seat = this.room.players.find(p => p.seatToken && p.seatToken === token && !p.connected);
       if (seat) {
         const oldId = seat.id;
         const newId = playerId || crypto.randomUUID();
@@ -1537,11 +1661,16 @@ export class MawwihRoom {
 
     if (!player) {
       if (this.room.phase !== 'lobby') {
-        server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — اكتب نفس اسمك السابق للرجوع لمقعدك' }));
+        server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — ما تقدر تنضم الحين' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
-      player = { id: playerId || crypto.randomUUID(), name, gender, connected: true, score: 0, av: null, team: null };
+      if (this.room.players.length >= MAX_PLAYERS) {
+        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      player = { id: playerId || crypto.randomUUID(), name: cleanName(name), gender, connected: true, score: 0, av: null, team: null, seatToken: newSeatToken() };
       this.room.players.push(player);
     } else {
       player.connected = true;
@@ -1553,7 +1682,8 @@ export class MawwihRoom {
 
     await this.persist();
     this.broadcastLobby();
-    this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code });
+    if (!player.seatToken) player.seatToken = newSeatToken();
+    this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code, seatToken: player.seatToken });
     if (this.room.phase !== 'lobby') this.sendRoundStateTo(player.id);
 
     return new Response(null, { status: 101, webSocket: client });
@@ -1568,7 +1698,7 @@ export class MawwihRoom {
     if (msg.type === 'updateProfile' && this.room.phase === 'lobby') {
       const p = this.findPlayer(playerId);
       if (p) {
-        if (typeof msg.name === 'string' && msg.name.trim()) p.name = msg.name.trim().slice(0, 14);
+        if (typeof msg.name === 'string' && msg.name.trim()) p.name = cleanName(msg.name);
         if (typeof msg.av === 'string' && msg.av) p.av = msg.av;
         if (msg.gender === 'm' || msg.gender === 'f') p.gender = msg.gender;
         await this.persist();
@@ -1601,11 +1731,25 @@ export class MawwihRoom {
     if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
 
-  onClose(playerId) {
+  async onClose(playerId) {
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
-    this.persist(); this.broadcastLobby();
+    this.migrateHostIfNeeded();
+    await this.persist();
+    this.broadcastLobby();
+    await this.maybeAdvanceOnDisconnect();
+  }
+
+  // نقل المضيف تلقائيًا لو انقطع — بدونها تتجمّد الغرفة نهائيًا
+  migrateHostIfNeeded() {
+    const host = this.room.players.find(p => p.id === this.room.hostId);
+    if (host && host.connected) return false;
+    const next = this.room.players.find(p => p.connected && p.id !== this.room.hostId);
+    if (!next) return false;
+    this.room.hostId = next.id;
+    this.broadcastPublic({ type: 'hostChanged', hostId: next.id, hostName: next.name });
+    return true;
   }
 
   async kickPlayer(targetId) {
@@ -1621,7 +1765,31 @@ export class MawwihRoom {
   }
 
   findPlayer(id) { return this.room.players.find(p => p.id === id); }
-  chooser() { return this.room.players[this.room.chooserIdx % this.room.players.length]; }
+  // المنقطع ما يوقف الجولة — بدون هذا تعلّق اللعبة على أول انقطاع
+  activePlayers() { return this.room.players.filter(p => p.connected); }
+  expected() { return this.activePlayers().length; }
+  async maybeAdvanceOnDisconnect() {
+    const exp = this.expected();
+    if (exp <= 0) return;
+    if (this.room.phase === 'writing' && Object.keys(this.room.subs).length >= exp) await this.startVoting();
+    else if (this.room.phase === 'voting' && Object.keys(this.room.votes).length >= exp) await this.reveal();
+  }
+  chooser() {
+    // الدور مربوط بهوية اللاعب لا بموضعه — خروج أي لاعب كان يزحزح الدور عشوائيًا
+    const byId = this.room.players.find(p => p.id === this.room.chooserId);
+    if (byId) return byId;
+    return this.activePlayers()[0] || this.room.players[0];
+  }
+  advanceChooser() {
+    const list = this.room.players;
+    if (!list.length) return;
+    const start = Math.max(0, list.findIndex(p => p.id === this.room.chooserId));
+    for (let i = 1; i <= list.length; i++) {
+      const cand = list[(start + i) % list.length];
+      if (cand.connected) { this.room.chooserId = cand.id; return; }
+    }
+    this.room.chooserId = list[(start + 1) % list.length].id;
+  }
   teamsOn() { return this.room.teams > 0; }
   teamList() { return Array.from({ length: this.room.teams }, (_, i) => i); }
   membersOf(t) { return this.room.players.filter(p => p.team === t); }
@@ -1676,7 +1844,11 @@ export class MawwihRoom {
   async nextRound() {
     this.room.round++;
     this.room.subs = {}; this.room.votes = {}; this.room.options = null; this.room.q = null;
-    this.room.chooserIdx = (this.room.round - 1) % this.room.players.length;
+    if (this.room.round <= 1 || !this.room.chooserId) {
+      this.room.chooserId = (this.activePlayers()[0] || this.room.players[0]).id;
+    } else {
+      this.advanceChooser();
+    }
     const avail = this.room.cats.filter(ci => BANK[ci][1].some((_, qi) => !this.room.used.includes(ci + ':' + qi)));
     const pool = avail.length >= 3 ? avail : (this.room.used = [], this.room.cats.slice());
     const choices = shuffleArr(pool.slice()).slice(0, Math.min(3, pool.length));
@@ -1719,8 +1891,9 @@ export class MawwihRoom {
     this.room.subs[playerId] = t;
     this.sendPrivate(playerId, { type: 'answerAccepted' });
     await this.persist();
-    this.broadcastPublic({ type: 'writeProgress', submitted: Object.keys(this.room.subs).length, total: this.room.players.length });
-    if (Object.keys(this.room.subs).length >= this.room.players.length) await this.startVoting();
+    const expW = this.expected();
+    this.broadcastPublic({ type: 'writeProgress', submitted: Object.keys(this.room.subs).length, total: expW });
+    if (expW > 0 && Object.keys(this.room.subs).length >= expW) await this.startVoting();
   }
 
   async startVoting() {
@@ -1756,8 +1929,9 @@ export class MawwihRoom {
     }
     this.room.votes[playerId] = key;
     await this.persist();
-    this.broadcastPublic({ type: 'voteProgress', submitted: Object.keys(this.room.votes).length, total: this.room.players.length });
-    if (Object.keys(this.room.votes).length >= this.room.players.length) await this.reveal();
+    const expV = this.expected();
+    this.broadcastPublic({ type: 'voteProgress', submitted: Object.keys(this.room.votes).length, total: expV });
+    if (expV > 0 && Object.keys(this.room.votes).length >= expV) await this.reveal();
   }
 
   async reveal() {
@@ -1873,9 +2047,15 @@ function norm(s) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    const origin = request.headers.get('Origin');
 
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: CORS });
+      return new Response(null, { headers: corsFor(origin) });
+    }
+
+    // ── حارس المصدر: يمنع أي طلب من خارج الموقع ──
+    if (!isAllowedOrigin(origin)) {
+      return new Response('Forbidden', { status: 403 });
     }
 
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
@@ -1884,17 +2064,21 @@ export default {
       const gameNS = url.pathname.startsWith('/got/') ? env.GOT_ROOM
                     : url.pathname.startsWith('/mawwih/') ? env.MAWWIH_ROOM
                     : env.MAFIA_ROOM;
-      const code = Array.from({ length: 6 }, () =>
-        '23456789ABCDEFGHJKMNPQRSTUVWXYZ'[Math.floor(Math.random() * 32)]
-      ).join('');
       const body = await request.json();
-      const id = gameNS.idFromName(code);
-      const stub = gameNS.get(id);
-      const resp = await stub.fetch(new Request(url.origin + '/create', {
-        method: 'POST',
-        body: JSON.stringify({ ...body, roomCode: code }),
-      }));
-      return withCors(resp);
+      // لو صادف الكود غرفة حيّة، نولّد غيره بدل ما نمسحها
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const code = Array.from({ length: 6 }, () =>
+          '23456789ABCDEFGHJKMNPQRSTUVWXYZ'[Math.floor(Math.random() * 32)]
+        ).join('');
+        const id = gameNS.idFromName(code);
+        const stub = gameNS.get(id);
+        const resp = await stub.fetch(new Request(url.origin + '/create', {
+          method: 'POST',
+          body: JSON.stringify({ ...body, roomCode: code }),
+        }));
+        if (resp.status !== 409) return withCors(resp, origin);
+      }
+      return withCors(new Response('تعذّر إنشاء غرفة، حاول مرة ثانية', { status: 503 }), origin);
     }
 
     // الانضمام لغرفة موجودة بالكود، أو فتح اتصال WebSocket لغرفة قائمة
