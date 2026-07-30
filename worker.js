@@ -1335,6 +1335,8 @@ var BANK = [
 ["كم نسبة الماء من سطح الأرض تقريباً؟","٧١٪"],["ما اسم الرياح الموسمية في جنوب آسيا؟","المونسون"]]]
 ];
 // ══════════════════════ موّه — الغرفة ══════════════════════
+const MAWWIH_TEAMS = ['الذهبي', 'الأزرق', 'الأخضر', 'البنفسجي'];
+
 export class MawwihRoom {
   constructor(state, env) {
     this.state = state;
@@ -1344,7 +1346,7 @@ export class MawwihRoom {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
         players: [], // {id,name,gender,connected,score,av}
-        cats: null, rounds: 8,
+        cats: null, rounds: 8, teams: 0,
         round: 0, chooserIdx: 0, used: [],
         q: null, subs: {}, options: null, votes: {},
       };
@@ -1363,7 +1365,7 @@ export class MawwihRoom {
     this.room.code = roomCode;
     const hostId = crypto.randomUUID();
     this.room.hostId = hostId;
-    this.room.players = [{ id: hostId, name, gender: gender || 'm', connected: false, score: 0, av: null }];
+    this.room.players = [{ id: hostId, name, gender: gender || 'm', connected: false, score: 0, av: null, team: null }];
     await this.persist();
     return Response.json({ roomCode: this.room.code, playerId: hostId });
   }
@@ -1405,7 +1407,7 @@ export class MawwihRoom {
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
-      player = { id: playerId || crypto.randomUUID(), name, gender, connected: true, score: 0, av: null };
+      player = { id: playerId || crypto.randomUUID(), name, gender, connected: true, score: 0, av: null, team: null };
       this.room.players.push(player);
     } else {
       player.connected = true;
@@ -1442,7 +1444,19 @@ export class MawwihRoom {
     if (msg.type === 'updateSettings' && playerId === this.room.hostId) {
       if (Array.isArray(msg.cats)) this.room.cats = msg.cats;
       if (msg.rounds) this.room.rounds = msg.rounds;
+      if ([0, 2, 3, 4].includes(msg.teams)) {
+        this.room.teams = msg.teams;
+        // أي فريق صار خارج النطاق يُلغى ليعاد اختياره
+        this.room.players.forEach(p => { if (p.team === null || p.team >= this.room.teams) p.team = null; });
+      }
       await this.persist(); this.broadcastLobby();
+    }
+    if (msg.type === 'setTeam' && this.room.phase === 'lobby') {
+      const p = this.findPlayer(playerId);
+      if (p && this.room.teams > 0 && Number.isInteger(msg.team) && msg.team >= 0 && msg.team < this.room.teams) {
+        p.team = msg.team;
+        await this.persist(); this.broadcastLobby();
+      }
     }
     if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') await this.kickPlayer(msg.targetId);
     if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
@@ -1474,9 +1488,39 @@ export class MawwihRoom {
 
   findPlayer(id) { return this.room.players.find(p => p.id === id); }
   chooser() { return this.room.players[this.room.chooserIdx % this.room.players.length]; }
+  teamsOn() { return this.room.teams > 0; }
+  teamList() { return Array.from({ length: this.room.teams }, (_, i) => i); }
+  membersOf(t) { return this.room.players.filter(p => p.team === t); }
+  sameTeam(a, b) { return this.teamsOn() && a && b && a.team !== null && a.team === b.team; }
+  /** خيارات الفريق المحجوبة عن لاعب: إجابته وإجابات زملائه */
+  blockedFor(playerId, opt) {
+    const me = this.findPlayer(playerId);
+    return opt.by.some(b => b === playerId || this.sameTeam(this.findPlayer(b), me));
+  }
+  teamTotals() {
+    return this.teamList().map(t => ({
+      team: t, name: MAWWIH_TEAMS[t],
+      score: this.membersOf(t).reduce((a, p) => a + p.score, 0),
+      gain: this.membersOf(t).reduce((a, p) => a + (p.gain || 0), 0),
+      members: this.membersOf(t).map(p => ({ id: p.id, name: p.name, av: p.av, score: p.score })),
+    })).sort((a, b) => b.score - a.score);
+  }
+  catOptions() {
+    return (this.room.choices || []).map(ci => ({
+      index: ci, name: BANK[ci][0],
+      left: BANK[ci][1].filter((_, qi) => !this.room.used.includes(ci + ':' + qi)).length,
+    }));
+  }
 
   async startGame() {
     if (this.room.players.length < 3) { this.sendPrivate(this.room.hostId, { type: 'error', message: 'تحتاجون ٣ لاعبين على الأقل' }); return; }
+    if (this.room.teams > 0) {
+      if (this.room.players.length < this.room.teams) { this.sendPrivate(this.room.hostId, { type: 'error', message: 'اللاعبون أقل من عدد الفرق' }); return; }
+      const missing = this.room.players.filter(p => p.team === null || p.team >= this.room.teams);
+      if (missing.length) { this.broadcastPublic({ type: 'error', message: 'باقي يختار فريقه: ' + missing.map(p => p.name).join('، ') }); return; }
+      const empty = this.teamList().find(t => this.membersOf(t).length === 0);
+      if (empty !== undefined) { this.broadcastPublic({ type: 'error', message: 'فريق ' + MAWWIH_TEAMS[empty] + ' فاضي — وزّعوا اللاعبين' }); return; }
+    }
     this.room.round = 0; this.room.used = [];
     this.room.players.forEach(p => { p.score = 0; });
     if (!this.room.cats || !this.room.cats.length) this.room.cats = BANK.map((_, i) => i);
@@ -1493,14 +1537,15 @@ export class MawwihRoom {
     this.room.choices = choices;
     this.room.phase = 'picking';
     await this.persist();
-    this.broadcastPublic({ type: 'phaseChanged', phase: 'picking', round: this.room.round, rounds: this.room.rounds, chooserId: this.chooser().id, chooserName: this.chooser().name });
-    this.sendPrivate(this.chooser().id, {
-      type: 'catChoices',
-      options: choices.map(ci => ({ index: ci, name: BANK[ci][0], left: BANK[ci][1].filter((_, qi) => !this.room.used.includes(ci + ':' + qi)).length })),
-    });
+    const catOptions = this.catOptions();
+    // الفئات تُبث للكل (مثل الأصل) — اللاعبون يشوفون الخيارات وينتظرون اختيار من عليه الدور
+    this.broadcastPublic({ type: 'phaseChanged', phase: 'picking', round: this.room.round, rounds: this.room.rounds, chooserId: this.chooser().id, chooserName: this.chooser().name, choices: catOptions });
+    this.sendPrivate(this.chooser().id, { type: 'catChoices', options: catOptions });
   }
 
   async pickCategory(catIndex) {
+    // الكل يشوف الفئة المختارة قبل الانتقال للكتابة
+    this.broadcastPublic({ type: 'catPicked', index: catIndex, name: BANK[catIndex][0], chooserName: this.chooser().name });
     const pool = [];
     BANK[catIndex][1].forEach((q, qi) => { const key = catIndex + ':' + qi; if (!this.room.used.includes(key)) pool.push({ key, cat: BANK[catIndex][0], text: q[0], ans: q[1] }); });
     const q = pool[Math.floor(Math.random() * pool.length)];
@@ -1549,15 +1594,18 @@ export class MawwihRoom {
     await this.persist();
     // كل لاعب يستلم قائمة خاصة فيه، بدون إجابته هو — يمنع تصويت غلط لا يُحتسب بصمت
     for (const p of this.room.players) {
-      const myOptions = this.room.options.filter(o => !o.by.includes(p.id)).map(o => ({ key: o.k, text: o.text }));
-      this.sendPrivate(p.id, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: myOptions });
+      const myOptions = this.room.options.filter(o => !this.blockedFor(p.id, o)).map(o => ({ key: o.k, text: o.text }));
+      this.sendPrivate(p.id, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: myOptions, teams: this.room.teams });
     }
   }
 
   async submitVote(playerId, key) {
     const opt = this.room.options.find(o => o.k === key);
-    if (!opt || opt.by.includes(playerId)) {
-      this.sendPrivate(playerId, { type: 'error', message: 'ما تقدر تصوّت لإجابتك — اختر غيرها' });
+    if (!opt || this.blockedFor(playerId, opt)) {
+      this.sendPrivate(playerId, {
+        type: 'error',
+        message: opt && !opt.by.includes(playerId) ? 'هذي إجابة زميلك في الفريق — اختر غيرها' : 'ما تقدر تصوّت لإجابتك — اختر غيرها',
+      });
       return;
     }
     this.room.votes[playerId] = key;
@@ -1590,6 +1638,7 @@ export class MawwihRoom {
     this.broadcastPublic({
       type: 'revealResult', cat: this.room.q.cat, text: this.room.q.text, cards,
       gains: this.room.players.map(p => ({ id: p.id, name: p.name, gain: p.gain, score: p.score })),
+      teams: this.teamsOn() ? this.teamTotals() : null,
       isLast,
     });
     if (isLast) await this.endGame();
@@ -1601,16 +1650,17 @@ export class MawwihRoom {
     this.broadcastPublic({
       type: 'gameOver',
       players: [...this.room.players].sort((a, b) => b.score - a.score).map(p => ({ id: p.id, name: p.name, score: p.score })),
+      teams: this.teamsOn() ? this.teamTotals() : null,
     });
   }
 
   sendRoundStateTo(playerId) {
     // إعادة اتصال أثناء اللعب — نرسل الحالة العامة الحالية بدل ما يعلق باللوبي
-    if (this.room.phase === 'picking') this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'picking', round: this.room.round, rounds: this.room.rounds, chooserId: this.chooser().id, chooserName: this.chooser().name });
+    if (this.room.phase === 'picking') this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'picking', round: this.room.round, rounds: this.room.rounds, chooserId: this.chooser().id, chooserName: this.chooser().name, choices: this.catOptions() });
     else if (this.room.phase === 'writing') this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'writing', cat: this.room.q.cat, text: this.room.q.text, chooserName: this.chooser().name });
     else if (this.room.phase === 'voting') {
-      const myOptions = this.room.options.filter(o => !o.by.includes(playerId)).map(o => ({ key: o.k, text: o.text }));
-      this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: myOptions });
+      const myOptions = this.room.options.filter(o => !this.blockedFor(playerId, o)).map(o => ({ key: o.k, text: o.text }));
+      this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: myOptions, teams: this.room.teams });
     }
   }
 
@@ -1626,8 +1676,8 @@ export class MawwihRoom {
   }
 
   broadcastLobby() {
-    const publicPlayers = this.room.players.map(p => ({ id: p.id, name: p.name, gender: p.gender, connected: p.connected, av: p.av }));
-    this.broadcastPublic({ type: 'lobbyUpdate', players: publicPlayers, hostId: this.room.hostId, cats: this.room.cats, rounds: this.room.rounds });
+    const publicPlayers = this.room.players.map(p => ({ id: p.id, name: p.name, gender: p.gender, connected: p.connected, av: p.av, team: p.team }));
+    this.broadcastPublic({ type: 'lobbyUpdate', players: publicPlayers, hostId: this.room.hostId, cats: this.room.cats, rounds: this.room.rounds, teams: this.room.teams });
   }
   broadcastPublic(payload) {
     const json = JSON.stringify(payload);
