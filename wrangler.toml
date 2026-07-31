@@ -25,3 +25,10 @@ new_sqlite_classes = ["GotRoom"]
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["MawwihRoom"]
+[[durable_objects.bindings]]
+name = "FATIN_ROOM"
+class_name = "FatinRoom"
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["FatinRoom"]
