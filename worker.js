@@ -3103,6 +3103,9 @@ export class MawwihRoom {
   }
 
   async pickCategory(catIndex) {
+    // حارس الحسم المزدوج — نفس نمط بقية دوال الانتقال
+    if (this.room.phase !== 'picking') return;
+    this.room.phase = 'writing';
     // الكل يشوف الفئة المختارة قبل الانتقال للكتابة
     this.broadcastPublic({ type: 'catPicked', index: catIndex, name: BANK[catIndex][0], chooserName: this.chooser().name });
     const pool = [];
@@ -3110,7 +3113,6 @@ export class MawwihRoom {
     const q = pool[Math.floor(Math.random() * pool.length)];
     this.room.used.push(q.key);
     this.room.q = q;
-    this.room.phase = 'writing';
     await this.persist();
     this.broadcastPublic({ type: 'phaseChanged', phase: 'writing', cat: q.cat, text: q.text, chooserName: this.chooser().name });
   }
@@ -3285,6 +3287,591 @@ function norm(s) {
     .toLowerCase();
 }
 
+
+/* ===================== فَطِن ===================== */
+const FATIN_BANK = {
+ 'تاريخ':[
+  ['متى أُلغيت الخلافة العثمانية رسميًا؟','١٩٢٤م',['١٩١٨م','١٩٢٢م','١٩٣٠م']],
+  ['من القائد المسلم الذي فتح الأندلس؟','طارق بن زياد',['موسى بن نصير','عقبة بن نافع','قتيبة بن مسلم']],
+  ['في أي معركة أوقف المسلمون زحف المغول؟','عين جالوت',['حطين','اليرموك','الزلاقة']],
+  ['كم سنة استمرت الحرب العالمية الأولى؟','أربع سنوات',['ست سنوات','سنتان','ثماني سنوات']],
+  ['من أول خليفة في الدولة الأموية؟','معاوية بن أبي سفيان',['عبدالملك بن مروان','يزيد بن معاوية','مروان بن الحكم']],
+  ['على يد من سقطت بغداد سنة ٦٥٦هـ؟','المغول',['الصليبيين','البيزنطيين','الفرس']],
+  ['من قاد المسلمين في معركة حطين؟','صلاح الدين الأيوبي',['نور الدين زنكي','قطز','بيبرس']],
+  ['أي حضارة نحتت مدينة البتراء؟','الأنباط',['الفراعنة','الآشوريون','الفينيقيون']],
+  ['في أي عام بدأت الحرب العالمية الثانية؟','١٩٣٩م',['١٩٤١م','١٩٣٦م','١٩٤٥م']],
+  ['من وضع التقويم الهجري؟','عمر بن الخطاب',['أبو بكر الصديق','عثمان بن عفان','علي بن أبي طالب']],
+  ['في أي عام هبط الإنسان على القمر أول مرة؟','١٩٦٩م',['١٩٦١م','١٩٧٢م','١٩٥٧م']],
+  ['ما عاصمة الدولة العباسية في عصرها الذهبي؟','بغداد',['دمشق','القاهرة','قرطبة']]
+ ],
+ 'جغرافيا':[
+  ['ما أكبر محيطات العالم؟','المحيط الهادئ',['الأطلسي','الهندي','المتجمد الشمالي']],
+  ['ما أكبر قارة من حيث المساحة؟','آسيا',['أفريقيا','أمريكا الشمالية','أوروبا']],
+  ['ما أعلى قمة جبلية في العالم؟','إيفرست',['كِلمنجارو','مونت بلانك','K2']],
+  ['ما أكبر صحراء رملية متصلة في العالم؟','الربع الخالي',['النفود','الصحراء الكبرى','كالاهاري']],
+  ['في أي قارة تقع الأرجنتين؟','أمريكا الجنوبية',['أمريكا الشمالية','أفريقيا','أوروبا']],
+  ['ما عاصمة النرويج؟','أوسلو',['ستوكهولم','كوبنهاغن','هلسنكي']],
+  ['أي بحر يفصل بين السعودية ومصر؟','البحر الأحمر',['البحر المتوسط','بحر العرب','الخليج العربي']],
+  ['ما أصغر دولة في العالم مساحةً؟','الفاتيكان',['موناكو','مالطا','سان مارينو']],
+  ['كم عدد قارات العالم؟','سبع',['خمس','ست','ثمان']],
+  ['ما البحيرة الشديدة الملوحة التي لا تعيش فيها الأسماك؟','البحر الميت',['بحر قزوين','بحيرة فكتوريا','البحيرة الحمراء']],
+  ['ما أكبر جزيرة في العالم؟','جرينلاند',['مدغشقر','بورنيو','سومطرة']],
+  ['ما أكبر دولة عربية مساحةً؟','الجزائر',['السعودية','السودان','ليبيا']]
+ ],
+ 'علوم':[
+  ['ما الغاز الذي تمتصه النباتات في البناء الضوئي؟','ثاني أكسيد الكربون',['الأكسجين','النيتروجين','الهيدروجين']],
+  ['كم عدد عظام جسم الإنسان البالغ؟','٢٠٦',['١٨٠','٢٥٠','٣٠٦']],
+  ['ما أقرب الكواكب إلى الشمس؟','عطارد',['الزهرة','الأرض','المريخ']],
+  ['ما الرمز الكيميائي للذهب؟','Au',['Ag','Gd','Go']],
+  ['ما العضو المسؤول عن ضخ الدم في الجسم؟','القلب',['الكبد','الرئة','الكلى']],
+  ['ما أكبر كواكب المجموعة الشمسية؟','المشتري',['زحل','نبتون','أورانوس']],
+  ['كم عدد الكروموسومات في خلية الإنسان الطبيعية؟','٤٦',['٢٣','٤٨','٤٤']],
+  ['ما الوحدة التي تُقاس بها القوة؟','نيوتن',['جول','واط','باسكال']],
+  ['ما المعدن السائل في درجة حرارة الغرفة؟','الزئبق',['الرصاص','الصوديوم','القصدير']],
+  ['أي فيتامين تنتجه البشرة عند التعرض للشمس؟','فيتامين د',['فيتامين ج','فيتامين أ','فيتامين ب١٢']],
+  ['كم تبلغ سرعة الضوء تقريبًا في الفراغ؟','٣٠٠ ألف كم/ث',['٣٠٠ كم/ث','٣ ملايين كم/ث','٣٠ ألف كم/ث']],
+  ['ما أصلب مادة طبيعية معروفة؟','الألماس',['الكوارتز','الحديد','الجرافيت']]
+ ],
+ 'الجزيرة العربية':[
+  ['ما عاصمة المملكة العربية السعودية؟','الرياض',['جدة','الدمام','مكة المكرمة']],
+  ['في أي عام توحّدت المملكة العربية السعودية بمسماها الحالي؟','١٩٣٢م',['١٩٢٦م','١٩٤٥م','١٩٥٣م']],
+  ['ما أكبر واحة نخيل في العالم؟','الأحساء',['القطيف','بريدة','تبوك']],
+  ['ما أعلى قمة في السعودية؟','جبل السودة',['جبل طويق','جبل أُحد','جبل شدا']],
+  ['أي مدينة سعودية تُلقّب بعروس البحر الأحمر؟','جدة',['ينبع','جازان','ضباء']],
+  ['ما اسم الرؤية التنموية السعودية؟','رؤية ٢٠٣٠',['رؤية ٢٠٢٠','خطة الغد','مشروع النهضة']],
+  ['ما عاصمة سلطنة عُمان؟','مسقط',['صلالة','نزوى','صحار']],
+  ['أي دولة خليجية عاصمتها المنامة؟','البحرين',['قطر','الكويت','الإمارات']],
+  ['ما اسم الموقع الأثري النبطي في العُلا؟','الحِجر',['البتراء','قرية الفاو','دومة الجندل']],
+  ['ما أكبر مدن السعودية سكانًا؟','الرياض',['جدة','مكة المكرمة','المدينة المنورة']],
+  ['ما العملة الرسمية للكويت؟','الدينار',['الريال','الدرهم','الدينار البحريني']],
+  ['في أي عام تدفّق النفط تجاريًا في السعودية؟','١٩٣٨م',['١٩٥١م','١٩٢٩م','١٩٤٦م']]
+ ],
+ 'لغة وأدب':[
+  ['كم عدد حروف اللغة العربية؟','٢٨',['٢٦','٢٩','٣٠']],
+  ['من الشاعر الملقّب بأمير الشعراء؟','أحمد شوقي',['حافظ إبراهيم','المتنبي','البحتري']],
+  ['من مؤلف كتاب "الأيام"؟','طه حسين',['العقاد','المنفلوطي','توفيق الحكيم']],
+  ['من أول أديب عربي نال جائزة نوبل للآداب؟','نجيب محفوظ',['جبران خليل جبران','أدونيس','الطيب صالح']],
+  ['من مؤلف معجم "لسان العرب"؟','ابن منظور',['الفيروزآبادي','الخليل بن أحمد','الجوهري']],
+  ['ما نوع كلمة "كَتَبَ" من حيث الزمن؟','فعل ماضٍ',['فعل مضارع','فعل أمر','اسم']],
+  ['من صاحب المعلقة التي تبدأ بـ"قِفا نبكِ"؟','امرؤ القيس',['عنترة','زهير بن أبي سلمى','طرفة بن العبد']],
+  ['من يُنسب إليه وضع علم النحو؟','أبو الأسود الدؤلي',['سيبويه','الكسائي','ابن جني']],
+  ['ما مرادف كلمة "الوَجَل"؟','الخوف',['الفرح','التعب','الشوق']],
+  ['من نقل "كليلة ودمنة" إلى العربية؟','ابن المقفع',['الجاحظ','ابن خلدون','الأصمعي']],
+  ['من واضع علم العَروض (بحور الشعر)؟','الخليل بن أحمد',['سيبويه','ابن جني','الفراهيدي الصغير']],
+  ['ما جمع كلمة "قَلَم"؟','أقلام',['قلمون','قوالم','قلائم']]
+ ],
+ 'رياضة':[
+  ['كم عدد لاعبي فريق كرة القدم داخل الملعب؟','١١',['١٠','١٢','٩']],
+  ['كل كم سنة تقام كأس العالم لكرة القدم؟','أربع سنوات',['سنتان','ثلاث سنوات','خمس سنوات']],
+  ['ما أكثر منتخب تتويجًا بكأس العالم؟','البرازيل',['ألمانيا','إيطاليا','الأرجنتين']],
+  ['في أي رياضة يُستخدم مصطلح "سلام دانك"؟','كرة السلة',['كرة اليد','الكرة الطائرة','التنس']],
+  ['كم لاعبًا لفريق كرة السلة داخل الملعب؟','٥',['٦','٧','٤']],
+  ['ما أبرز بطولة أندية في أوروبا؟','دوري أبطال أوروبا',['الدوري الأوروبي','كأس السوبر','دوري الأمم']],
+  ['في أي مدينة أقيمت أولمبياد ٢٠٢٠؟','طوكيو',['باريس','ريو','لندن']],
+  ['كم تبلغ مسافة سباق الماراثون تقريبًا؟','٤٢ كم',['٢١ كم','٥٠ كم','٣٠ كم']],
+  ['أي نادٍ سعودي يُلقّب بالزعيم؟','الهلال',['النصر','الاتحاد','الأهلي']],
+  ['كم شوطًا في مباراة كرة القدم الأساسية؟','شوطان',['ثلاثة','أربعة','شوط واحد']],
+  ['ما الرياضة التي تُلعب على طاولة بمضرب صغير؟','تنس الطاولة',['الاسكواش','البادل','الريشة الطائرة']],
+  ['كم دقيقة يستمر الشوط الواحد في كرة القدم؟','٤٥ دقيقة',['٣٠ دقيقة','٤٠ دقيقة','٦٠ دقيقة']]
+ ],
+ 'تقنية':[
+  ['ما الشركة المطوِّرة لنظام أندرويد؟','قوقل',['آبل','سامسونج','مايكروسوفت']],
+  ['ما اللغة المستخدمة لبناء هيكل صفحات الويب؟','HTML',['CSS','Python','SQL']],
+  ['من المؤسس المشارك لشركة مايكروسوفت؟','بيل قيتس',['ستيف جوبز','لاري بيج','مارك زوكربيرغ']],
+  ['أيهما أكبر سعةً؟','تيرابايت',['جيجابايت','ميجابايت','كيلوبايت']],
+  ['ماذا يعني اختصار AI؟','الذكاء الاصطناعي',['الشبكة الآلية','التحليل الآني','الأمن المعلوماتي']],
+  ['ما نظام تشغيل أجهزة آيفون؟','iOS',['أندرويد','ويندوز فون','هارموني']],
+  ['أي شركة تصنع معالجات Ryzen؟','AMD',['إنتل','إنفيديا','كوالكوم']],
+  ['ما البروتوكول الآمن لتصفح الويب؟','HTTPS',['HTTP','FTP','SMTP']],
+  ['كم بِت في البايت الواحد؟','٨',['٤','١٦','٣٢']],
+  ['ما اللغة البرمجية التي تعمل داخل المتصفح؟','جافاسكربت',['جافا','سي شارب','روبي']],
+  ['ما الشركة المالكة لتطبيق واتساب؟','ميتا',['قوقل','تويتر','تيليجرام']],
+  ['ماذا تعني كلمة "خادم" (Server) في الشبكات؟','جهاز يقدّم البيانات للأجهزة الأخرى',['برنامج تصفح','كابل الشبكة','نوع من الطابعات']]
+ ],
+ 'منوعات':[
+  ['ما المشروب المستخرج من حبوب البُنّ؟','القهوة',['الشاي','الكاكاو','المتّة']],
+  ['ما أغلى بهار في العالم؟','الزعفران',['الهيل','الفانيلا','الكمّون']],
+  ['ما الطبق السعودي الشهير المكوّن من رز ولحم؟','الكبسة',['المندي اليمني','المقلوبة','الفريكة']],
+  ['كم لونًا في قوس قزح؟','٧',['٥','٦','٨']],
+  ['ما أكبر حيوان على وجه الأرض؟','الحوت الأزرق',['الفيل الأفريقي','الزرافة','القرش الأبيض']],
+  ['أي حيوان يُلقّب بسفينة الصحراء؟','الجمل',['الحصان','الحمار الوحشي','المها']],
+  ['كم يومًا في السنة الكبيسة؟','٣٦٦',['٣٦٥','٣٦٤','٣٦٧']],
+  ['كم عدد أيام شهر رمضان في أكثر حالاته؟','٣٠',['٢٨','٢٩','٣١']],
+  ['ما اللون الناتج عن خلط الأزرق والأصفر؟','الأخضر',['البرتقالي','البنفسجي','البني']],
+  ['كم قطعة شطرنج لكل لاعب في بداية اللعبة؟','١٦',['١٢','٨','٢٠']],
+  ['ما الحشرة التي تنتج العسل؟','النحل',['النمل','الفراشة','الزنبور']],
+  ['كم عدد أوتار العود العربي التقليدي؟','خمسة أزواج',['ستة أفراد','ثلاثة أزواج','أربعة أفراد']]
+ ]
+};
+const FATIN_CATS = Object.keys(FATIN_BANK);
+function fatinShuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+function fatinPickCats(n){return fatinShuffle(FATIN_CATS.slice()).slice(0,n)}
+
+const FATIN_TOP = 24, FATIN_ROUNDS = 7;
+const FATIN_HILAS = ['ice', 'ink', 'lock', 'spin', 'fog'];
+const FATIN_COLORS = ['#E3A93C', '#2E9E93', '#C1403A', '#7C6BD8', '#4C9BE8', '#D46FA8'];
+const FATIN_MAXP = 6;
+const FATIN_SDP_MAX = 9000;
+
+export class FatinRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.sockets = new Map();
+    this.screens = new Map();   // معرّف الشاشة -> socket (مشاهدون، خارج المقاعد)
+    this.timer = null;
+    this.state.blockConcurrencyWhile(async () => {
+      this.room = (await this.state.storage.get('room')) || {
+        code: null, hostId: null, phase: 'lobby',
+        players: [],            // {id,name,color,connected,steps,pts,ammo,special,seatToken}
+        round: 0, cat: '', catOptions: [],
+        votes: {}, specials: {}, specialBy: null, tally: {},
+        hilas: {}, effects: {},
+        q: null, opts: [], correct: -1, answers: {}, gains: {},
+        qStart: 0, endsAt: 0, used: {},
+      };
+    });
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith('/ws')) return this.handleWebSocket(request);
+    if (url.pathname.endsWith('/create')) return this.handleCreate(request);
+    return new Response('غير موجود', { status: 404 });
+  }
+
+  async handleCreate(request) {
+    const { name, roomCode, screen } = await request.json();
+    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
+      return new Response('room-exists', { status: 409 });
+    }
+    this.room.code = roomCode;
+    // إنشاء من التلفزيون: الغرفة تُفتح بلا مقاعد، وأول لاعب ينضم يصير المضيف
+    if (screen) {
+      this.room.hostId = null;
+      this.room.players = [];
+      await this.persist();
+      return Response.json({ roomCode: this.room.code, playerId: null });
+    }
+    const hostId = crypto.randomUUID();
+    this.room.hostId = hostId;
+    this.room.players = [{
+      id: hostId, name: cleanName(name), color: FATIN_COLORS[0], connected: false,
+      steps: 0, pts: 0, ammo: 2, special: true, seatToken: newSeatToken(),
+    }];
+    await this.persist();
+    return Response.json({ roomCode: this.room.code, playerId: hostId });
+  }
+
+  async handleWebSocket(request) {
+    const url = new URL(request.url);
+    if (request.headers.get('Upgrade') !== 'websocket') return new Response('يتطلب WebSocket', { status: 426 });
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    // ── عميل الشاشة: مشاهد فقط، خارج المقاعد، ما يوقف عليه أحد ──
+    if (url.searchParams.get('screen') === '1') {
+      const sid = 'screen:' + crypto.randomUUID();
+      this.screens.set(sid, server);
+      server.addEventListener('message', evt => this.onScreenMessage(evt));
+      server.addEventListener('close', () => this.screens.delete(sid));
+      server.addEventListener('error', () => this.screens.delete(sid));
+      this.sendState(server, null, true);
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
+    const playerId = url.searchParams.get('playerId');
+    const name = url.searchParams.get('name');
+    const token = url.searchParams.get('token');
+
+    let player = this.room.players.find(p => p.id === playerId);
+
+    // استعادة المقعد بتوكن سري فقط
+    if (!player && token) {
+      const seat = this.room.players.find(p => p.seatToken && p.seatToken === token && !p.connected);
+      if (seat) {
+        const oldId = seat.id;
+        const newId = playerId || crypto.randomUUID();
+        seat.id = newId;
+        for (const bag of ['votes', 'specials', 'hilas', 'effects', 'answers', 'gains']) {
+          if (this.room[bag] && oldId in this.room[bag]) {
+            this.room[bag][newId] = this.room[bag][oldId];
+            delete this.room[bag][oldId];
+          }
+        }
+        // أي حِيلة كانت مصوّبة على المعرّف القديم
+        for (const k of Object.keys(this.room.hilas || {})) {
+          if (this.room.hilas[k] && this.room.hilas[k].target === oldId) this.room.hilas[k].target = newId;
+        }
+        if (this.room.hostId === oldId) this.room.hostId = newId;
+        this.sockets.delete(oldId);
+        player = seat;
+      }
+    }
+
+    if (!player) {
+      // رمز ما أُنشئت له غرفة أصلًا
+      if (!this.room.code) {
+        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.phase !== 'lobby') {
+        server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — ما تقدر تنضم الحين' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.players.length >= Math.min(FATIN_MAXP, MAX_PLAYERS)) {
+        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة (٦ لاعبين)' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      player = {
+        id: playerId || crypto.randomUUID(), name: cleanName(name),
+        color: FATIN_COLORS[this.room.players.length % FATIN_COLORS.length],
+        connected: true, steps: 0, pts: 0, ammo: 2, special: true, seatToken: newSeatToken(),
+      };
+      this.room.players.push(player);
+    } else {
+      player.connected = true;
+    }
+    // غرفة أنشأها التلفزيون: أول لاعب يدخل يصير المضيف
+    if (!this.room.hostId || !this.findPlayer(this.room.hostId)) this.room.hostId = player.id;
+
+    this.sockets.set(player.id, server);
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id));
+
+    await this.persist();
+    if (!player.seatToken) player.seatToken = newSeatToken();
+    this.sendPrivate(player.id, {
+      type: 'welcome', playerId: player.id, roomCode: this.room.code, seatToken: player.seatToken,
+    });
+    this.broadcastState();   // يشمل إعادة إرسال حالة المرحلة الجارية للعائد
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  onScreenMessage(evt) {
+    // الشاشة تستقبل فقط، ما عدا زر البدء على التلفزيون
+    let msg; try { msg = JSON.parse(evt.data); } catch { return; }
+    if (msg && msg.type === 'startGame' && this.room.phase === 'lobby' && this.activePlayers().length >= 2) {
+      this.startVote();
+    }
+  }
+
+  async onMessage(playerId, evt) {
+    let msg; try { msg = JSON.parse(evt.data); } catch { return; }
+    const r = this.room;
+    const p = this.findPlayer(playerId);
+    if (!p) return;
+
+    if (msg.type === 'startGame' && playerId === r.hostId && r.phase === 'lobby') {
+      if (this.activePlayers().length < 2) return;
+      r.round = 0;
+      await this.startVote();
+    }
+    else if (msg.type === 'vote' && r.phase === 'vote') {
+      if (!r.catOptions.includes(msg.cat)) return;
+      r.votes[playerId] = msg.cat;
+      await this.persist(); this.broadcastState();
+      if (this.allVotedIn()) await this.endVote();
+    }
+    else if (msg.type === 'special' && r.phase === 'vote') {
+      if (!p.special || !r.catOptions.includes(msg.cat)) return;
+      p.special = false;
+      r.specials[playerId] = msg.cat;
+      delete r.votes[playerId];
+      await this.persist(); this.broadcastState();
+      if (this.allVotedIn()) await this.endVote();
+    }
+    else if (msg.type === 'hila' && r.phase === 'hila') {
+      if (r.hilas[playerId]) return;
+      if (msg.skip) { r.hilas[playerId] = { skip: true }; }
+      else {
+        if (!FATIN_HILAS.includes(msg.hila)) return;
+        const tgt = this.findPlayer(msg.target);
+        if (!tgt || msg.target === playerId) return;
+        if (p.ammo <= 0) return;
+        p.ammo--;
+        r.hilas[playerId] = { hila: msg.hila, target: msg.target };
+        r.effects[msg.target] = msg.hila;
+      }
+      await this.persist(); this.broadcastState();
+      if (this.allHilasIn()) await this.endHila();
+    }
+    else if (msg.type === 'answer' && r.phase === 'question') {
+      if (r.answers[playerId]) return;
+      r.answers[playerId] = {
+        idx: (typeof msg.idx === 'number' ? msg.idx : -1),
+        ms: Date.now() - r.qStart,
+      };
+      await this.persist(); this.broadcastState();
+      if (this.allAnswersIn()) await this.endQuestion();
+    }
+    else if (msg.type === 'sig') {
+      // ناقل إشارات WebRTC: أنواع معروفة + حقول بيضاء + سقف حجم.
+      // الصور نفسها تمشي ند-لند وما تمر من هنا إطلاقًا.
+      if (typeof msg.to !== 'string' || msg.to === playerId) return;
+      const target = this.sockets.get(msg.to);
+      if (!target || !this.findPlayer(msg.to)) return;
+      const d = msg.data;
+      if (!d || typeof d !== 'object') return;
+      let out = null;
+      if (d.type === 'offer' || d.type === 'answer') {
+        if (typeof d.sdp !== 'string' || d.sdp.length > FATIN_SDP_MAX) return;
+        out = { type: d.type, sdp: d.sdp };
+      } else if (d.type === 'candidate') {
+        const c = d.candidate;
+        if (!c || typeof c !== 'object') return;
+        if (typeof c.candidate !== 'string' || c.candidate.length > 400) return;
+        out = { type: 'candidate', candidate: {
+          candidate: c.candidate,
+          sdpMid: (typeof c.sdpMid === 'string' ? c.sdpMid.slice(0, 32) : null),
+          sdpMLineIndex: (typeof c.sdpMLineIndex === 'number' ? c.sdpMLineIndex : null),
+          usernameFragment: (typeof c.usernameFragment === 'string' ? c.usernameFragment.slice(0, 64) : undefined),
+        } };
+      } else return;
+      try { target.send(JSON.stringify({ type: 'sig', from: playerId, data: out })); } catch {}
+      // لا شيء يُحفظ — تُنقل وتُنسى
+    }
+    else if (msg.type === 'kickPlayer' && playerId === r.hostId && r.phase === 'lobby') {
+      await this.kickPlayer(msg.targetId);
+    }
+    else if (msg.type === 'hostForceAdvance' && playerId === r.hostId) {
+      await this.forceAdvance();
+    }
+    else if (msg.type === 'playAgain' && playerId === r.hostId && r.phase === 'over') {
+      for (const q of r.players) { q.steps = 0; q.pts = 0; q.ammo = 2; q.special = true; }
+      r.used = {}; r.round = 0;
+      await this.startVote();
+    }
+  }
+
+  async onClose(playerId) {
+    const p = this.findPlayer(playerId);
+    if (p) p.connected = false;
+    this.sockets.delete(playerId);
+    this.migrateHostIfNeeded();
+    await this.persist();
+    this.broadcastState();
+    await this.maybeAdvanceOnDisconnect();
+  }
+
+  migrateHostIfNeeded() {
+    const host = this.room.players.find(p => p.id === this.room.hostId);
+    if (host && host.connected) return false;
+    const next = this.room.players.find(p => p.connected && p.id !== this.room.hostId);
+    if (!next) return false;
+    this.room.hostId = next.id;
+    this.broadcastPublic({ type: 'hostChanged', hostId: next.id, hostName: next.name });
+    return true;
+  }
+
+  async kickPlayer(targetId) {
+    if (targetId === this.room.hostId) return;
+    const target = this.findPlayer(targetId);
+    if (!target) return;
+    this.sendPrivate(targetId, { type: 'kicked' });
+    const ws = this.sockets.get(targetId);
+    if (ws) { try { ws.close(); } catch {} this.sockets.delete(targetId); }
+    this.room.players = this.room.players.filter(p => p.id !== targetId);
+    await this.persist();
+    this.broadcastState();
+  }
+
+  // المنقطع ما يعلّق الجولة
+  async maybeAdvanceOnDisconnect() {
+    const r = this.room;
+    if (r.phase === 'vote' && this.allVotedIn()) await this.endVote();
+    else if (r.phase === 'hila' && this.allHilasIn()) await this.endHila();
+    else if (r.phase === 'question' && this.allAnswersIn()) await this.endQuestion();
+  }
+
+  findPlayer(id) { return this.room.players.find(p => p.id === id); }
+  activePlayers() { return this.room.players.filter(p => p.connected); }
+  allVotedIn() { const a = this.activePlayers(); return a.length > 0 && a.every(p => this.room.votes[p.id] || this.room.specials[p.id]); }
+  allHilasIn() { const a = this.activePlayers(); return a.length > 0 && a.every(p => this.room.hilas[p.id]); }
+  allAnswersIn() { const a = this.activePlayers(); return a.length > 0 && a.every(p => this.room.answers[p.id]); }
+
+  /* ---------- المراحل (كل واحدة بحارس حسم مزدوج) ---------- */
+  async startVote() {
+    const r = this.room;
+    r.round++;
+    if (r.round > FATIN_ROUNDS) return this.finish();
+    r.phase = 'vote';
+    r.votes = {}; r.specials = {}; r.specialBy = null; r.tally = {};
+    r.hilas = {}; r.effects = {}; r.answers = {}; r.gains = {};
+    r.q = null; r.opts = []; r.correct = -1;
+    r.catOptions = fatinPickCats(3);
+    r.endsAt = Date.now() + 15000;
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async endVote() {
+    const r = this.room;
+    if (r.phase !== 'vote') return;
+    r.phase = 'resolvingVote';
+    const specialIds = Object.keys(r.specials);
+    const tally = {};
+    r.catOptions.forEach(c => tally[c] = 0);
+    for (const id in r.votes) if (tally[r.votes[id]] !== undefined) tally[r.votes[id]]++;
+    r.tally = tally;
+
+    if (specialIds.length) {
+      // أكثر من اختيار خاص: واحد بالقرعة، والباقي يسترجعون حقّهم
+      const winner = specialIds[Math.floor(Math.random() * specialIds.length)];
+      for (const id of specialIds) if (id !== winner) { const q = this.findPlayer(id); if (q) q.special = true; }
+      r.cat = r.specials[winner];
+      const w = this.findPlayer(winner);
+      r.specialBy = w ? w.name : null;
+    } else {
+      let best = -1, pool = [];
+      for (const c of r.catOptions) {
+        if (tally[c] > best) { best = tally[c]; pool = [c]; }
+        else if (tally[c] === best) pool.push(c);
+      }
+      r.cat = pool[Math.floor(Math.random() * pool.length)];
+      r.specialBy = null;
+    }
+    await this.startHila();
+  }
+
+  async startHila() {
+    const r = this.room;
+    r.phase = 'hila';
+    r.hilas = {}; r.effects = {};
+    r.endsAt = Date.now() + 12000;
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async endHila() {
+    const r = this.room;
+    if (r.phase !== 'hila') return;
+    r.phase = 'question';
+    const list = FATIN_BANK[r.cat];
+    if (!r.used[r.cat]) r.used[r.cat] = [];
+    if (r.used[r.cat].length >= list.length) r.used[r.cat] = [];
+    const avail = list.map((_, i) => i).filter(i => !r.used[r.cat].includes(i));
+    const pick = avail[Math.floor(Math.random() * avail.length)];
+    r.used[r.cat].push(pick);
+    const row = list[pick];
+    const opts = fatinShuffle([row[1]].concat(row[2]));
+    r.q = row[0];
+    r.opts = opts;
+    r.correct = opts.indexOf(row[1]);
+    r.answers = {};
+    r.qStart = Date.now();
+    r.endsAt = r.qStart + 15000;
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async endQuestion() {
+    const r = this.room;
+    if (r.phase !== 'question') return;
+    r.phase = 'result';
+    r.gains = {};
+    for (const p of r.players) {
+      const a = r.answers[p.id];
+      let gain = 0;
+      if (a && a.idx === r.correct) {
+        const s = a.ms / 1000;
+        gain = s < 5 ? 3 : (s < 10 ? 2 : 1);
+        if (r.round === FATIN_ROUNDS) gain *= 2;
+        p.steps = Math.min(FATIN_TOP, p.steps + gain);
+        p.pts += gain * 10 + Math.max(0, Math.round(15 - s));
+        p.ammo = Math.min(4, p.ammo + 1);
+      }
+      r.gains[p.id] = gain;
+    }
+    r.endsAt = Date.now() + 7000;
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async finish() {
+    this.room.phase = 'over';
+    this.room.endsAt = 0;
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async forceAdvance() {
+    const r = this.room;
+    if (r.phase === 'vote') await this.endVote();
+    else if (r.phase === 'hila') await this.endHila();
+    else if (r.phase === 'question') await this.endQuestion();
+    else if (r.phase === 'result') { if (r.round >= FATIN_ROUNDS) await this.finish(); else await this.startVote(); }
+  }
+
+  /* ---------- الإرسال ---------- */
+  publicPlayers() {
+    const r = this.room;
+    return r.players.map(p => ({
+      id: p.id, name: p.name, color: p.color, steps: p.steps, pts: p.pts,
+      connected: p.connected, host: p.id === r.hostId, special: p.special,
+      voted: !!(r.votes[p.id] || r.specials[p.id]),
+      ready: !!r.hilas[p.id],
+      answered: !!r.answers[p.id],
+      gain: r.gains[p.id] || 0,
+    }));
+  }
+
+  stateFor(playerId, isScreen) {
+    const r = this.room;
+    const me = this.findPlayer(playerId) || {};
+    const showQ = (r.phase === 'question' || r.phase === 'result');
+    return {
+      type: 'state', screen: !!isScreen,
+      code: r.code, phase: r.phase, round: r.round, rounds: FATIN_ROUNDS, top: FATIN_TOP,
+      hostId: r.hostId,
+      cat: r.cat, catOptions: r.catOptions,
+      tally: (r.phase === 'vote' ? null : r.tally),
+      specialBy: (r.phase === 'vote' ? null : r.specialBy),
+      q: showQ ? r.q : null,
+      opts: showQ ? r.opts : [],
+      correct: (r.phase === 'result' ? r.correct : -1),   // ما ينكشف أثناء السؤال
+      endsAt: r.endsAt, now: Date.now(),
+      players: this.publicPlayers(),
+      you: {
+        id: playerId, ammo: me.ammo || 0, special: !!me.special,
+        host: playerId === r.hostId,
+        effect: (r.phase === 'question') ? (r.effects[playerId] || null) : null,
+        myAnswer: r.answers[playerId] ? r.answers[playerId].idx : null,
+        myVote: r.votes[playerId] || r.specials[playerId] || null,
+        myHila: r.hilas[playerId] || null,
+      },
+    };
+  }
+
+  sendState(ws, playerId, isScreen) {
+    try { ws.send(JSON.stringify(this.stateFor(playerId, isScreen))); } catch {}
+  }
+
+  broadcastState() {
+    for (const [pid, ws] of this.sockets) this.sendState(ws, pid, false);
+    for (const [, ws] of this.screens) this.sendState(ws, null, true);
+  }
+
+  broadcastPublic(payload) {
+    const s = JSON.stringify(payload);
+    for (const [, ws] of this.sockets) { try { ws.send(s); } catch {} }
+    for (const [, ws] of this.screens) { try { ws.send(s); } catch {} }
+  }
+
+  sendPrivate(playerId, payload) {
+    const ws = this.sockets.get(playerId);
+    if (ws) { try { ws.send(JSON.stringify(payload)); } catch {} }
+  }
+
+  async persist() { await this.state.storage.put('room', this.room); }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -3301,9 +3888,10 @@ export default {
 
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
     // حتى الانضمام لاحقًا بنفس الكود يوصل لنفس الغرفة دائمًا
-    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create') {
+    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create') {
       const gameNS = url.pathname.startsWith('/got/') ? env.GOT_ROOM
                     : url.pathname.startsWith('/mawwih/') ? env.MAWWIH_ROOM
+                    : url.pathname.startsWith('/fatin/') ? env.FATIN_ROOM
                     : env.MAFIA_ROOM;
       const body = await request.json();
       // لو صادف الكود غرفة حيّة، نولّد غيره بدل ما نمسحها
@@ -3323,15 +3911,16 @@ export default {
     }
 
     // الانضمام لغرفة موجودة بالكود، أو فتح اتصال WebSocket لغرفة قائمة
-    const match = url.pathname.match(/^\/(got|mawwih)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(got|mawwih|fatin)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
-      const gameNS = match[1]==='got' ? env.GOT_ROOM : match[1]==='mawwih' ? env.MAWWIH_ROOM : env.MAFIA_ROOM;
+      const g = (match[1]||'').toLowerCase();
+      const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : env.MAFIA_ROOM;
       const code = match[2].toUpperCase();
       const id = gameNS.idFromName(code);
       const stub = gameNS.get(id);
       return stub.fetch(request);
     }
 
-    return new Response('مافيا، لمن العرش، وموّه أونلاين — استوديو يا٧', { status: 200 });
+    return new Response('مافيا، لمن العرش، موّه، وفَطِن أونلاين — استوديو يا٧', { status: 200 });
   },
 };
