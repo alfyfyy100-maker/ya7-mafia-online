@@ -3643,6 +3643,10 @@ export class FatinRoom {
     else if (msg.type === 'hostForceAdvance' && playerId === r.hostId) {
       await this.forceAdvance();
     }
+    else if (msg.type === 'nextRound' && playerId === r.hostId && r.phase === 'result') {
+      this.clearPhaseTimer();
+      if (r.round >= FATIN_ROUNDS) await this.finish(); else await this.startVote();
+    }
     else if (msg.type === 'playAgain' && playerId === r.hostId && r.phase === 'over') {
       for (const q of r.players) { q.steps = 0; q.pts = 0; q.ammo = 2; q.special = true; }
       r.used = {}; r.round = 0;
@@ -3692,6 +3696,17 @@ export class FatinRoom {
 
   findPlayer(id) { return this.room.players.find(p => p.id === id); }
   activePlayers() { return this.room.players.filter(p => p.connected); }
+
+  /* مؤقّت المرحلة — بدونه شريط الوقت يخلص وما يصير شي.
+     الـ DO يبقى حيًّا ما دامت هناك اتصالات مفتوحة، فـ setTimeout كافٍ. */
+  setPhaseTimer(ms, fn) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(async () => {
+      this.timer = null;
+      try { await fn(); } catch (e) {}
+    }, ms);
+  }
+  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
   allVotedIn() { const a = this.activePlayers(); return a.length > 0 && a.every(p => this.room.votes[p.id] || this.room.specials[p.id]); }
   allHilasIn() { const a = this.activePlayers(); return a.length > 0 && a.every(p => this.room.hilas[p.id]); }
   allAnswersIn() { const a = this.activePlayers(); return a.length > 0 && a.every(p => this.room.answers[p.id]); }
@@ -3709,11 +3724,13 @@ export class FatinRoom {
     r.endsAt = Date.now() + 15000;
     await this.persist();
     this.broadcastState();
+    this.setPhaseTimer(15000, () => this.endVote());
   }
 
   async endVote() {
     const r = this.room;
     if (r.phase !== 'vote') return;
+    this.clearPhaseTimer();
     r.phase = 'resolvingVote';
     const specialIds = Object.keys(r.specials);
     const tally = {};
@@ -3747,11 +3764,13 @@ export class FatinRoom {
     r.endsAt = Date.now() + 12000;
     await this.persist();
     this.broadcastState();
+    this.setPhaseTimer(12000, () => this.endHila());
   }
 
   async endHila() {
     const r = this.room;
     if (r.phase !== 'hila') return;
+    this.clearPhaseTimer();
     r.phase = 'question';
     const list = FATIN_BANK[r.cat];
     if (!r.used[r.cat]) r.used[r.cat] = [];
@@ -3769,11 +3788,13 @@ export class FatinRoom {
     r.endsAt = r.qStart + 15000;
     await this.persist();
     this.broadcastState();
+    this.setPhaseTimer(15700, () => this.endQuestion());
   }
 
   async endQuestion() {
     const r = this.room;
     if (r.phase !== 'question') return;
+    this.clearPhaseTimer();
     r.phase = 'result';
     r.gains = {};
     for (const p of r.players) {
@@ -3792,9 +3813,13 @@ export class FatinRoom {
     r.endsAt = Date.now() + 7000;
     await this.persist();
     this.broadcastState();
+    this.setPhaseTimer(7000, async () => {
+      if (r.round >= FATIN_ROUNDS) await this.finish(); else await this.startVote();
+    });
   }
 
   async finish() {
+    this.clearPhaseTimer();
     this.room.phase = 'over';
     this.room.endsAt = 0;
     await this.persist();
