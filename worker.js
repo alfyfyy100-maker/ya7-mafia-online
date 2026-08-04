@@ -4160,7 +4160,7 @@ const DQ_MAX_PLAYERS = 6;
 
 // مهلة كل قرار (ثانية) — قابلة للضبط من المضيف
 const DQ_TURN_MS_DEFAULT = 25000;
-const DQ_REVEAL_MS = 9000;
+const DQ_REVEAL_MS = 30000;
 // كم دور متتالٍ ينتهي وقته قبل ما يُقعد اللاعب على الاحتياط
 const DQ_MAX_AUTO = 3;
 
@@ -4405,6 +4405,8 @@ export class DaqashRoom {
       base.voted = h.votes[i] !== null && h.votes[i] !== undefined;
       base.vote = h.votesOpen ? (h.votes[i] ?? null) : null;
       base.safe = (h.safe || []).includes(i);
+      base.rebel = (h.rebels || []).includes(i);
+      base.ready = (h.ready || []).includes(i);
       base.won = (h.winners || []).includes(i);
       base.gain = h.gains ? (h.gains[i] || 0) : 0;
 
@@ -4440,6 +4442,12 @@ export class DaqashRoom {
         log: h.log.slice(-6),
         title: h.title || '',
         votesOpen: !!h.votesOpen,
+        agreed: !!h.agreed,
+        rebels: (h.rebels || []).map(i => r.players[i] && r.players[i].name).filter(Boolean),
+        nextDealerId: h.phase === 'reveal' && r.players[this.nextDealerIdx()]
+          ? r.players[this.nextDealerIdx()].id : null,
+        readyCount: (h.ready || []).length,
+        readyNeeded: r.players.filter(p => p.connected && !p.out && !p.sitting).length,
         pendingVotes: h.phase === 'vote'
           ? this.others(h).filter(i => h.votes[i] === null).length : 0,
       };
@@ -4494,6 +4502,19 @@ export class DaqashRoom {
       case 'nextHand':
         if (playerId === this.room.hostId) await this.nextHand();
         break;
+      case 'ready': {
+        // كان المضيف وحده يملك الانتقال؛ الآن تتقدّم اليد حين يجهز الجميع
+        const h = this.room.hand;
+        if (!h || h.phase !== 'reveal') break;
+        const i = this.idxOf(playerId);
+        if (i < 0 || h.ready.includes(i)) break;
+        h.ready.push(i);
+        const waiting = this.room.players
+          .filter((p, k) => p.connected && !p.out && !p.sitting && !h.ready.includes(k));
+        if (waiting.length === 0) await this.nextHand();
+        else { await this.persist(); this.broadcastState(); }
+        break;
+      }
       case 'ping':
         this.send(playerId, this.stateFor(playerId));
         break;
@@ -4584,6 +4605,7 @@ export class DaqashRoom {
       votes: r.players.map(() => null),
       votesOpen: false,
       safe: [], winners: [], shown: [], gains: r.players.map(() => 0),
+      rebels: [], agreed: false, ready: [],
       prize: 0, revealed: false,
       endsAt: 0,
       log: [],
@@ -4598,6 +4620,18 @@ export class DaqashRoom {
   log(t) {
     const h = this.room.hand;
     if (h) h.log.push(cleanText(t, 120));
+  }
+
+  // الدور ينتقل عكس عقارب الساعة، وهذا غير بديهي — نحسب التالي لنعرضه
+  nextDealerIdx() {
+    const seats = this.activeSeats();
+    const n = this.room.players.length;
+    const d = this.room.dealerIdx;
+    for (let k = 1; k <= n; k++) {
+      const cand = (d - k + n * 2) % n;
+      if (seats.includes(cand)) return cand;
+    }
+    return d;
   }
 
   others(h) {
@@ -4914,6 +4948,8 @@ export class DaqashRoom {
     h.votesOpen = true;
 
     const rebels = o.filter(i => h.votes[i] === 'no');
+    h.rebels = rebels;
+    h.agreed = rebels.length === 0;
 
     if (rebels.length === 0) {
       // رضوا كلهم: التقسيم ماشي بلا كشف
