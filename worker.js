@@ -5073,8 +5073,23 @@ export default {
     }
 
     // ── حارس المصدر: يمنع أي طلب من خارج الموقع ──
+    // لا بد من CORS حتى على الرفض، وإلا حجب المتصفحُ الردَّ وظهر
+    // "Failed to fetch" بدل السبب الحقيقي.
     if (!isAllowedOrigin(origin)) {
-      return new Response('Forbidden', { status: 403 });
+      return withCors(new Response('origin-not-allowed: ' + (origin || 'بلا مصدر'), { status: 403 }), origin);
+    }
+
+    // فحص سريع للنسخة المنشورة: افتح هذا المسار في المتصفح
+    if (url.pathname === '/health') {
+      return withCors(Response.json({
+        ok: true,
+        games: ['mafia', 'got', 'mawwih', 'fatin', 'daqash'],
+        bindings: {
+          MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
+          MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
+          DAQASH_ROOM: !!env.DAQASH_ROOM,
+        },
+      }), origin);
     }
 
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
@@ -5085,6 +5100,13 @@ export default {
                     : url.pathname.startsWith('/fatin/') ? env.FATIN_ROOM
                     : url.pathname.startsWith('/daqash/') ? env.DAQASH_ROOM
                     : env.MAFIA_ROOM;
+      // بدون هذا الفحص يرمي الربطُ المفقود استثناءً فيرجع 500 بلا CORS،
+      // ويظهر عند اللاعب كـ "Failed to fetch" بلا أي دلالة على السبب
+      if (!gameNS) {
+        return withCors(new Response(
+          'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
+          { status: 501 }), origin);
+      }
       const ip = request.headers.get('CF-Connecting-IP') || '';
       if (!allowCreate(ip)) {
         return withCors(new Response('too-many-rooms', { status: 429 }), origin);
@@ -5119,6 +5141,14 @@ export default {
       return stub.fetch(request);
     }
 
-    return new Response('مافيا، لمن العرش، موّه، فَطِن، وداقش أونلاين — استوديو يا٧', { status: 200 });
+    // مسار إنشاء/انضمام لم يُطابَق: أعطِ 404 صريحًا بترويسات CORS بدل
+    // السقوط على صفحة الترحيب، وإلا رأى العميل "Failed to fetch"
+    if (/\/room\/(create|[A-Z0-9]{6}\/ws)$/i.test(url.pathname)) {
+      return withCors(new Response('unknown-route: ' + url.pathname, { status: 404 }), origin);
+    }
+
+    return withCors(new Response(
+      'مافيا، لمن العرش، موّه، فَطِن، وداقش أونلاين — استوديو يا٧ · /health للفحص',
+      { status: 200 }), origin);
   },
 };
