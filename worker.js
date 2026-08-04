@@ -4145,6 +4145,924 @@ function allowCreate(ip) {
   return r.n <= CREATE_LIMIT;
 }
 
+// ══════════════════════ داقش أونلاين ══════════════════════
+/* لعبة ورق خليجية: مزاد جولة واحدة، ثم الموزّع يعرض تقسيم القدر،
+   والباقون يصوّتون. رضوا كلهم = التقسيم ماشي بلا كشف. رفض واحد = كشف
+   وأقوى يد تاخذ.
+
+   كل شيء حسّاس في الخادم: الخلط، التوزيع، تقييم اليد، صحة كل قرار.
+   العميل ما يستلم إلا كروته هو. */
+
+const DQ_RANKS = [1, 2, 3, 4, 5, 6, 7]; // ٧ ٨ ٩ ولد بنت شايب اكة
+const DQ_CATS = { 5: 'رباعي', 4: 'ثلاثي', 3: 'مزدوجين', 2: 'مزدوج', 1: 'مكسّر' };
+const DQ_MIN_PLAYERS = 3;
+const DQ_MAX_PLAYERS = 6;
+
+// مهلة كل قرار (ثانية) — قابلة للضبط من المضيف
+const DQ_TURN_MS_DEFAULT = 25000;
+const DQ_REVEAL_MS = 9000;
+// كم دور متتالٍ ينتهي وقته قبل ما يُقعد اللاعب على الاحتياط
+const DQ_MAX_AUTO = 3;
+
+// ── عشوائية آمنة: crypto لا Math.random ──
+// Math.random في V8 قابل للتنبؤ من مخرجات سابقة، وهنا يعني توقّع الكروت.
+function dqRandInt(n) {
+  const limit = Math.floor(0xFFFFFFFF / n) * n;
+  const buf = new Uint32Array(1);
+  let x;
+  do { crypto.getRandomValues(buf); x = buf[0]; } while (x >= limit);
+  return x % n;
+}
+
+function dqShuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = dqRandInt(i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function dqNewDeck() {
+  const d = [];
+  for (const v of DQ_RANKS) for (let s = 0; s < 4; s++) d.push({ v, s });
+  return dqShuffle(d);
+}
+
+// تقييم اليد: نفس منطق النسخة المحلية بالضبط
+function dqEvaluate(cards) {
+  const m = {};
+  cards.forEach(c => { m[c.v] = (m[c.v] || 0) + 1; });
+  const g = Object.entries(m)
+    .map(([v, n]) => ({ v: +v, n }))
+    .sort((a, b) => b.n - a.n || b.v - a.v);
+  const sh = g.map(x => x.n).join('');
+  const cat = sh === '4' ? 5 : sh === '31' ? 4 : sh === '22' ? 3 : sh === '211' ? 2 : 1;
+  return { cat, name: DQ_CATS[cat], key: [cat, ...g.map(x => x.v)] };
+}
+
+function dqCmp(a, b) {
+  for (let i = 0; i < 5; i++) {
+    const x = a.key[i] || 0, y = b.key[i] || 0;
+    if (x !== y) return x - y;
+  }
+  return 0;
+}
+
+const sanitizeDaqashConfig = (raw) => {
+  const r = raw || {};
+  const start = Number(r.start);
+  const min = Number(r.min);
+  const turn = Number(r.turnSec);
+  return {
+    start: Number.isInteger(start) ? Math.min(Math.max(start, 10000), 1000000) : 50000,
+    min: Number.isInteger(min) ? Math.min(Math.max(min, 1000), 50000) : 5000,
+    fold: r.fold === undefined ? true : !!r.fold,
+    guar: !!r.guar,
+    keepAll: r.keepAll === undefined ? true : !!r.keepAll,
+    // القدور الجانبية: تمنع استغلال «قلّل رصيدك واكسب القدر كامل»
+    sidepot: r.sidepot === undefined ? true : !!r.sidepot,
+    turnSec: Number.isInteger(turn) ? Math.min(Math.max(turn, 15), 60) : 25,
+  };
+};
+
+export class DaqashRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.sockets = new Map();
+    this.timer = null;
+    this.state.blockConcurrencyWhile(async () => {
+      this.room = (await this.state.storage.get('room')) || {
+        code: null, hostId: null, phase: 'lobby',
+        cfg: sanitizeDaqashConfig({}),
+        players: [],
+        dealerIdx: 0,
+        handNo: 0,
+        hand: null,
+        lastSeen: Date.now(),
+      };
+    });
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith('/ws')) return this.handleWebSocket(request);
+    if (url.pathname.endsWith('/create')) return this.handleCreate(request);
+    return new Response('غير موجود', { status: 404 });
+  }
+
+  async persist() {
+    await this.touchRoom();
+    await this.state.storage.put('room', this.room);
+  }
+
+  findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
+  idxOf(id) { return this.room.players.findIndex(p => p.id === id); }
+
+  async handleCreate(request) {
+    let body;
+    try { body = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
+    const { name, roomCode } = body || {};
+    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
+      return new Response('room-exists', { status: 409 });
+    }
+    this.room.code = roomCode;
+    this.room.phase = 'lobby';
+    this.room.cfg = sanitizeDaqashConfig(body && body.cfg);
+    const hostId = crypto.randomUUID();
+    const hostToken = newSeatToken();
+    this.room.hostId = hostId;
+    this.room.players = [this.newSeat(hostId, name, hostToken)];
+    this.room.dealerIdx = 0;
+    this.room.handNo = 0;
+    this.room.hand = null;
+    await this.persist();
+    return Response.json({ roomCode: this.room.code, playerId: hostId, seatToken: hostToken });
+  }
+
+  newSeat(id, name, token) {
+    return {
+      id,
+      name: cleanName(name),
+      seatToken: token || newSeatToken(),
+      connected: false,
+      chips: this.room.cfg.start,
+      out: false,       // خسر كل رصيده
+      sitting: false,   // مقعد احتياط (انقطع أو نام)
+      autoMiss: 0,
+      av: null,
+    };
+  }
+
+  // ═══════════ الاتصال ═══════════
+  async handleWebSocket(request) {
+    const url = new URL(request.url);
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('يتطلب WebSocket', { status: 426 });
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    const token = url.searchParams.get('token');
+    const name = url.searchParams.get('name');
+
+    // التوكن السري وحده يفتح مقعدًا قائمًا. المعرّف مُذاع للجميع فلا يثبت شيئًا.
+    let player = this.seatByToken(token);
+
+    if (player) {
+      const stale = this.sockets.get(player.id);
+      if (stale && stale !== server) { try { stale.close(); } catch {} }
+      this.sockets.delete(player.id);
+      player.connected = true;
+      // رجع من انقطاع: يرجع لنفس اليد بنفس كروته تلقائيًا
+      player.sitting = false;
+      player.autoMiss = 0;
+    } else {
+      if (this.room.phase !== 'lobby') {
+        server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — انتظر الجولة الجاية' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.players.length >= DQ_MAX_PLAYERS) {
+        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      player = this.newSeat(crypto.randomUUID(), name, newSeatToken());
+      player.connected = true;
+      this.room.players.push(player);
+    }
+
+    this.sockets.set(player.id, server);
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id));
+
+    await this.persist();
+    this.sendPrivate(player.id, {
+      type: 'welcome',
+      playerId: player.id,
+      roomCode: this.room.code,
+      seatToken: player.seatToken,
+    });
+    this.broadcastState();
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async onClose(playerId) {
+    const p = this.findPlayer(playerId);
+    if (p) p.connected = false;
+    this.sockets.delete(playerId);
+    this.migrateHostIfNeeded();
+    await this.persist();
+    this.broadcastState();
+  }
+
+  migrateHostIfNeeded() {
+    const host = this.findPlayer(this.room.hostId);
+    if (host && host.connected) return;
+    const next = this.room.players.find(p => p.connected);
+    if (next) this.room.hostId = next.id;
+  }
+
+  send(playerId, obj) {
+    const ws = this.sockets.get(playerId);
+    if (!ws) return;
+    try { ws.send(JSON.stringify(obj)); } catch {}
+  }
+  sendPrivate(playerId, obj) { this.send(playerId, obj); }
+
+  broadcastState() {
+    for (const id of this.sockets.keys()) this.send(id, this.stateFor(id));
+  }
+
+  // ═══════════ الحالة المنقّاة ═══════════
+  /* هذي الدالة هي جدار الأمان الأساسي: العميل ما يشوف إلا كروته،
+     وأصوات الباقين تُخفى حتى يصوّت الجميع. */
+  stateFor(viewerId) {
+    const r = this.room;
+    const h = r.hand;
+    const vIdx = this.idxOf(viewerId);
+    const revealAll = !!(h && h.revealed);
+
+    const players = r.players.map((p, i) => {
+      const base = {
+        id: p.id, name: p.name, chips: p.chips, out: p.out,
+        sitting: p.sitting, connected: p.connected, av: p.av,
+        isHost: p.id === r.hostId,
+      };
+      if (!h) return base;
+      const inHand = h.seats.includes(i);
+      base.inHand = inHand;
+      base.folded = !!h.folded[i];
+      base.bet = h.bets[i] || 0;
+      base.isDealer = i === h.dealerIdx;
+      base.nCards = inHand && !h.folded[i] ? 4 : 0;
+      // العرض يُذاع للجميع بمجرد ما يقدّمه الموزّع — هذي طبيعة اللعبة
+      base.offer = (h.phase === 'vote' || h.phase === 'reveal') ? (h.offer[i] || 0) : 0;
+      // الأصوات مخفية حتى يكتمل التصويت: لو ظهرت تباعًا صار آخر مصوّت
+      // يقرأ قرار الباقين قبل قراره
+      base.voted = h.votes[i] !== null && h.votes[i] !== undefined;
+      base.vote = h.votesOpen ? (h.votes[i] ?? null) : null;
+      base.safe = (h.safe || []).includes(i);
+      base.won = (h.winners || []).includes(i);
+      base.gain = h.gains ? (h.gains[i] || 0) : 0;
+
+      const showCards = i === vIdx || (revealAll && (h.shown || []).includes(i));
+      base.cards = showCards && inHand ? h.cards[i] : null;
+      base.hand = (showCards && inHand && !h.folded[i]) ? h.evals[i].name : null;
+      return base;
+    });
+
+    const out = {
+      type: 'state',
+      phase: r.phase,
+      code: r.code,
+      cfg: r.cfg,
+      hostId: r.hostId,
+      you: viewerId,
+      players,
+      now: Date.now(),
+    };
+
+    if (h) {
+      out.hand = {
+        no: h.no,
+        seq: h.seq,
+        phase: h.phase,
+        pot: h.pot,
+        last: h.last,
+        dealerId: r.players[h.dealerIdx] ? r.players[h.dealerIdx].id : null,
+        turnId: h.phase === 'bet' && h.order[h.turn] !== undefined
+          ? r.players[h.order[h.turn]].id : null,
+        endsAt: h.endsAt,
+        prize: h.prize || 0,
+        log: h.log.slice(-6),
+        title: h.title || '',
+        votesOpen: !!h.votesOpen,
+        pendingVotes: h.phase === 'vote'
+          ? this.others(h).filter(i => h.votes[i] === null).length : 0,
+      };
+      // ما يُرسل أبدًا: h.deck، وكروت الآخرين
+    }
+    return out;
+  }
+
+  // ═══════════ اللوبي ═══════════
+  async onMessage(playerId, evt) {
+    if (!this.allowMsg(playerId)) return;
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    if (!msg || typeof msg !== 'object') return;
+    const p = this.findPlayer(playerId);
+    if (!p) return;
+
+    switch (msg.type) {
+      case 'updateProfile':
+        if (this.room.phase === 'lobby') {
+          if (typeof msg.name === 'string' && msg.name.trim()) p.name = cleanName(msg.name);
+          if (typeof msg.av === 'string') p.av = cleanText(msg.av, 24);
+          await this.persist(); this.broadcastState();
+        }
+        break;
+      case 'updateSettings':
+        if (playerId === this.room.hostId && this.room.phase === 'lobby') {
+          this.room.cfg = sanitizeDaqashConfig(msg.cfg);
+          this.room.players.forEach(x => { x.chips = this.room.cfg.start; });
+          await this.persist(); this.broadcastState();
+        }
+        break;
+      case 'kick':
+        if (playerId === this.room.hostId && this.room.phase === 'lobby') {
+          const i = this.idxOf(msg.targetId);
+          if (i > -1 && this.room.players[i].id !== this.room.hostId) {
+            const ws = this.sockets.get(msg.targetId);
+            if (ws) { try { ws.close(); } catch {} }
+            this.sockets.delete(msg.targetId);
+            this.room.players.splice(i, 1);
+            await this.persist(); this.broadcastState();
+          }
+        }
+        break;
+      case 'start':
+        if (playerId === this.room.hostId && this.room.phase === 'lobby') await this.startGame();
+        break;
+      case 'bet':      await this.actBet(playerId, msg); break;
+      case 'fold':     await this.actFold(playerId, msg); break;
+      case 'offer':    await this.actOffer(playerId, msg); break;
+      case 'vote':     await this.actVote(playerId, msg); break;
+      case 'nextHand':
+        if (playerId === this.room.hostId) await this.nextHand();
+        break;
+      case 'ping':
+        this.send(playerId, this.stateFor(playerId));
+        break;
+    }
+  }
+
+  async startGame() {
+    const seated = this.room.players.filter(p => p.connected);
+    if (seated.length < DQ_MIN_PLAYERS) {
+      this.send(this.room.hostId, { type: 'error', message: 'محتاج ٣ لاعبين على الأقل' });
+      return;
+    }
+    this.room.phase = 'playing';
+    this.room.players.forEach(p => {
+      p.chips = this.room.cfg.start;
+      p.out = false; p.sitting = false; p.autoMiss = 0;
+    });
+    this.room.handNo = 0;
+    this.room.dealerIdx = 0;
+    await this.newHand();
+  }
+
+  // ═══════════ اليد ═══════════
+  activeSeats() {
+    // من يستحق الجلوس على الطاولة هذي اليد
+    return this.room.players
+      .map((p, i) => ({ p, i }))
+      .filter(({ p }) => !p.out && !p.sitting && p.chips > 0)
+      .map(({ i }) => i);
+  }
+
+  async newHand() {
+    this.clearPhaseTimer();
+    const r = this.room;
+
+    r.players.forEach(p => { if (p.chips <= 0) p.out = true; });
+    const seats = this.activeSeats();
+
+    if (seats.length < 2) {
+      r.phase = 'over';
+      r.hand = null;
+      await this.persist();
+      this.broadcastState();
+      return;
+    }
+
+    // الموزّع: السابق في الترتيب (عكس عقارب الساعة) مع تخطي الخارجين
+    let d = r.dealerIdx;
+    const n = r.players.length;
+    for (let k = 1; k <= n; k++) {
+      const cand = (d - k + n * 2) % n;
+      if (seats.includes(cand)) { d = cand; break; }
+    }
+    r.dealerIdx = d;
+
+    const deck = dqNewDeck();
+    const cards = r.players.map(() => null);
+    const evals = r.players.map(() => null);
+    for (const i of seats) {
+      const c = [];
+      for (let k = 0; k < 4; k++) c.push(deck.pop());
+      cards[i] = c;
+      evals[i] = dqEvaluate(c);
+    }
+
+    // ترتيب المزاد: يبدأ بعد الموزّع، والموزّع آخر واحد
+    const order = [];
+    for (let k = 1; k <= n; k++) {
+      const i = (d + k) % n;
+      if (seats.includes(i)) order.push(i);
+    }
+
+    r.handNo++;
+    r.hand = {
+      no: r.handNo,
+      seq: 1,
+      seats,
+      dealerIdx: d,
+      order,
+      turn: 0,
+      phase: 'bet',
+      pot: 0,
+      last: 0,
+      bets: r.players.map(() => 0),
+      folded: r.players.map(() => false),
+      cards, evals,
+      offer: r.players.map(() => 0),
+      votes: r.players.map(() => null),
+      votesOpen: false,
+      safe: [], winners: [], shown: [], gains: r.players.map(() => 0),
+      prize: 0, revealed: false,
+      endsAt: 0,
+      log: [],
+      title: '',
+    };
+    this.log('الموزّع: ' + r.players[d].name);
+    await this.persist();
+    this.armTurn();
+    this.broadcastState();
+  }
+
+  log(t) {
+    const h = this.room.hand;
+    if (h) h.log.push(cleanText(t, 120));
+  }
+
+  others(h) {
+    return h.order.filter(i => !h.folded[i] && i !== h.dealerIdx);
+  }
+  live(h) {
+    return h.order.filter(i => !h.folded[i]);
+  }
+
+  // ═══════════ المؤقّت ═══════════
+  /* الـ DO يبقى حيًّا ما دامت هناك اتصالات مفتوحة، فـ setTimeout كافٍ.
+     ومع ذلك نتحقق من endsAt عند كل رسالة، حتى لو نام المؤقّت. */
+  setPhaseTimer(ms, fn) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(async () => {
+      this.timer = null;
+      try { await fn(); } catch (e) {}
+    }, ms);
+  }
+  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
+
+  armTurn() {
+    const h = this.room.hand;
+    if (!h) return;
+    const ms = this.room.cfg.turnSec * 1000;
+    h.endsAt = Date.now() + ms;
+    const snapNo = h.no, snapSeq = h.seq;
+    this.setPhaseTimer(ms + 400, () => this.onTimeout(snapNo, snapSeq));
+  }
+
+  async onTimeout(handNo, seq) {
+    const h = this.room.hand;
+    // قفل السباق نفسه يحمي المؤقّت: لو تحرّك الدور، هذا المؤقّت ميّت
+    if (!h || h.no !== handNo || h.seq !== seq) return;
+    if (Date.now() < h.endsAt - 500) return;
+
+    if (h.phase === 'bet') {
+      const i = h.order[h.turn];
+      if (i === undefined) return;
+      const p = this.room.players[i];
+      p.autoMiss++;
+      // انتهى وقته: ينسحب لو الانسحاب متاح وفيه رهان قائم،
+      // وإلا يفتح بالحد الأدنى (أو بكل رصيده لو أقل)
+      if (this.room.cfg.fold && h.last > 0) {
+        this.log(p.name + ' انتهى وقته — انسحب تلقائيًا');
+        await this.doFold(i);
+      } else {
+        const amt = Math.min(Math.max(h.last, this.room.cfg.min), p.chips);
+        this.log(p.name + ' انتهى وقته — نزّل الحد الأدنى');
+        await this.doBet(i, amt);
+      }
+    } else if (h.phase === 'offer') {
+      const p = this.room.players[h.dealerIdx];
+      p.autoMiss++;
+      const o = this.others(h);
+      const step = this.room.cfg.min;
+      const each = o.length ? Math.floor(h.pot / o.length / step) * step : 0;
+      const shares = {};
+      o.forEach(i => { shares[this.room.players[i].id] = each; });
+      this.log(p.name + ' انتهى وقته — وُزّع بالتساوي');
+      await this.doOffer(shares);
+    } else if (h.phase === 'vote') {
+      // انتهى الوقت: الصامتون يُحسبون «راضين» — أقل ضررًا من إجبار كشف
+      const o = this.others(h);
+      o.forEach(i => {
+        if (h.votes[i] === null) {
+          h.votes[i] = 'yes';
+          this.room.players[i].autoMiss++;
+        }
+      });
+      this.log('انتهى وقت التصويت — الصامتون رضوا');
+      await this.resolveVotes();
+    } else if (h.phase === 'reveal') {
+      await this.nextHand();
+    }
+    this.parkIdlePlayers();
+    await this.persist();
+    this.broadcastState();
+  }
+
+  // من انتهى وقته ٣ مرات متتالية يُقعَد على الاحتياط بدل تجميد الطاولة
+  parkIdlePlayers() {
+    this.room.players.forEach(p => {
+      if (p.autoMiss >= DQ_MAX_AUTO && !p.sitting) {
+        p.sitting = true;
+        this.log(p.name + ' قعد على الاحتياط');
+      }
+    });
+  }
+
+  // ═══════════ قفل السباق ═══════════
+  /* كل طلب يحمل رقم اليد ورقم الدور. الـ Durable Object أصلاً وحيد الخيط،
+     فما فيه تزامن حقيقي — لكن الضغطتين المتتاليتين أو الطلب المتأخر
+     من شبكة بطيئة يُرفضان هنا. */
+  gate(playerId, msg, phase) {
+    const h = this.room.hand;
+    if (!h || this.room.phase !== 'playing') return null;
+    if (h.phase !== phase) return null;
+    if (msg.handNo !== h.no || msg.seq !== h.seq) {
+      this.send(playerId, { type: 'stale' });
+      return null;
+    }
+    const i = this.idxOf(playerId);
+    if (i < 0 || !h.seats.includes(i)) return null;
+    return i;
+  }
+
+  bump() {
+    const h = this.room.hand;
+    if (h) h.seq++;
+  }
+
+  // ═══════════ المزاد ═══════════
+  async actBet(playerId, msg) {
+    const h = this.room.hand;
+    const i = this.gate(playerId, msg, 'bet');
+    if (i === null) return;
+    if (h.order[h.turn] !== i) return;            // مو دوره
+    if (Date.now() > h.endsAt + 1500) return;     // انتهى وقته فعليًا
+
+    const p = this.room.players[i];
+    let amt = Number(msg.amount);
+    if (!Number.isInteger(amt) || amt < 0) return;
+    if (amt > p.chips) return;                    // ما يقدر يراهن بأكثر من رصيده
+
+    const step = this.room.cfg.min;
+    const allIn = amt === p.chips;
+
+    if (h.last === 0) {
+      // أول واحد: لازم الحد الأدنى ومن مضاعفاته، إلا لو كل رصيده أقل
+      if (!allIn && (amt < step || amt % step !== 0)) return;
+      if (allIn && amt < step && p.chips >= step) return;
+    } else {
+      // مجاراة تمامًا، أو زيادة بمضاعفات الوحدة، أو كل الرصيد
+      const isCall = amt === h.last;
+      const isRaise = amt > h.last && (amt - h.last) % step === 0;
+      if (!isCall && !isRaise && !allIn) return;
+      if (allIn && amt < h.last && amt >= h.last) return;
+    }
+    p.autoMiss = 0;
+    await this.doBet(i, amt);
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async doBet(i, amt) {
+    const h = this.room.hand;
+    const p = this.room.players[i];
+    amt = Math.min(amt, p.chips);
+    const before = h.last;
+    p.chips -= amt;
+    h.bets[i] = amt;
+    h.pot += amt;
+    h.last = Math.max(h.last, amt);
+    this.log(p.name + (before === 0 ? ' فتح بـ ' : amt > before ? ' زاد إلى ' : ' جارى ')
+      + amt + (p.chips === 0 ? ' — كل رصيده' : ''));
+    h.turn++;
+    this.bump();
+    await this.advanceBetting();
+  }
+
+  async actFold(playerId, msg) {
+    const h = this.room.hand;
+    const i = this.gate(playerId, msg, 'bet');
+    if (i === null) return;
+    if (h.order[h.turn] !== i) return;
+    if (!this.room.cfg.fold || h.last === 0) return; // الانسحاب مو متاح
+    if (Date.now() > h.endsAt + 1500) return;
+    this.room.players[i].autoMiss = 0;
+    await this.doFold(i);
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async doFold(i) {
+    const h = this.room.hand;
+    const p = this.room.players[i];
+    h.folded[i] = true;
+    this.log(p.name + ' انسحب' + (h.bets[i] > 0 ? ' وخسر ' + h.bets[i] : ''));
+    h.turn++;
+    this.bump();
+    await this.advanceBetting();
+  }
+
+  async advanceBetting() {
+    const h = this.room.hand;
+    if (h.turn < h.order.length) { this.armTurn(); return; }
+    await this.startOffer();
+  }
+
+  // ═══════════ التوزيع ═══════════
+  async startOffer() {
+    const h = this.room.hand;
+    const L = this.live(h);
+
+    if (L.length === 0) {
+      // ما يُفترض يوصلها (أول لاعب ما عنده انسحاب) — لكن لو صار،
+      // القدر يُرجَّع لأصحابه بدل ما يختفي
+      L.length === 0 && h.order.forEach(i => { this.room.players[i].chips += h.bets[i]; });
+      h.phase = 'reveal'; h.revealed = false;
+      h.title = 'كلهم انسحبوا — رُدّت الرهانات';
+      this.bump(); this.armRevealTimer();
+      return;
+    }
+    if (L.length === 1) {
+      const w = L[0];
+      this.room.players[w].chips += h.pot;
+      h.gains[w] = h.pot;
+      h.winners = [w];
+      h.prize = h.pot;
+      h.phase = 'reveal'; h.revealed = true; h.shown = [];
+      h.title = this.room.players[w].name + ' بقي لحاله وأخذ القدر — ' + h.pot;
+      this.bump(); this.armRevealTimer();
+      return;
+    }
+    // الموزّع انسحب: تنتقل المهمة لآخر لاعب حي، ويُعاد حساب others تلقائيًا
+    if (h.folded[h.dealerIdx]) {
+      h.dealerIdx = L[L.length - 1];
+      this.log('الموزّع انسحب — انتقل التوزيع لـ ' + this.room.players[h.dealerIdx].name);
+    }
+    h.phase = 'offer';
+    this.bump();
+    this.armTurn();
+  }
+
+  async actOffer(playerId, msg) {
+    const h = this.room.hand;
+    const i = this.gate(playerId, msg, 'offer');
+    if (i === null) return;
+    if (i !== h.dealerIdx) return;               // الموزّع وحده يوزّع
+    if (Date.now() > h.endsAt + 1500) return;
+    if (!msg.shares || typeof msg.shares !== 'object') return;
+    this.room.players[i].autoMiss = 0;
+    await this.doOffer(msg.shares);
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async doOffer(shares) {
+    const h = this.room.hand;
+    const cfg = this.room.cfg;
+    const step = cfg.min;
+    const o = this.others(h);
+
+    h.offer = this.room.players.map(() => 0);
+    let given = 0;
+    for (const i of o) {
+      const id = this.room.players[i].id;
+      let v = Number(shares[id]);
+      if (!Number.isInteger(v) || v < 0) v = 0;
+      v = Math.floor(v / step) * step;           // مضاعفات الوحدة فقط
+      v = Math.min(v, h.pot);
+      h.offer[i] = v;
+      given += v;
+    }
+    // مجموع الحصص لا يتجاوز القدر أبدًا — نقصّ من الأكبر
+    while (given > h.pot && o.length) {
+      const j = o.reduce((a, b) => (h.offer[a] >= h.offer[b] ? a : b));
+      const cut = Math.min(step, h.offer[j]);
+      if (cut === 0) break;
+      h.offer[j] -= cut;
+      given -= cut;
+    }
+    // «ما راح أوزّع» ممنوع لو keepAll مطفي: أرضية إلزامية لكل واحد
+    if (!cfg.keepAll && o.length) {
+      const floor = Math.min(step, Math.floor(h.pot / o.length / step) * step);
+      o.forEach(i => { h.offer[i] = Math.max(h.offer[i], floor); });
+      given = o.reduce((a, i) => a + h.offer[i], 0);
+      while (given > h.pot) {
+        const j = o.reduce((a, b) => (h.offer[a] >= h.offer[b] ? a : b));
+        h.offer[j] = Math.max(0, h.offer[j] - step);
+        given = o.reduce((a, i) => a + h.offer[i], 0);
+      }
+    }
+    h.offer[h.dealerIdx] = h.pot - given;
+
+    h.phase = 'vote';
+    h.votes = this.room.players.map(() => null);
+    h.votesOpen = false;
+    this.log(this.room.players[h.dealerIdx].name + ' عرض التوزيع');
+    this.bump();
+    this.armTurn();
+  }
+
+  // ═══════════ التصويت ═══════════
+  async actVote(playerId, msg) {
+    const h = this.room.hand;
+    const i = this.gate(playerId, msg, 'vote');
+    if (i === null) return;
+    if (i === h.dealerIdx) return;               // الموزّع ما يصوّت
+    if (h.folded[i]) return;                     // المنسحب ما يصوّت
+    if (h.votes[i] !== null) return;             // صوت واحد لكل لاعب
+    if (Date.now() > h.endsAt + 1500) return;
+    h.votes[i] = msg.ok ? 'yes' : 'no';
+    this.room.players[i].autoMiss = 0;
+    // ملاحظة: ما نستدعي bump() هنا — التصويت متزامن لا تسلسلي،
+    // وبقاء seq ثابتًا يسمح للبقية بإرسال أصواتهم
+    const pending = this.others(h).filter(x => h.votes[x] === null).length;
+    if (pending === 0) {
+      await this.resolveVotes();
+    } else {
+      await this.persist();
+      this.broadcastState();
+    }
+  }
+
+  async resolveVotes() {
+    const h = this.room.hand;
+    if (h.phase !== 'vote') return;
+    this.clearPhaseTimer();
+    const cfg = this.room.cfg;
+    const o = this.others(h);
+    o.forEach(i => { if (h.votes[i] === null) h.votes[i] = 'yes'; });
+    h.votesOpen = true;
+
+    const rebels = o.filter(i => h.votes[i] === 'no');
+
+    if (rebels.length === 0) {
+      // رضوا كلهم: التقسيم ماشي بلا كشف
+      h.offer[h.dealerIdx] = Math.max(0, h.pot - o.reduce((a, i) => a + h.offer[i], 0));
+      this.live(h).forEach(i => {
+        this.room.players[i].chips += h.offer[i];
+        h.gains[i] = h.offer[i];
+      });
+      h.winners = this.live(h).filter(i => h.offer[i] > 0);
+      h.revealed = false;
+      h.shown = [];
+      h.phase = 'reveal';
+      h.title = 'رضوا كلهم — ' + this.room.players[h.dealerIdx].name
+        + ' أخذ ' + h.offer[h.dealerIdx] + ' بلا كشف';
+      this.bump();
+      this.armRevealTimer();
+      await this.persist();
+      this.broadcastState();
+      return;
+    }
+
+    // فيه رافض: كشف
+    h.safe = [];
+    let inHand = this.live(h);
+    if (cfg.guar) {
+      // من رضي وحصته أكبر من صفر يقبضها ويخرج من الكشف
+      h.safe = o.filter(i => h.votes[i] === 'yes' && h.offer[i] > 0);
+      h.safe.forEach(i => {
+        this.room.players[i].chips += h.offer[i];
+        h.gains[i] = h.offer[i];
+      });
+      inHand = inHand.filter(i => !h.safe.includes(i));
+    }
+    h.prize = h.pot - h.safe.reduce((a, i) => a + h.offer[i], 0);
+    h.shown = inHand.slice();
+    h.revealed = true;
+
+    if (inHand.length === 1) {
+      const w = inHand[0];
+      this.room.players[w].chips += h.prize;
+      h.gains[w] += h.prize;
+      h.winners = [w];
+      h.title = this.room.players[w].name + ' بقي لحاله في الكشف — ' + h.prize;
+    } else {
+      this.payShowdown(inHand);
+    }
+    h.phase = 'reveal';
+    this.bump();
+    this.armRevealTimer();
+    await this.persist();
+    this.broadcastState();
+  }
+
+  /* دفع الكشف مع القدور الجانبية.
+     بدونها: لاعب دخل بـ ٥٠٠٠ يكسب قدرًا فيه ٢٠٠٠٠٠ — يعني «قلّل رصيدك
+     واربح مجانًا» تصير الاستراتيجية المثلى أونلاين.
+     مع القدور: كل لاعب يكسب فقط بقدر ما غطّى من رهان كل خصم.
+     والباقي ينزل لأقوى يد تالية غطّت أكثر. */
+  payShowdown(inHand) {
+    const h = this.room.hand;
+    const cfg = this.room.cfg;
+    const P = this.room.players;
+
+    if (!cfg.sidepot) {
+      let best = h.evals[inHand[0]];
+      inHand.forEach(i => { if (dqCmp(h.evals[i], best) > 0) best = h.evals[i]; });
+      const winners = inHand.filter(i => dqCmp(h.evals[i], best) === 0);
+      const share = Math.floor(h.prize / winners.length);
+      let rem = h.prize - share * winners.length;   // ما يضيع ولا ريال
+      winners.forEach((i, k) => {
+        const add = share + (k < rem ? 1 : 0);
+        P[i].chips += add; h.gains[i] += add;
+      });
+      h.winners = winners;
+      h.title = winners.map(i => P[i].name).join(' و ') + ' أقوى يد — ' + h.prize;
+      return;
+    }
+
+    // الطبقات: مبنية على مساهمة كل مشارك بالكشف
+    const contrib = {};
+    inHand.forEach(i => { contrib[i] = h.bets[i]; });
+
+    const levels = [...new Set(inHand.map(i => contrib[i]))].sort((a, b) => a - b);
+    const winners = new Set();
+    let prev = 0;
+    let paid = 0;
+
+    for (const lv of levels) {
+      if (paid >= h.prize) break;
+      const eligible = inHand.filter(i => contrib[i] >= lv);
+      // في وضع «الضمان» تخرج حصص الراضين من القدر قبل الكشف، فمجموع
+      // الرهانات قد يتجاوز الجائزة. بدون هذا القصّ تُخلق فلوس من العدم.
+      let layer = Math.min((lv - prev) * eligible.length, h.prize - paid);
+      prev = lv;
+      if (layer <= 0) continue;
+      let best = h.evals[eligible[0]];
+      eligible.forEach(i => { if (dqCmp(h.evals[i], best) > 0) best = h.evals[i]; });
+      const w = eligible.filter(i => dqCmp(h.evals[i], best) === 0);
+      const share = Math.floor(layer / w.length);
+      let rem = layer - share * w.length;
+      w.forEach((i, k) => {
+        const add = share + (k < rem ? 1 : 0);
+        P[i].chips += add; h.gains[i] += add;
+        winners.add(i);
+      });
+      paid += layer;
+    }
+
+    // الفائض (رهانات المنسحبين والآمنين) لأقوى يد بين كل المشاركين
+    const leftover = h.prize - paid;
+    if (leftover > 0) {
+      let best = h.evals[inHand[0]];
+      inHand.forEach(i => { if (dqCmp(h.evals[i], best) > 0) best = h.evals[i]; });
+      const w = inHand.filter(i => dqCmp(h.evals[i], best) === 0);
+      const share = Math.floor(leftover / w.length);
+      let rem = leftover - share * w.length;
+      w.forEach((i, k) => {
+        const add = share + (k < rem ? 1 : 0);
+        P[i].chips += add; h.gains[i] += add;
+        winners.add(i);
+      });
+    }
+
+    h.winners = [...winners];
+    const top = h.winners.filter(i => h.gains[i] > 0);
+    h.title = (top.length ? top.map(i => P[i].name).join(' و ') : '—')
+      + ' أخذ الكشف — ' + h.prize;
+  }
+
+  armRevealTimer() {
+    const h = this.room.hand;
+    h.endsAt = Date.now() + DQ_REVEAL_MS;
+    const snapNo = h.no, snapSeq = h.seq;
+    this.setPhaseTimer(DQ_REVEAL_MS + 400, () => this.onTimeout(snapNo, snapSeq));
+  }
+
+  async nextHand() {
+    const h = this.room.hand;
+    if (!h || h.phase !== 'reveal') return;
+    this.parkIdlePlayers();
+    // من رجع من انقطاع أو ضغط أي زر يعود من الاحتياط تلقائيًا
+    this.room.players.forEach(p => { if (p.connected && p.chips > 0) p.sitting = false; });
+    await this.newHand();
+    await this.persist();
+    this.broadcastState();
+  }
+}
+applyRoomCommon(DaqashRoom);
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -4161,10 +5079,11 @@ export default {
 
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
     // حتى الانضمام لاحقًا بنفس الكود يوصل لنفس الغرفة دائمًا
-    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create') {
+    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create' || url.pathname === '/daqash/room/create') {
       const gameNS = url.pathname.startsWith('/got/') ? env.GOT_ROOM
                     : url.pathname.startsWith('/mawwih/') ? env.MAWWIH_ROOM
                     : url.pathname.startsWith('/fatin/') ? env.FATIN_ROOM
+                    : url.pathname.startsWith('/daqash/') ? env.DAQASH_ROOM
                     : env.MAFIA_ROOM;
       const ip = request.headers.get('CF-Connecting-IP') || '';
       if (!allowCreate(ip)) {
@@ -4190,16 +5109,16 @@ export default {
     }
 
     // الانضمام لغرفة موجودة بالكود، أو فتح اتصال WebSocket لغرفة قائمة
-    const match = url.pathname.match(/^\/(got|mawwih|fatin)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(got|mawwih|fatin|daqash)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : env.MAFIA_ROOM;
       const code = match[2].toUpperCase();
       const id = gameNS.idFromName(code);
       const stub = gameNS.get(id);
       return stub.fetch(request);
     }
 
-    return new Response('مافيا، لمن العرش، موّه، وفَطِن أونلاين — استوديو يا٧', { status: 200 });
+    return new Response('مافيا، لمن العرش، موّه، فَطِن، وداقش أونلاين — استوديو يا٧', { status: 200 });
   },
 };
