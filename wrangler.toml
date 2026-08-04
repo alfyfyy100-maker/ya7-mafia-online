@@ -2,6 +2,10 @@ name = "ya7-mafia-online"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
+# ═══════════════ ربطات الغرف (Durable Objects) ═══════════════
+# name       = الاسم الذي يقرأه الكود عبر env.<name>
+# class_name = اسم الكلاس في worker.js — حرفيًا، حسّاس لحالة الأحرف
+
 [[durable_objects.bindings]]
 name = "MAFIA_ROOM"
 class_name = "MafiaRoom"
@@ -14,6 +18,18 @@ class_name = "GotRoom"
 name = "MAWWIH_ROOM"
 class_name = "MawwihRoom"
 
+[[durable_objects.bindings]]
+name = "FATIN_ROOM"
+class_name = "FatinRoom"
+
+[[durable_objects.bindings]]
+name = "DAQASH_ROOM"
+class_name = "DaqashRoom"
+
+# ═══════════════ الترحيلات (Migrations) ═══════════════
+# تُطبَّق بالترتيب مرة واحدة فقط. لا تعدّل ترحيلًا قديمًا ولا تعِد استخدام tag —
+# كل كلاس جديد يأخذ ترحيلًا جديدًا برقم أعلى. الترحيل التالي عندك هو v6.
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["MafiaRoom"]
@@ -25,10 +41,11 @@ new_sqlite_classes = ["GotRoom"]
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["MawwihRoom"]
-[[durable_objects.bindings]]
-name = "FATIN_ROOM"
-class_name = "FatinRoom"
 
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["FatinRoom"]
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["DaqashRoom"]
