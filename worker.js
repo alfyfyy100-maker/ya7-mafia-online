@@ -37,14 +37,30 @@ function withCors(resp, origin) {
 // ══════════════════════ حدود وتنقية عامة ══════════════════════
 const MAX_PLAYERS = 20;
 
+// محارف غير مرئية أو تقلب اتجاه العرض. في واجهة عربية RTL يقدر
+// \u202E يعكس السطر كامل فيظهر اسم اللاعب مكان اسم غيره — انتحال
+// كامل بلا أي رمز محظور. والصفرية تعطي اسمًا فاضيًا بصريًا لكنه
+// غير فاضٍ برمجيًا، فما يمسكه فحص الفراغ.
+const INVISIBLE_RE = /[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/g;
+// زخرفة زلقو: تكرار نفس العلامة المركّبة يمدّ السطر رأسيًا ويكسر التخطيط.
+// نطويها لواحدة بدل حذف كل العلامات، عشان التشكيل العربي يبقى سليمًا.
+const ZALGO_RE = /(\p{Mn})\1+/gu;
+
+// قصّ بالمحارف لا بوحدات UTF-16 — القصّ الخام يشطر الإيموجي نصفين
+function cutChars(s, max) {
+  const a = [...s];
+  return a.length > max ? a.slice(0, max).join('') : s;
+}
+
 // تنقية الاسم في الخادم: يمنع الحقن في الواجهة ويحدّ الطول
 function cleanName(raw) {
-  const s = String(raw == null ? '' : raw)
+  const s = cutChars(String(raw == null ? '' : raw)
     .replace(/[<>&"'`\\]/g, '')
     .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(INVISIBLE_RE, '')
+    .replace(ZALGO_RE, '$1')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 14);
+    .trim(), 14);
   return s || 'لاعب';
 }
 
@@ -52,14 +68,28 @@ function newSeatToken() {
   return crypto.randomUUID().replace(/-/g, '');
 }
 
+// ── عشوائية آمنة: crypto لا Math.random ──
+// Math.random في V8 هو xorshift128+ ويُعكَس من أربع مخرجات متتالية.
+// كل ما يقرّر دورًا أو كرتًا أو رمز غرفة يمر من هنا. رميات البوتات
+// الاحتمالية تبقى على Math.random — ما فيها سر يُتوقّع.
+function randInt(n) {
+  if (!(n > 0)) return 0;
+  const limit = Math.floor(0xFFFFFFFF / n) * n;
+  const buf = new Uint32Array(1);
+  let x;
+  do { crypto.getRandomValues(buf); x = buf[0]; } while (x >= limit);
+  return x % n;
+}
+
 // تنقية أي نص حر يرسله لاعب: يمنع الحقن ويحدّ الطول قبل التخزين والبث
 function cleanText(raw, max = 60) {
-  return String(raw == null ? '' : raw)
+  return cutChars(String(raw == null ? '' : raw)
     .replace(/[<>&"'`\\]/g, '')
     .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(INVISIBLE_RE, '')
+    .replace(ZALGO_RE, '$1')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, max);
+    .trim(), max);
 }
 
 // مقارنة توكن بزمن ثابت — تمنع استنتاج التوكن عبر قياس زمن الرد
@@ -159,11 +189,11 @@ const ROLES = {
 const BOT_NAMES_M = ['فهد','عبدالله','خالد','تركي','سلطان','ماجد','بندر','ناصر','راكان','مشعل'];
 const BOT_NAMES_F = ['سارة','نورة','ريم','لمى','هند','جود','شهد','دانة','العنود','غلا'];
 const BOT_NAMES = [...BOT_NAMES_M, ...BOT_NAMES_F];
-function pickRandom(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function pickRandom(arr){ return arr[randInt(arr.length)]; }
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = randInt(i + 1);
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
@@ -182,7 +212,7 @@ function buildRoleList(config, playerCount) {
   if (config.trap) roles.push('trap');
   let hasTwins = false;
   if (config.twins) {
-    const evilTwin = Math.random() < 0.3; // ٣٠٪ أن أحد التوأمين شرير
+    const evilTwin = randInt(10) < 3; // ٣٠٪ أن أحد التوأمين شرير
     roles.push(evilTwin ? 'twin_evil' : 'twin_good');
     roles.push('twin_good');
     hasTwins = true;
@@ -612,6 +642,15 @@ export class MafiaRoom {
     }
 
     if (!player) {
+      // رمز ما أُنشئت له غرفة أصلًا. بدون هذا الفحص أي رمز عشوائي
+      // يفرّخ Durable Object جديدًا ويكتب في التخزين — تجاوز كامل
+      // لحدّ الإنشاء لكل IP، وسبب أن الرمز الغلط يفتح لوبي فاضيًا
+      // بدل رسالة واضحة.
+      if (!this.room.code) {
+        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
       // لاعب جديد ينضم
       if (this.room.phase !== 'lobby') {
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت، ما تقدر تنضم الحين' }));
@@ -1045,7 +1084,7 @@ export class MafiaRoom {
       for (const t of Object.values(na.mafiaVotes)) tally[t] = (tally[t] || 0) + 1;
       const max = Math.max(...Object.values(tally));
       const top = Object.keys(tally).filter(k => tally[k] === max);
-      killedByMafia = top[Math.floor(Math.random() * top.length)];
+      killedByMafia = top[randInt(top.length)];
     }
 
     // نثبّت الفاحصين الحقيقيين قبل تنفيذ أي وفاة — عشان لا تُسلّم النتيجة لوريث ورث الدور توًّا
@@ -2167,6 +2206,15 @@ export class GotRoom {
     }
 
     if (!player) {
+      // رمز ما أُنشئت له غرفة أصلًا. بدون هذا الفحص أي رمز عشوائي
+      // يفرّخ Durable Object جديدًا ويكتب في التخزين — تجاوز كامل
+      // لحدّ الإنشاء لكل IP، وسبب أن الرمز الغلط يفتح لوبي فاضيًا
+      // بدل رسالة واضحة.
+      if (!this.room.code) {
+        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
       if (this.room.phase !== 'lobby') {
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت، ما تقدر تنضم الحين' }));
         server.close();
@@ -2416,7 +2464,7 @@ export class GotRoom {
     const n = this.room.players.length;
     if (n < 4) { this.sendPrivate(this.room.hostId, { type:'error', message:'أقل عدد للبدء ٤ لاعبين' }); return; }
     const roles = gotBuildRoles(n, this.room.config);
-    for (let i=roles.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [roles[i],roles[j]]=[roles[j],roles[i]]; }
+    for (let i=roles.length-1;i>0;i--){ const j=randInt(i+1); [roles[i],roles[j]]=[roles[j],roles[i]]; }
     this.room.players.forEach((p,i)=>{ p.role = roles[i]; p.alive = true; });
     const robb = this.room.players.find(p=>p.role==='robb');
     const talisa = this.room.players.find(p=>p.role==='talisa');
@@ -2444,6 +2492,19 @@ export class GotRoom {
     if (!p || !p.alive) return;
     const na = this.room.nightActions;
     const leader = this.leaderPlayer();
+
+    // الهدف لازم يكون لاعبًا حقيقيًا بالحالة الصحيحة. بدون هذا الفحص
+    // كان أي نص يُقبل ويُخزَّن، ونص ضخم يتجاوز سقف تخزين الـ DO
+    // فيفشل كل persist بعده وتتعطّل الغرفة نهائيًا.
+    // ملاحيسندري وحدها تستهدف ميتًا (الإحياء)، والباقي أحياء فقط.
+    if (msg.targetId != null) {
+      const tgt = this.findPlayer(msg.targetId);
+      const wantsDead = (p.role === 'melisandre' && msg.action === 'revive');
+      if (!tgt || (wantsDead ? tgt.alive : !tgt.alive)) {
+        this.sendPrivate(p.id, { type: 'error', message: 'اختيار غير صالح — اختر شخصًا ثانيًا' });
+        return;
+      }
+    }
 
     if (leader && p.id===leader.id) na.kill = msg.targetId ?? null;
     else if (p.role==='varys') {
@@ -2640,7 +2701,7 @@ export class GotRoom {
     if (entries.length) {
       const max = Math.max(...entries.map(e=>e[1]));
       const top = entries.filter(e=>e[1]===max);
-      accusedId = top[Math.floor(Math.random()*top.length)][0];
+      accusedId = top[randInt(top.length)][0];
     }
     this.room.accusedId = accusedId;
     await this.persist();
@@ -3112,6 +3173,15 @@ export class MawwihRoom {
     }
 
     if (!player) {
+      // رمز ما أُنشئت له غرفة أصلًا. بدون هذا الفحص أي رمز عشوائي
+      // يفرّخ Durable Object جديدًا ويكتب في التخزين — تجاوز كامل
+      // لحدّ الإنشاء لكل IP، وسبب أن الرمز الغلط يفتح لوبي فاضيًا
+      // بدل رسالة واضحة.
+      if (!this.room.code) {
+        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
       if (this.room.phase !== 'lobby') {
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — ما تقدر تنضم الحين' }));
         server.close();
@@ -3324,7 +3394,7 @@ export class MawwihRoom {
     this.broadcastPublic({ type: 'catPicked', index: catIndex, name: BANK[catIndex][0], chooserName: this.chooser().name });
     const pool = [];
     BANK[catIndex][1].forEach((q, qi) => { const key = catIndex + ':' + qi; if (!this.room.used.includes(key)) pool.push({ key, cat: BANK[catIndex][0], text: q[0], ans: q[1] }); });
-    const q = pool[Math.floor(Math.random() * pool.length)];
+    const q = pool[randInt(pool.length)];
     this.room.used.push(q.key);
     this.room.q = q;
     await this.persist();
@@ -3487,7 +3557,7 @@ export class MawwihRoom {
   async persist() { await this.touchRoom(); await this.state.storage.put('room', this.room); }
 }
 
-function shuffleArr(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; }
+function shuffleArr(a) { for (let i = a.length - 1; i > 0; i--) { const j = randInt(i + 1);[a[i], a[j]] = [a[j], a[i]]; } return a; }
 function norm(s) {
   return (s || '')
     .trim()
@@ -3619,7 +3689,7 @@ const FATIN_BANK = {
  ]
 };
 const FATIN_CATS = Object.keys(FATIN_BANK);
-function fatinShuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+function fatinShuffle(a){for(let i=a.length-1;i>0;i--){const j=randInt(i+1);[a[i],a[j]]=[a[j],a[i]]}return a}
 function fatinPickCats(n){return fatinShuffle(FATIN_CATS.slice()).slice(0,n)}
 
 const FATIN_TOP = 24, FATIN_ROUNDS = 7;
@@ -3627,6 +3697,7 @@ const FATIN_HILAS = ['ice', 'ink', 'lock', 'spin', 'fog'];
 const FATIN_COLORS = ['#E3A93C', '#2E9E93', '#C1403A', '#7C6BD8', '#4C9BE8', '#D46FA8'];
 const FATIN_MAXP = 6;
 const FATIN_SDP_MAX = 9000;
+const FATIN_MAX_SCREENS = 4;   // سقف شاشات التلفزيون لكل غرفة
 
 export class FatinRoom {
   constructor(state, env) {
@@ -3694,11 +3765,18 @@ export class FatinRoom {
     // ── عميل الشاشة: مشاهد فقط، خارج المقاعد، ما يوقف عليه أحد ──
     if (url.searchParams.get('screen') === '1') {
       // شاشة موثّقة فقط تقدر ترسل أوامر؛ غيرها مشاهدة صامتة
+      // بلا سقف كان أي أحد يعرف الرمز يفتح اتصالات شاشة بلا نهاية
+      if (this.screens.size >= FATIN_MAX_SCREENS) {
+        server.send(JSON.stringify({ type: 'error', message: 'عدد الشاشات وصل الحد' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
       const trusted = !!this.room.screenToken &&
         tokenEquals(url.searchParams.get('stoken'), this.room.screenToken);
       const sid = 'screen:' + crypto.randomUUID();
       this.screens.set(sid, server);
-      server.addEventListener('message', evt => { if (trusted) this.onScreenMessage(evt); });
+      // الشاشة تمر على نفس الخنق — كانت خارجه كليًا
+      server.addEventListener('message', evt => { if (trusted && this.allowMsg(sid)) this.onScreenMessage(evt); });
       server.addEventListener('close', () => this.screens.delete(sid));
       server.addEventListener('error', () => this.screens.delete(sid));
       this.sendState(server, null, true);
@@ -3966,7 +4044,7 @@ export class FatinRoom {
 
     if (specialIds.length) {
       // أكثر من اختيار خاص: واحد بالقرعة، والباقي يسترجعون حقّهم
-      const winner = specialIds[Math.floor(Math.random() * specialIds.length)];
+      const winner = specialIds[randInt(specialIds.length)];
       for (const id of specialIds) if (id !== winner) { const q = this.findPlayer(id); if (q) q.special = true; }
       r.cat = r.specials[winner];
       const w = this.findPlayer(winner);
@@ -3977,7 +4055,7 @@ export class FatinRoom {
         if (tally[c] > best) { best = tally[c]; pool = [c]; }
         else if (tally[c] === best) pool.push(c);
       }
-      r.cat = pool[Math.floor(Math.random() * pool.length)];
+      r.cat = pool[randInt(pool.length)];
       r.specialBy = null;
     }
     await this.startHila();
@@ -4002,7 +4080,7 @@ export class FatinRoom {
     if (!r.used[r.cat]) r.used[r.cat] = [];
     if (r.used[r.cat].length >= list.length) r.used[r.cat] = [];
     const avail = list.map((_, i) => i).filter(i => !r.used[r.cat].includes(i));
-    const pick = avail[Math.floor(Math.random() * avail.length)];
+    const pick = avail[randInt(avail.length)];
     r.used[r.cat].push(pick);
     const row = list[pick];
     const opts = fatinShuffle([row[1]].concat(row[2]));
@@ -4134,14 +4212,60 @@ const CREATE_LIMIT = 8;              // غرف في الساعة لكل IP
 const CREATE_WINDOW_MS = 60 * 60 * 1000;
 const createHits = new Map();        // ip -> {n, t}
 
-function allowCreate(ip) {
-  if (!ip) return true;
+// العميل على IPv6 يملك /64 كاملة (٢^٦٤ عنوانًا)، فالحدّ على العنوان
+// الكامل بلا معنى — يبدّل العنوان ويكمل. نحدّ على البادئة بدلها.
+function ipKey(ip) {
+  if (!ip) return '';
+  if (!ip.includes(':')) return ip;
+  const [head, tail] = ip.split('::');
+  const h = head ? head.split(':') : [];
+  const t = (tail === undefined || tail === '') ? [] : tail.split(':');
+  const fill = new Array(Math.max(0, 8 - h.length - t.length)).fill('0');
+  return [...h, ...fill, ...t]
+    .map(x => (x || '0').padStart(4, '0'))
+    .slice(0, 4).join(':') + '::/64';
+}
+
+// فتح الاتصالات: مع حارس وجود الغرفة صار الرمز الغلط يُرفض، لكن كل
+// محاولة تُوقظ Durable Object. نخنق المحاولات نفسها حتى ما يصير مسح
+// الرموز بالتخمين رخيصًا.
+const WS_LIMIT = 60;                 // اتصال في الدقيقة لكل بادئة
+const WS_WINDOW_MS = 60 * 1000;
+const wsHits = new Map();
+
+function allowSocket(ip) {
+  const key = ipKey(ip);
+  if (!key) return true;
   const now = Date.now();
-  const r = createHits.get(ip) || { n: 0, t: now };
+  const r = wsHits.get(key) || { n: 0, t: now };
+  if (now - r.t > WS_WINDOW_MS) { r.n = 0; r.t = now; }
+  r.n++;
+  wsHits.set(key, r);
+  if (wsHits.size > 5000) {
+    for (const [k, v] of wsHits) if (now - v.t > WS_WINDOW_MS) wsHits.delete(k);
+    while (wsHits.size > 5000) wsHits.delete(wsHits.keys().next().value);
+  }
+  return r.n <= WS_LIMIT;
+}
+
+function allowCreate(ip) {
+  const key = ipKey(ip);
+  if (!key) return true;
+  const now = Date.now();
+  const r = createHits.get(key) || { n: 0, t: now };
   if (now - r.t > CREATE_WINDOW_MS) { r.n = 0; r.t = now; }
   r.n++;
-  createHits.set(ip, r);
-  if (createHits.size > 5000) createHits.clear();   // سقف ذاكرة
+  createHits.set(key, r);
+  // كان clear() يمسح الجميع، فصار من يبلغ السقف يصفّر عدّاد الكل معه.
+  // الآن نكنس المنتهي فقط، وإن بقي ضغط نمسح الأقدم.
+  if (createHits.size > 5000) {
+    for (const [k, v] of createHits) {
+      if (now - v.t > CREATE_WINDOW_MS) createHits.delete(k);
+    }
+    while (createHits.size > 5000) {
+      createHits.delete(createHits.keys().next().value);
+    }
+  }
   return r.n <= CREATE_LIMIT;
 }
 
@@ -4166,13 +4290,7 @@ const DQ_MAX_AUTO = 3;
 
 // ── عشوائية آمنة: crypto لا Math.random ──
 // Math.random في V8 قابل للتنبؤ من مخرجات سابقة، وهنا يعني توقّع الكروت.
-function dqRandInt(n) {
-  const limit = Math.floor(0xFFFFFFFF / n) * n;
-  const buf = new Uint32Array(1);
-  let x;
-  do { crypto.getRandomValues(buf); x = buf[0]; } while (x >= limit);
-  return x % n;
-}
+function dqRandInt(n) { return randInt(n); }
 
 function dqShuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -4319,6 +4437,15 @@ export class DaqashRoom {
       player.sitting = false;
       player.autoMiss = 0;
     } else {
+      // رمز ما أُنشئت له غرفة أصلًا. بدون هذا الفحص أي رمز عشوائي
+      // يفرّخ Durable Object جديدًا ويكتب في التخزين — تجاوز كامل
+      // لحدّ الإنشاء لكل IP، وسبب أن الرمز الغلط يفتح لوبي فاضيًا
+      // بدل رسالة واضحة.
+      if (!this.room.code) {
+        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
       if (this.room.phase !== 'lobby') {
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — انتظر الجولة الجاية' }));
         server.close();
@@ -4769,7 +4896,9 @@ export class DaqashRoom {
       const isCall = amt === h.last;
       const isRaise = amt > h.last && (amt - h.last) % step === 0;
       if (!isCall && !isRaise && !allIn) return;
-      if (allIn && amt < h.last && amt >= h.last) return;
+      // كان هنا شرط مستحيل (amt < h.last && amt >= h.last) لا يتحقق أبدًا.
+      // الصحيح: كل الرصيد الأقل من الرهان القائم مسموح — هو أصلاً ما
+      // يقدر يجاري، والقدور الجانبية في payShowdown تتكفّل بالعدل.
     }
     p.autoMiss = 0;
     await this.doBet(i, amt);
@@ -5108,8 +5237,12 @@ export default {
       return new Response(null, { headers: corsFor(origin) });
     }
 
-    // ── حارس المصدر: يمنع أي طلب من خارج الموقع ──
-    // لا بد من CORS حتى على الرفض، وإلا حجب المتصفحُ الردَّ وظهر
+    // ── حارس المصدر ──
+    // تنبيه: هذا ليس طبقة أمان. ترويسة Origin يضبطها المتصفح فقط،
+    // وأي سكربت (curl / Node) يزيّفها بسطر. فائدتها منع صفحات الآخرين
+    // من استدعاء الـ API من متصفح زائرهم، لا أكثر. الإثبات الحقيقي
+    // للهوية هو seatToken وحده.
+    // ولا بد من CORS حتى على الرفض، وإلا حجب المتصفحُ الردَّ وظهر
     // "Failed to fetch" بدل السبب الحقيقي.
     if (!isAllowedOrigin(origin)) {
       return withCors(new Response('origin-not-allowed: ' + (origin || 'بلا مصدر'), { status: 403 }), origin);
@@ -5153,7 +5286,7 @@ export default {
       // لو صادف الكود غرفة حيّة، نولّد غيره بدل ما نمسحها
       for (let attempt = 0; attempt < 6; attempt++) {
         const code = Array.from({ length: 6 }, () =>
-          '23456789ABCDEFGHJKMNPQRSTUVWXYZ'[Math.floor(Math.random() * 32)]
+          '23456789ABCDEFGHJKMNPQRSTUVWXYZ'[randInt(32)]
         ).join('');
         const id = gameNS.idFromName(code);
         const stub = gameNS.get(id);
@@ -5171,6 +5304,16 @@ export default {
     if (match) {
       const g = (match[1]||'').toLowerCase();
       const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : env.MAFIA_ROOM;
+      // مثل مسار الإنشاء: ربط ناقص يرمي استثناء فيرجع ٥٠٠ بلا CORS،
+      // ويظهر عند اللاعب كـ "Failed to fetch" بلا أي دلالة على السبب
+      if (!gameNS) {
+        return withCors(new Response(
+          'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
+          { status: 501 }), origin);
+      }
+      if (!allowSocket(request.headers.get('CF-Connecting-IP') || '')) {
+        return withCors(new Response('too-many-connections', { status: 429 }), origin);
+      }
       const code = match[2].toUpperCase();
       const id = gameNS.idFromName(code);
       const stub = gameNS.get(id);
