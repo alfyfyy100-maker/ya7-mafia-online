@@ -26,9 +26,13 @@ class_name = "FatinRoom"
 name = "DAQASH_ROOM"
 class_name = "DaqashRoom"
 
+[[durable_objects.bindings]]
+name = "DAKHIL_ROOM"
+class_name = "DakhilRoom"
+
 # ═══════════════ الترحيلات (Migrations) ═══════════════
 # تُطبَّق بالترتيب مرة واحدة فقط. لا تعدّل ترحيلًا قديمًا ولا تعِد استخدام tag —
-# كل كلاس جديد يأخذ ترحيلًا جديدًا برقم أعلى. الترحيل التالي عندك هو v6.
+# كل كلاس جديد يأخذ ترحيلًا جديدًا برقم أعلى. الترحيل التالي عندك هو v7.
 
 [[migrations]]
 tag = "v1"
@@ -49,3 +53,7 @@ new_sqlite_classes = ["FatinRoom"]
 [[migrations]]
 tag = "v5"
 new_sqlite_classes = ["DaqashRoom"]
+
+[[migrations]]
+tag = "v6"
+new_sqlite_classes = ["DakhilRoom"]
