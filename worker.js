@@ -5228,6 +5228,741 @@ export class DaqashRoom {
 }
 applyRoomCommon(DaqashRoom);
 
+// ══════════════════════ مين الدخيل — أونلاين ══════════════════════
+// غرفة واحدة = instance من DakhilRoom. الجميع في نفس المجلس، كل واحد
+// على جواله: الجهاز يوزّع الأدوار ويجمع التصويت، والكلام يصير على الطاولة.
+// الكلمة السرية لا تُرسل أبدًا لمن ما يستحقها — الدخيل ما يشوفها إلا
+// في شاشة النتائج.
+
+const DK_MIN_PLAYERS = 3;
+const DK_MAX_PLAYERS = 12;
+
+const DAKHIL_BANK = {
+  "مسلسلات": ["Game of Thrones", "Prison Break", "House", "Suits", "Breaking Bad", "Friends", "Stranger Things", "The Office", "Dark", "Money Heist", "Peaky Blinders", "The Crown", "Vikings", "Sherlock", "Better Call Saul", "The Witcher", "Narcos", "How I Met Your Mother", "The Big Bang Theory", "Squid Game"],
+  "أكلات": ["كبسة", "شاورما", "سوشي", "برجر", "مندي", "بيتزا", "باستا", "فلافل", "حمص", "تكو", "دجاج مشوي", "رز بخاري", "مقلوبة", "برياني", "سمبوسة", "كباب", "شيش طاووق", "ستيك", "سلطة سيزر", "رامن", "فتة", "مظبي", "جريش", "مرقوق", "حنيني", "مسخن", "ماكاروني", "لازانيا", "تشيز برجر", "سلمون مشوي"],
+  "حلويات": ["كنافة", "دونات", "كوكيز", "لقيمات", "بقلاوة", "أم علي", "كيك", "تشيز كيك", "آيس كريم", "مهلبية", "بسبوسة", "هريسة", "معمول", "جيلي", "فطيرة تفاح", "براونيز", "وافل", "كريب", "حلاوة جبن", "تمر"],
+  "أنمي": ["هجوم العمالقة", "ناروتو", "قاتل الشياطين", "مذكرة الموت", "ون بيس", "بليتش", "دراغون بول", "فيري تيل", "تشينسو مان", "جوجتسو كايسن", "سباي فاميلي", "فول ميتال ألكيميست", "هانتر × هانتر", "توكيو غول", "ماي هيرو أكاديميا", "ون بانش مان", "كودو غياس", "إيفانجيليون", "سيلور مون", "دورايمون"],
+  "ألعاب": ["ببجي", "فورتنايت", "دارك سولز", "ماريو", "ماين كرافت", "روبلوكس", "GTA", "فيفا", "كول أوف ديوتي", "أوفرواتش", "فالورانت", "ليج أوف ليجيندز", "ذا لاست أوف أس", "ريزيدنت إيفل", "سبايدرمان", "جود أوف وور", "زيلدا", "سونيك", "ستريت فايتر", "موبايل ليجيندز"],
+  "كيبوب": ["BTS", "BLACKPINK", "TWICE", "EXO", "SEVENTEEN", "Stray Kids", "NewJeans", "IVE", "(G)I-DLE", "ATEEZ", "ENHYPEN", "TXT", "ITZY", "Red Velvet", "NCT", "aespa", "Super Junior", "SHINee", "BIGBANG", "iKON"],
+  "أماكن": ["مستشفى", "مطار", "مدرسة", "ملعب", "سجن", "مسجد", "بنك", "سوق", "حديقة", "فندق", "مطعم", "صيدلية", "محطة قطار", "جامعة", "شاطئ", "مستشفى نفسية", "محطة بنزين", "مول", "سينما", "متحف", "مكتبة", "ملاهي", "حديقة حيوان", "مصنع", "مزرعة", "ميناء", "محكمة", "مقهى", "مسبح", "صالة رياضية", "ديسكو", "كازينو", "ملهى ليلي", "قصر مسكون", "يخت فاخر", "حفلة تنكرية", "استراحة", "صحراء ليلاً", "جزيرة مهجورة", "سطح ناطحة سحاب"],
+  "ملابس": ["ثوب", "عباية", "شماغ", "بشت", "تيشيرت", "جينز", "هودي", "فستان", "بدلة رسمية", "كاب", "جاكيت", "شورت", "تنورة", "بلوزة", "غترة", "طاقية", "جوتي", "حذاء رياضي", "معطف", "بيجامة"],
+  "رياضات": ["كرة قدم", "كرة سلة", "سباحة", "جري", "بادل", "كرة طائرة", "فنون قتالية", "تنس", "ركوب خيل", "بولينغ", "جولف", "ملاكمة", "مصارعة", "تزلج", "غوص", "رماية", "دراجات", "كرة يد", "هوكي", "كرة طاولة"],
+  "سيارات": ["تويوتا", "لكزس", "فورد", "تسلا", "بي إم دبليو", "هامر", "جيب", "فيراري", "نيسان", "كامري", "مرسيدس", "أودي", "بورش", "كورفيت", "لامبورجيني", "رنج روفر", "هوندا", "شفروليه", "مازدا", "كيا"],
+  "مدن ودول": ["الرياض", "دبي", "القاهرة", "اسطنبول", "لندن", "طوكيو", "باريس", "نيويورك", "مكة", "جدة", "برشلونة", "روما", "سيؤول", "بانكوك", "أمستردام", "فيينا", "الدوحة", "الكويت", "بيروت", "مراكش"],
+  "مهن": ["طبيب", "مهندس", "معلم", "طيار", "شرطي", "محامي", "طباخ", "مبرمج", "ممرض", "رجل إطفاء", "محاسب", "صحفي", "مصور", "نجار", "كهربائي", "سائق", "مترجم", "صيدلي", "مصمم", "بائع", "مزارع", "خياط", "حلاق", "جراح", "طبيب أسنان", "مهندس معماري", "محقق", "عالم", "رائد فضاء", "مدرب رياضي", "راقصة", "دي جي", "مغني", "ممثل", "عارض أزياء", "حارس شخصي", "جاسوس", "ساحر", "مهرج", "مذيع"],
+  "مشروبات": ["قهوة سعودية", "شاي كرك", "عصير مانجو", "كولا", "ستاربكس", "موهيتو", "لاتيه", "سوبيا", "فيمتو", "شاي أحمر", "عصير برتقال", "ميلك شيك", "سفن أب", "ريد بُل", "ماء", "نسكافيه", "شاي أخضر", "عصير ليمون بالنعناع", "كابتشينو", "هوت شوكليت"],
+  "حيوانات": ["أسد", "نمر", "جمل", "صقر", "ذئب", "فيل", "دلفين", "قط", "كلب", "حصان", "نسر", "غزال", "دب", "تمساح", "قرد", "بطريق", "زرافة", "ثعلب", "أرنب", "حوت"]
+};
+
+const DK_CATS = Object.keys(DAKHIL_BANK);
+
+const sanitizeDakhilBools = makeConfigSanitizer(
+  ['useCustom', 'mukhadiOn', 'decoyOn', 'guessOn'],
+  { dakhilCount: [1, 11, 1] }
+);
+
+function sanitizeDakhilConfig(raw) {
+  const out = sanitizeDakhilBools(raw);
+  const cat = raw && typeof raw.catKey === 'string' ? raw.catKey : '';
+  out.catKey = DK_CATS.includes(cat) ? cat : DK_CATS[0];
+  out.customWord = cleanText(raw && raw.customWord, 24);
+  out.dakhilMode = (raw && raw.dakhilMode === 'random') ? 'random' : 'fixed';
+  if (!out.customWord) out.useCustom = false;
+  if (out.useCustom) out.decoyOn = false;   // الكلمة القريبة تحتاج فئة
+  return out;
+}
+
+export class DakhilRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.sockets = new Map();
+    this.timer = null;
+    this.state.blockConcurrencyWhile(async () => {
+      this.room = (await this.state.storage.get('room')) || {
+        code: null, hostId: null, phase: 'lobby',
+        cfg: sanitizeDakhilConfig({}),
+        players: [],
+        round: null,
+        roundNo: 0,
+        usedWords: {},
+        lastSeen: Date.now(),
+      };
+    });
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith('/ws')) return this.handleWebSocket(request);
+    if (url.pathname.endsWith('/create')) return this.handleCreate(request);
+    return new Response('غير موجود', { status: 404 });
+  }
+
+  async persist() {
+    await this.touchRoom();
+    await this.state.storage.put('room', this.room);
+  }
+
+  findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
+  idxOf(id) { return this.room.players.findIndex(p => p.id === id); }
+  activePlayers() { return this.room.players.filter(p => p.connected); }
+
+  setPhaseTimer(ms, fn) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(async () => {
+      this.timer = null;
+      try { await fn(); } catch (e) {}
+    }, ms);
+  }
+  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
+
+  async handleCreate(request) {
+    let body;
+    try { body = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
+    const { name, roomCode } = body || {};
+    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
+      return new Response('room-exists', { status: 409 });
+    }
+    this.room.code = roomCode;
+    this.room.phase = 'lobby';
+    this.room.cfg = sanitizeDakhilConfig(body && body.cfg);
+    this.room.round = null;
+    this.room.roundNo = 0;
+    this.room.usedWords = {};
+    const hostId = crypto.randomUUID();
+    const hostToken = newSeatToken();
+    this.room.hostId = hostId;
+    this.room.players = [this.newSeat(hostId, name, hostToken)];
+    await this.persist();
+    return Response.json({ roomCode: this.room.code, playerId: hostId, seatToken: hostToken });
+  }
+
+  newSeat(id, name, token) {
+    return {
+      id,
+      name: cleanName(name),
+      seatToken: token || newSeatToken(),
+      connected: false,
+      score: 0,
+      g: 'm',
+      st: { right: 0, wrong: 0, target: 0, undetected: 0, wordGuessed: 0, against: 0 },
+    };
+  }
+
+  // ═══════════ الاتصال ═══════════
+  async handleWebSocket(request) {
+    const url = new URL(request.url);
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('يتطلب WebSocket', { status: 426 });
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    const token = url.searchParams.get('token');
+    const name = url.searchParams.get('name');
+
+    let player = this.seatByToken(token);
+
+    if (player) {
+      const stale = this.sockets.get(player.id);
+      if (stale && stale !== server) { try { stale.close(); } catch {} }
+      this.sockets.delete(player.id);
+      player.connected = true;
+    } else {
+      if (!this.room.code) {
+        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.phase !== 'lobby' && this.room.phase !== 'results') {
+        server.send(JSON.stringify({ type: 'error', message: 'الجولة شغّالة — انتظر لين تخلص' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.players.length >= DK_MAX_PLAYERS) {
+        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      player = this.newSeat(crypto.randomUUID(), name, newSeatToken());
+      player.connected = true;
+      this.room.players.push(player);
+    }
+
+    this.sockets.set(player.id, server);
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id));
+
+    await this.persist();
+    this.sendPrivate(player.id, {
+      type: 'welcome',
+      playerId: player.id,
+      roomCode: this.room.code,
+      seatToken: player.seatToken,
+    });
+    this.broadcastState();
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async onClose(playerId) {
+    const p = this.findPlayer(playerId);
+    if (p) p.connected = false;
+    this.sockets.delete(playerId);
+    const wasHost = this.room.hostId === playerId;
+    this.migrateHostIfNeeded();
+    if (wasHost && this.room.hostId !== playerId) {
+      this.broadcast({ type: 'hostChanged', hostId: this.room.hostId });
+    }
+    await this.persist();
+    // لو كان آخر واحد ننتظره، لا نعلّق الجولة عليه
+    await this.maybeAdvance();
+    this.broadcastState();
+  }
+
+  migrateHostIfNeeded() {
+    const host = this.findPlayer(this.room.hostId);
+    if (host && host.connected) return;
+    const next = this.room.players.find(p => p.connected);
+    if (next) this.room.hostId = next.id;
+  }
+
+  send(playerId, obj) {
+    const ws = this.sockets.get(playerId);
+    if (!ws) return;
+    try { ws.send(JSON.stringify(obj)); } catch {}
+  }
+  sendPrivate(playerId, obj) { this.send(playerId, obj); }
+  broadcast(obj) { for (const id of this.sockets.keys()) this.send(id, obj); }
+  broadcastState() { for (const id of this.sockets.keys()) this.send(id, this.stateFor(id)); }
+
+  // ═══════════ الحالة المنقّاة ═══════════
+  /* جدار الأمان: الكلمة السرية والأدوار ما تُرسل إلا لمن يملكها،
+     والتصويت يبقى مخفيًا حتى شاشة النتائج. */
+  stateFor(viewerId) {
+    const r = this.room;
+    const rd = r.round;
+    const over = r.phase === 'results';
+
+    const players = r.players.map(p => {
+      const base = {
+        id: p.id, name: p.name, connected: p.connected,
+        isHost: p.id === r.hostId, score: p.score, g: p.g || 'm',
+      };
+      if (rd) {
+        base.seen = rd.seen.includes(p.id);
+        base.voted = Array.isArray(rd.votes[p.id]);
+        base.guessed = rd.guesses[p.id] !== undefined;
+        base.gain = rd.gains ? (rd.gains[p.id] || 0) : 0;
+        if (over) {
+          base.role = this.roleOf(p.id);
+          base.guess = rd.guesses[p.id] !== undefined ? rd.guesses[p.id] : null;
+          base.guessRight = rd.guesses[p.id] === rd.word;
+        }
+      }
+      return base;
+    });
+
+    const out = {
+      type: 'state',
+      phase: r.phase,
+      code: r.code,
+      cfg: r.cfg,
+      cats: DK_CATS,
+      hostId: r.hostId,
+      you: viewerId,
+      roundNo: r.roundNo,
+      players,
+      max: DK_MAX_PLAYERS,
+      min: DK_MIN_PLAYERS,
+      maxDakhil: this.maxDakhil(),
+      now: Date.now(),
+    };
+
+    if (rd) {
+      out.round = {
+        catKey: rd.custom ? null : rd.catKey,
+        custom: rd.custom,
+        endsAt: rd.endsAt || null,
+        paused: !!rd.paused,
+        remain: rd.remain != null ? rd.remain : null,
+        total: rd.total || 0,
+        waitingSeen: this.waitingIds(rd.seen).length,
+        waitingVote: this.waitingIds(Object.keys(rd.votes)).length,
+        guessTurn: r.phase === 'guess' ? rd.dakhil.filter(id => rd.guesses[id] === undefined).length : 0,
+      };
+      if (r.phase === 'expose') {
+        // الكشف الدرامي بعد التصويت: الأسماء فقط، والكلمة تبقى محجوبة
+        out.round.exposed = rd.dakhil.slice();
+        out.round.willGuess = this.guessWillRun();
+      }
+      if (over) {
+        out.round.word = rd.word;
+        out.round.dakhilCount = rd.dakhil.length;
+        out.round.hasMukhadi = !!rd.mukhadi;
+        out.round.titles = this.titles();
+        out.round.votes = r.players.map(p => ({
+          id: p.id,
+          on: (rd.votes[p.id] || []).slice(),
+        }));
+      }
+
+      // ── البطاقة الخاصة: كل واحد يشوف دوره هو فقط ──
+      const you = {};
+      const role = this.roleOf(viewerId);
+      if (role) {
+        you.role = role;
+        if (role === 'dakhil') {
+          you.decoy = rd.decoy[viewerId] || null;
+          you.catKey = rd.custom ? null : rd.catKey;
+        } else {
+          // داخل أو مخادع: الاثنين يعرفون الكلمة
+          you.word = rd.word;
+        }
+        you.seen = rd.seen.includes(viewerId);
+        you.vote = rd.votes[viewerId] || null;
+        if (r.phase === 'guess' && role === 'dakhil') {
+          you.options = rd.options[viewerId] || [];
+          you.guess = rd.guesses[viewerId] !== undefined ? rd.guesses[viewerId] : null;
+        }
+      }
+      out.me = you;
+    }
+    return out;
+  }
+
+  waitingIds(doneList) {
+    const done = new Set(doneList);
+    return this.room.players.filter(p => p.connected && !done.has(p.id)).map(p => p.id);
+  }
+
+  roleOf(id) {
+    const rd = this.room.round;
+    if (!rd) return null;
+    if (rd.dakhil.includes(id)) return 'dakhil';
+    if (rd.mukhadi === id) return 'mukhadi';
+    if (rd.seatIds.includes(id)) return 'dakhel';
+    return null;   // انضم بعد ما بدأت الجولة
+  }
+
+  maxDakhil() {
+    const n = this.activePlayers().length || this.room.players.length;
+    return Math.max(1, n - 1 - (this.room.cfg.mukhadiOn ? 1 : 0));
+  }
+
+  // ═══════════ الرسائل ═══════════
+  async onMessage(playerId, evt) {
+    if (!this.allowMsg(playerId)) return;
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    if (!msg || typeof msg !== 'object') return;
+    const p = this.findPlayer(playerId);
+    if (!p) return;
+    const isHost = playerId === this.room.hostId;
+
+    switch (msg.type) {
+      case 'updateName':
+        if (typeof msg.name === 'string' && msg.name.trim()) {
+          p.name = cleanName(msg.name);
+          await this.persist(); this.broadcastState();
+        }
+        break;
+
+      case 'updateSettings':
+        if (isHost && (this.room.phase === 'lobby' || this.room.phase === 'results')) {
+          this.room.cfg = sanitizeDakhilConfig(msg.cfg);
+          const mx = this.maxDakhil();
+          if (this.room.cfg.dakhilCount > mx) this.room.cfg.dakhilCount = mx;
+          await this.persist(); this.broadcastState();
+        }
+        break;
+
+      case 'kick':
+        if (isHost && (this.room.phase === 'lobby' || this.room.phase === 'results')) {
+          const i = this.idxOf(msg.targetId);
+          if (i > -1 && this.room.players[i].id !== this.room.hostId) {
+            const ws = this.sockets.get(msg.targetId);
+            if (ws) {
+              try { ws.send(JSON.stringify({ type: 'kicked', message: 'المضيف طلّعك من الغرفة' })); } catch {}
+              try { ws.close(); } catch {}
+            }
+            this.sockets.delete(msg.targetId);
+            this.room.players.splice(i, 1);
+            await this.persist(); this.broadcastState();
+          }
+        }
+        break;
+
+      case 'setGender':
+        // كل واحد يحدد جنسه هو — يستخدم في صياغة الألقاب
+        if (this.room.phase === 'lobby' || this.room.phase === 'results') {
+          p.g = msg.g === 'f' ? 'f' : 'm';
+          await this.persist(); this.broadcastState();
+        }
+        break;
+
+      case 'exposeNext':
+        if (isHost && this.room.phase === 'expose') await this.afterExpose();
+        break;
+
+      case 'start':
+        if (isHost && (this.room.phase === 'lobby' || this.room.phase === 'results')) await this.startRound();
+        break;
+
+      case 'seen':
+        if (this.room.phase === 'reveal' && this.roleOf(playerId)) {
+          const rd = this.room.round;
+          if (!rd.seen.includes(playerId)) rd.seen.push(playerId);
+          await this.persist();
+          if (!(await this.maybeAdvance())) this.broadcastState();
+        }
+        break;
+
+      case 'startTimer':
+        if (isHost && this.room.phase === 'discuss') {
+          const mins = Math.min(10, Math.max(1, Number(msg.minutes) || 3));
+          const rd = this.room.round;
+          rd.total = mins * 60;
+          rd.remain = null;
+          rd.paused = false;
+          rd.endsAt = Date.now() + rd.total * 1000;
+          this.setPhaseTimer(rd.total * 1000, () => this.startVote());
+          await this.persist(); this.broadcastState();
+        }
+        break;
+
+      case 'pauseTimer':
+        // لا نشترط endsAt: الإيقاف يمسحه، فلو اشترطناه ما رجع أحد يكمّل أبدًا
+        if (isHost && this.room.phase === 'discuss' && this.room.round &&
+            (this.room.round.endsAt || this.room.round.paused)) {
+          const rd = this.room.round;
+          if (rd.paused) {
+            rd.paused = false;
+            rd.endsAt = Date.now() + (rd.remain || 0) * 1000;
+            rd.remain = null;
+            this.setPhaseTimer(Math.max(0, rd.endsAt - Date.now()), () => this.startVote());
+          } else {
+            rd.paused = true;
+            rd.remain = Math.max(0, Math.round((rd.endsAt - Date.now()) / 1000));
+            rd.endsAt = null;
+            this.clearPhaseTimer();
+          }
+          await this.persist(); this.broadcastState();
+        }
+        break;
+
+      case 'goVote':
+        if (isHost && this.room.phase === 'discuss') await this.startVote();
+        break;
+
+      case 'vote': {
+        if (this.room.phase !== 'vote' || !this.roleOf(playerId)) break;
+        const rd = this.room.round;
+        const ids = Array.isArray(msg.on) ? msg.on : [];
+        const valid = ids
+          .filter(id => id !== playerId && rd.seatIds.includes(id))
+          .filter((id, i, a) => a.indexOf(id) === i)
+          .slice(0, DK_MAX_PLAYERS);
+        rd.votes[playerId] = valid;
+        await this.persist();
+        if (!(await this.maybeAdvance())) this.broadcastState();
+        break;
+      }
+
+      case 'unvote':
+        if (this.room.phase === 'vote') {
+          delete this.room.round.votes[playerId];
+          await this.persist(); this.broadcastState();
+        }
+        break;
+
+      case 'guess': {
+        if (this.room.phase !== 'guess') break;
+        const rd = this.room.round;
+        if (!rd.dakhil.includes(playerId)) break;
+        const opts = rd.options[playerId] || [];
+        if (!opts.includes(msg.word)) break;
+        rd.guesses[playerId] = msg.word;
+        await this.persist();
+        if (!(await this.maybeAdvance())) this.broadcastState();
+        break;
+      }
+
+      case 'force':
+        // صمّام أمان: المضيف يقدر يقدّم أي شاشة انتظار
+        if (isHost) await this.forceAdvance();
+        break;
+
+      case 'ping':
+        this.send(playerId, this.stateFor(playerId));
+        break;
+    }
+  }
+
+  // ═══════════ الجولة ═══════════
+  pickWord(cfg) {
+    if (cfg.useCustom && cfg.customWord) return cfg.customWord;
+    const pool = DAKHIL_BANK[cfg.catKey] || [];
+    let used = this.room.usedWords[cfg.catKey] || [];
+    let avail = pool.filter(w => used.indexOf(w) === -1);
+    if (!avail.length) { avail = pool; used = []; }
+    const w = avail[randInt(avail.length)];
+    this.room.usedWords[cfg.catKey] = used.concat([w]);
+    return w;
+  }
+
+  buildOptions(word, catKey, decoyWord) {
+    const pool = DAKHIL_BANK[catKey] || [];
+    const opts = [];
+    if (decoyWord && decoyWord !== word) opts.push(decoyWord);
+    const rest = shuffle(pool.filter(w => w !== word && opts.indexOf(w) === -1));
+    const cap = Math.min(6, pool.length);
+    for (let i = 0; i < rest.length && opts.length < cap - 1; i++) opts.push(rest[i]);
+    opts.push(word);
+    return shuffle(opts);
+  }
+
+  async startRound() {
+    this.clearPhaseTimer();
+    const r = this.room;
+    const seats = this.activePlayers();
+    if (seats.length < DK_MIN_PLAYERS) {
+      this.send(r.hostId, { type: 'error', message: 'محتاج ٣ لاعبين متصلين على الأقل' });
+      return;
+    }
+    if (r.cfg.useCustom && !r.cfg.customWord) {
+      this.send(r.hostId, { type: 'error', message: 'اكتب الكلمة المخصصة أول' });
+      return;
+    }
+    const n = seats.length;
+    if (n - (r.cfg.mukhadiOn ? 1 : 0) < 2) {
+      this.send(r.hostId, { type: 'error', message: 'عدد اللاعبين قليل على هذي الإعدادات' });
+      return;
+    }
+
+    const word = this.pickWord(r.cfg);
+    const maxD = Math.max(1, n - 1 - (r.cfg.mukhadiOn ? 1 : 0));
+    const count = r.cfg.dakhilMode === 'fixed'
+      ? Math.min(r.cfg.dakhilCount, maxD)
+      : 1 + randInt(maxD);
+
+    const order = shuffle(seats.map(p => p.id));
+    const dakhil = order.slice(0, count);
+    const mukhadi = r.cfg.mukhadiOn ? (order[count] || null) : null;
+
+    const decoy = {};
+    if (r.cfg.decoyOn && !r.cfg.useCustom) {
+      const alt = shuffle((DAKHIL_BANK[r.cfg.catKey] || []).filter(w => w !== word));
+      dakhil.forEach((id, i) => { if (alt.length) decoy[id] = alt[i % alt.length]; });
+    }
+
+    r.roundNo++;
+    r.round = {
+      word,
+      catKey: r.cfg.catKey,
+      custom: !!r.cfg.useCustom,
+      seatIds: order.slice(),
+      dakhil, mukhadi, decoy,
+      seen: [], votes: {}, guesses: {}, options: {},
+      gains: null,
+      endsAt: null, remain: null, paused: false, total: 0,
+    };
+    r.phase = 'reveal';
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async startVote() {
+    if (this.room.phase !== 'discuss') return;  // حارس حسم مزدوج
+    this.clearPhaseTimer();
+    const rd = this.room.round;
+    rd.endsAt = null; rd.remain = null; rd.paused = false;
+    this.room.phase = 'vote';
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async startDiscuss() {
+    if (this.room.phase !== 'reveal') return;
+    this.room.phase = 'discuss';
+    await this.persist();
+    this.broadcastState();
+  }
+
+  guessWillRun() {
+    const r = this.room, rd = r.round;
+    if (!rd) return false;
+    const pool = DAKHIL_BANK[rd.catKey] || [];
+    return !!(r.cfg.guessOn && !rd.custom && rd.dakhil.length > 0 && pool.length > 1);
+  }
+
+  async startGuessOrResults() {
+    if (this.room.phase !== 'vote') return;
+    this.clearPhaseTimer();
+    const r = this.room;
+    // شاشة كشف الدخيل بين التصويت والتخمين — مثل الوضع المحلي
+    if (r.round.dakhil.length > 0) {
+      r.phase = 'expose';
+      await this.persist();
+      this.broadcastState();
+      return;
+    }
+    return this.afterExpose();
+  }
+
+  async afterExpose() {
+    const r = this.room, rd = r.round;
+    if (r.phase !== 'expose' && r.phase !== 'vote') return;
+    const doGuess = this.guessWillRun();
+    if (doGuess) {
+      rd.options = {};
+      rd.dakhil.forEach(id => { rd.options[id] = this.buildOptions(rd.word, rd.catKey, rd.decoy[id]); });
+      rd.guesses = {};
+      r.phase = 'guess';
+      await this.persist();
+      this.broadcastState();
+    } else {
+      await this.finishRound();
+    }
+  }
+
+  async finishRound() {
+    if (this.room.phase === 'results') return;   // حارس حسم مزدوج
+    this.clearPhaseTimer();
+    const r = this.room, rd = r.round;
+    const targets = rd.dakhil.concat(rd.mukhadi ? [rd.mukhadi] : []);
+    const isTarget = id => targets.includes(id);
+    const gains = {};
+    rd.seatIds.forEach(id => { gains[id] = 0; });
+
+    // تخمين المشتبهين
+    for (const voter of rd.seatIds) {
+      const on = rd.votes[voter] || [];
+      let right = 0, wrong = 0;
+      on.forEach(id => { if (isTarget(id)) right++; else wrong++; });
+      gains[voter] += right - wrong;
+      const p = this.findPlayer(voter);
+      if (p) { p.st.right += right; p.st.wrong += wrong; }
+    }
+
+    // مكافأة من ما انكشف
+    // كم صوتًا وقع على كل لاعب (لقب كبش الفدا)
+    rd.seatIds.forEach(id => {
+      let n = 0;
+      rd.seatIds.forEach(v => { if ((rd.votes[v] || []).includes(id)) n++; });
+      const pp = this.findPlayer(id);
+      if (pp && n) pp.st.against = (pp.st.against || 0) + n;
+    });
+
+    const nSeats = rd.seatIds.length;
+    targets.forEach(id => {
+      let hits = 0;
+      rd.seatIds.forEach(v => { if ((rd.votes[v] || []).includes(id)) hits++; });
+      const p = this.findPlayer(id);
+      if (p) p.st.target += 1;
+      if (hits === 0) {
+        gains[id] = (gains[id] || 0) + 3;
+        if (p) p.st.undetected += 1;
+      } else if (hits < Math.ceil((nSeats - 1) / 2)) {
+        gains[id] = (gains[id] || 0) + 1;
+      }
+    });
+
+    // تخمين الدخيل للكلمة
+    Object.keys(rd.guesses).forEach(id => {
+      if (rd.guesses[id] === rd.word) {
+        gains[id] = (gains[id] || 0) + 2;
+        const p = this.findPlayer(id);
+        if (p) p.st.wordGuessed += 1;
+      }
+    });
+
+    rd.seatIds.forEach(id => {
+      const p = this.findPlayer(id);
+      if (p) p.score = Math.max(0, p.score + (gains[id] || 0));
+    });
+    rd.gains = gains;
+    r.phase = 'results';
+    await this.persist();
+    this.broadcastState();
+  }
+
+  titles() {
+    const top = key => {
+      let best = null, n = 0;
+      for (const p of this.room.players) {
+        const v = (p.st && p.st[key]) || 0;
+        if (v > n) { n = v; best = p; }
+      }
+      return best ? { p: best, n } : null;
+    };
+    const f = p => (p.g === 'f');
+    const times = n => n + ' ' + (n === 1 ? 'مرة' : 'مرات');
+    const innocents = n => n === 1 ? 'بريئًا واحدًا' : n === 2 ? 'بريئين'
+      : n <= 10 ? n + ' أبرياء' : n + ' بريئًا';
+
+    const out = [];
+    const actor = top('undetected');
+    if (actor) out.push({
+      em: '🎭', kind: 'actor', name: actor.p.name, n: actor.n,
+      lb: f(actor.p) ? 'أفضل ممثلة' : 'أفضل ممثل',
+      sb: (f(actor.p) ? 'نجت بدون ما يشك فيها أحد ' : 'نجا بدون ما يشك فيه أحد ') + times(actor.n),
+    });
+    const det = top('right');
+    if (det) out.push({
+      em: '🕵️', kind: 'detective', name: det.p.name, n: det.n,
+      lb: f(det.p) ? 'أذكى محققة' : 'أذكى محقق',
+      sb: (f(det.p) ? 'صابت ' : 'صاب ') + det.n + ' تخمين صحيح خلال الجلسة',
+    });
+    const reck = top('wrong');
+    if (reck) out.push({
+      em: '🤡', kind: 'reckless', name: reck.p.name, n: reck.n,
+      lb: f(reck.p) ? 'المتهوّرة' : 'المتهوّر',
+      sb: (f(reck.p) ? 'اتهمت ' : 'اتهم ') + innocents(reck.n) + ' بلا وجه حق',
+    });
+    const scape = top('against');
+    if (scape) out.push({
+      em: '🩸', kind: 'scapegoat', name: scape.p.name, n: scape.n,
+      lb: 'كبش الفدا',
+      sb: 'صوّتوا ' + (f(scape.p) ? 'عليها' : 'عليه') + ' ' + times(scape.n) + ' خلال الجلسة',
+    });
+    return out;
+  }
+
+  // ── الانتقال التلقائي حين يخلص الجميع ──
+  async maybeAdvance() {
+    const r = this.room, rd = r.round;
+    if (!rd) return false;
+    const active = this.activePlayers().filter(p => this.roleOf(p.id));
+    if (!active.length) return false;
+    if (r.phase === 'reveal' && active.every(p => rd.seen.includes(p.id))) {
+      await this.startDiscuss(); return true;
+    }
+    if (r.phase === 'vote' && active.every(p => Array.isArray(rd.votes[p.id]))) {
+      await this.startGuessOrResults(); return true;
+    }
+    if (r.phase === 'guess') {
+      const waiting = rd.dakhil.filter(id => {
+        const p = this.findPlayer(id);
+        return p && p.connected && rd.guesses[id] === undefined;
+      });
+      if (!waiting.length) { await this.finishRound(); return true; }
+    }
+    return false;
+  }
+
+  // ── صمّام الأمان: المضيف يقدّم الطور مهما كان المعلّق ──
+  async forceAdvance() {
+    const r = this.room;
+    if (r.phase === 'reveal') return this.startDiscuss();
+    if (r.phase === 'discuss') return this.startVote();
+    if (r.phase === 'vote') return this.startGuessOrResults();
+    if (r.phase === 'expose') return this.afterExpose();
+    if (r.phase === 'guess') return this.finishRound();
+  }
+}
+applyRoomCommon(DakhilRoom);
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -5252,22 +5987,23 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        games: ['mafia', 'got', 'mawwih', 'fatin', 'daqash'],
+        games: ['mafia', 'got', 'mawwih', 'fatin', 'daqash', 'dakhil'],
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
-          DAQASH_ROOM: !!env.DAQASH_ROOM,
+          DAQASH_ROOM: !!env.DAQASH_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
         },
       }), origin);
     }
 
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
     // حتى الانضمام لاحقًا بنفس الكود يوصل لنفس الغرفة دائمًا
-    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create' || url.pathname === '/daqash/room/create') {
+    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/dakhil/room/create') {
       const gameNS = url.pathname.startsWith('/got/') ? env.GOT_ROOM
                     : url.pathname.startsWith('/mawwih/') ? env.MAWWIH_ROOM
                     : url.pathname.startsWith('/fatin/') ? env.FATIN_ROOM
                     : url.pathname.startsWith('/daqash/') ? env.DAQASH_ROOM
+                    : url.pathname.startsWith('/dakhil/') ? env.DAKHIL_ROOM
                     : env.MAFIA_ROOM;
       // بدون هذا الفحص يرمي الربطُ المفقود استثناءً فيرجع 500 بلا CORS،
       // ويظهر عند اللاعب كـ "Failed to fetch" بلا أي دلالة على السبب
@@ -5285,8 +6021,11 @@ export default {
       catch { return withCors(new Response('bad-json', { status: 400 }), origin); }
       // لو صادف الكود غرفة حيّة، نولّد غيره بدل ما نمسحها
       for (let attempt = 0; attempt < 6; attempt++) {
+        // كانت randInt(32) والأبجدية ٣١ حرفًا، فالفهرس ٣١ يرجع undefined
+        // وjoin يبلعه: نحو سُدس الأكواد كان يطلع بخمسة رموز بدل ستة
+        const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
         const code = Array.from({ length: 6 }, () =>
-          '23456789ABCDEFGHJKMNPQRSTUVWXYZ'[randInt(32)]
+          CODE_ALPHABET[randInt(CODE_ALPHABET.length)]
         ).join('');
         const id = gameNS.idFromName(code);
         const stub = gameNS.get(id);
@@ -5300,10 +6039,10 @@ export default {
     }
 
     // الانضمام لغرفة موجودة بالكود، أو فتح اتصال WebSocket لغرفة قائمة
-    const match = url.pathname.match(/^\/(got|mawwih|fatin|daqash)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(got|mawwih|fatin|daqash|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
       // مثل مسار الإنشاء: ربط ناقص يرمي استثناء فيرجع ٥٠٠ بلا CORS،
       // ويظهر عند اللاعب كـ "Failed to fetch" بلا أي دلالة على السبب
       if (!gameNS) {
@@ -5327,7 +6066,7 @@ export default {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، فَطِن، وداقش أونلاين — استوديو يا٧ · /health للفحص',
+      'مافيا، لمن العرش، موّه، فَطِن، داقش، ومين الدخيل أونلاين — استوديو يا٧ · /health للفحص',
       { status: 200 }), origin);
   },
 };
