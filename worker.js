@@ -37,30 +37,14 @@ function withCors(resp, origin) {
 // ══════════════════════ حدود وتنقية عامة ══════════════════════
 const MAX_PLAYERS = 20;
 
-// محارف غير مرئية أو تقلب اتجاه العرض. في واجهة عربية RTL يقدر
-// \u202E يعكس السطر كامل فيظهر اسم اللاعب مكان اسم غيره — انتحال
-// كامل بلا أي رمز محظور. والصفرية تعطي اسمًا فاضيًا بصريًا لكنه
-// غير فاضٍ برمجيًا، فما يمسكه فحص الفراغ.
-const INVISIBLE_RE = /[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/g;
-// زخرفة زلقو: تكرار نفس العلامة المركّبة يمدّ السطر رأسيًا ويكسر التخطيط.
-// نطويها لواحدة بدل حذف كل العلامات، عشان التشكيل العربي يبقى سليمًا.
-const ZALGO_RE = /(\p{Mn})\1+/gu;
-
-// قصّ بالمحارف لا بوحدات UTF-16 — القصّ الخام يشطر الإيموجي نصفين
-function cutChars(s, max) {
-  const a = [...s];
-  return a.length > max ? a.slice(0, max).join('') : s;
-}
-
 // تنقية الاسم في الخادم: يمنع الحقن في الواجهة ويحدّ الطول
 function cleanName(raw) {
-  const s = cutChars(String(raw == null ? '' : raw)
+  const s = String(raw == null ? '' : raw)
     .replace(/[<>&"'`\\]/g, '')
     .replace(/[\u0000-\u001F\u007F]/g, '')
-    .replace(INVISIBLE_RE, '')
-    .replace(ZALGO_RE, '$1')
     .replace(/\s+/g, ' ')
-    .trim(), 14);
+    .trim()
+    .slice(0, 14);
   return s || 'لاعب';
 }
 
@@ -68,28 +52,14 @@ function newSeatToken() {
   return crypto.randomUUID().replace(/-/g, '');
 }
 
-// ── عشوائية آمنة: crypto لا Math.random ──
-// Math.random في V8 هو xorshift128+ ويُعكَس من أربع مخرجات متتالية.
-// كل ما يقرّر دورًا أو كرتًا أو رمز غرفة يمر من هنا. رميات البوتات
-// الاحتمالية تبقى على Math.random — ما فيها سر يُتوقّع.
-function randInt(n) {
-  if (!(n > 0)) return 0;
-  const limit = Math.floor(0xFFFFFFFF / n) * n;
-  const buf = new Uint32Array(1);
-  let x;
-  do { crypto.getRandomValues(buf); x = buf[0]; } while (x >= limit);
-  return x % n;
-}
-
 // تنقية أي نص حر يرسله لاعب: يمنع الحقن ويحدّ الطول قبل التخزين والبث
 function cleanText(raw, max = 60) {
-  return cutChars(String(raw == null ? '' : raw)
+  return String(raw == null ? '' : raw)
     .replace(/[<>&"'`\\]/g, '')
     .replace(/[\u0000-\u001F\u007F]/g, '')
-    .replace(INVISIBLE_RE, '')
-    .replace(ZALGO_RE, '$1')
     .replace(/\s+/g, ' ')
-    .trim(), max);
+    .trim()
+    .slice(0, max);
 }
 
 // مقارنة توكن بزمن ثابت — تمنع استنتاج التوكن عبر قياس زمن الرد
@@ -189,11 +159,11 @@ const ROLES = {
 const BOT_NAMES_M = ['فهد','عبدالله','خالد','تركي','سلطان','ماجد','بندر','ناصر','راكان','مشعل'];
 const BOT_NAMES_F = ['سارة','نورة','ريم','لمى','هند','جود','شهد','دانة','العنود','غلا'];
 const BOT_NAMES = [...BOT_NAMES_M, ...BOT_NAMES_F];
-function pickRandom(arr){ return arr[randInt(arr.length)]; }
+function pickRandom(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = randInt(i + 1);
+    const j = Math.floor(Math.random() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
@@ -212,7 +182,7 @@ function buildRoleList(config, playerCount) {
   if (config.trap) roles.push('trap');
   let hasTwins = false;
   if (config.twins) {
-    const evilTwin = randInt(10) < 3; // ٣٠٪ أن أحد التوأمين شرير
+    const evilTwin = Math.random() < 0.3; // ٣٠٪ أن أحد التوأمين شرير
     roles.push(evilTwin ? 'twin_evil' : 'twin_good');
     roles.push('twin_good');
     hasTwins = true;
@@ -642,15 +612,6 @@ export class MafiaRoom {
     }
 
     if (!player) {
-      // رمز ما أُنشئت له غرفة أصلًا. بدون هذا الفحص أي رمز عشوائي
-      // يفرّخ Durable Object جديدًا ويكتب في التخزين — تجاوز كامل
-      // لحدّ الإنشاء لكل IP، وسبب أن الرمز الغلط يفتح لوبي فاضيًا
-      // بدل رسالة واضحة.
-      if (!this.room.code) {
-        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
-        server.close();
-        return new Response(null, { status: 101, webSocket: client });
-      }
       // لاعب جديد ينضم
       if (this.room.phase !== 'lobby') {
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت، ما تقدر تنضم الحين' }));
@@ -1084,7 +1045,7 @@ export class MafiaRoom {
       for (const t of Object.values(na.mafiaVotes)) tally[t] = (tally[t] || 0) + 1;
       const max = Math.max(...Object.values(tally));
       const top = Object.keys(tally).filter(k => tally[k] === max);
-      killedByMafia = top[randInt(top.length)];
+      killedByMafia = top[Math.floor(Math.random() * top.length)];
     }
 
     // نثبّت الفاحصين الحقيقيين قبل تنفيذ أي وفاة — عشان لا تُسلّم النتيجة لوريث ورث الدور توًّا
@@ -2206,15 +2167,6 @@ export class GotRoom {
     }
 
     if (!player) {
-      // رمز ما أُنشئت له غرفة أصلًا. بدون هذا الفحص أي رمز عشوائي
-      // يفرّخ Durable Object جديدًا ويكتب في التخزين — تجاوز كامل
-      // لحدّ الإنشاء لكل IP، وسبب أن الرمز الغلط يفتح لوبي فاضيًا
-      // بدل رسالة واضحة.
-      if (!this.room.code) {
-        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
-        server.close();
-        return new Response(null, { status: 101, webSocket: client });
-      }
       if (this.room.phase !== 'lobby') {
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت، ما تقدر تنضم الحين' }));
         server.close();
@@ -2464,7 +2416,7 @@ export class GotRoom {
     const n = this.room.players.length;
     if (n < 4) { this.sendPrivate(this.room.hostId, { type:'error', message:'أقل عدد للبدء ٤ لاعبين' }); return; }
     const roles = gotBuildRoles(n, this.room.config);
-    for (let i=roles.length-1;i>0;i--){ const j=randInt(i+1); [roles[i],roles[j]]=[roles[j],roles[i]]; }
+    for (let i=roles.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [roles[i],roles[j]]=[roles[j],roles[i]]; }
     this.room.players.forEach((p,i)=>{ p.role = roles[i]; p.alive = true; });
     const robb = this.room.players.find(p=>p.role==='robb');
     const talisa = this.room.players.find(p=>p.role==='talisa');
@@ -2492,19 +2444,6 @@ export class GotRoom {
     if (!p || !p.alive) return;
     const na = this.room.nightActions;
     const leader = this.leaderPlayer();
-
-    // الهدف لازم يكون لاعبًا حقيقيًا بالحالة الصحيحة. بدون هذا الفحص
-    // كان أي نص يُقبل ويُخزَّن، ونص ضخم يتجاوز سقف تخزين الـ DO
-    // فيفشل كل persist بعده وتتعطّل الغرفة نهائيًا.
-    // ملاحيسندري وحدها تستهدف ميتًا (الإحياء)، والباقي أحياء فقط.
-    if (msg.targetId != null) {
-      const tgt = this.findPlayer(msg.targetId);
-      const wantsDead = (p.role === 'melisandre' && msg.action === 'revive');
-      if (!tgt || (wantsDead ? tgt.alive : !tgt.alive)) {
-        this.sendPrivate(p.id, { type: 'error', message: 'اختيار غير صالح — اختر شخصًا ثانيًا' });
-        return;
-      }
-    }
 
     if (leader && p.id===leader.id) na.kill = msg.targetId ?? null;
     else if (p.role==='varys') {
@@ -2701,7 +2640,7 @@ export class GotRoom {
     if (entries.length) {
       const max = Math.max(...entries.map(e=>e[1]));
       const top = entries.filter(e=>e[1]===max);
-      accusedId = top[randInt(top.length)][0];
+      accusedId = top[Math.floor(Math.random()*top.length)][0];
     }
     this.room.accusedId = accusedId;
     await this.persist();
@@ -3173,15 +3112,6 @@ export class MawwihRoom {
     }
 
     if (!player) {
-      // رمز ما أُنشئت له غرفة أصلًا. بدون هذا الفحص أي رمز عشوائي
-      // يفرّخ Durable Object جديدًا ويكتب في التخزين — تجاوز كامل
-      // لحدّ الإنشاء لكل IP، وسبب أن الرمز الغلط يفتح لوبي فاضيًا
-      // بدل رسالة واضحة.
-      if (!this.room.code) {
-        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
-        server.close();
-        return new Response(null, { status: 101, webSocket: client });
-      }
       if (this.room.phase !== 'lobby') {
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — ما تقدر تنضم الحين' }));
         server.close();
@@ -3394,7 +3324,7 @@ export class MawwihRoom {
     this.broadcastPublic({ type: 'catPicked', index: catIndex, name: BANK[catIndex][0], chooserName: this.chooser().name });
     const pool = [];
     BANK[catIndex][1].forEach((q, qi) => { const key = catIndex + ':' + qi; if (!this.room.used.includes(key)) pool.push({ key, cat: BANK[catIndex][0], text: q[0], ans: q[1] }); });
-    const q = pool[randInt(pool.length)];
+    const q = pool[Math.floor(Math.random() * pool.length)];
     this.room.used.push(q.key);
     this.room.q = q;
     await this.persist();
@@ -3557,7 +3487,7 @@ export class MawwihRoom {
   async persist() { await this.touchRoom(); await this.state.storage.put('room', this.room); }
 }
 
-function shuffleArr(a) { for (let i = a.length - 1; i > 0; i--) { const j = randInt(i + 1);[a[i], a[j]] = [a[j], a[i]]; } return a; }
+function shuffleArr(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; }
 function norm(s) {
   return (s || '')
     .trim()
@@ -3689,7 +3619,7 @@ const FATIN_BANK = {
  ]
 };
 const FATIN_CATS = Object.keys(FATIN_BANK);
-function fatinShuffle(a){for(let i=a.length-1;i>0;i--){const j=randInt(i+1);[a[i],a[j]]=[a[j],a[i]]}return a}
+function fatinShuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
 function fatinPickCats(n){return fatinShuffle(FATIN_CATS.slice()).slice(0,n)}
 
 const FATIN_TOP = 24, FATIN_ROUNDS = 7;
@@ -3697,7 +3627,6 @@ const FATIN_HILAS = ['ice', 'ink', 'lock', 'spin', 'fog'];
 const FATIN_COLORS = ['#E3A93C', '#2E9E93', '#C1403A', '#7C6BD8', '#4C9BE8', '#D46FA8'];
 const FATIN_MAXP = 6;
 const FATIN_SDP_MAX = 9000;
-const FATIN_MAX_SCREENS = 4;   // سقف شاشات التلفزيون لكل غرفة
 
 export class FatinRoom {
   constructor(state, env) {
@@ -3765,18 +3694,11 @@ export class FatinRoom {
     // ── عميل الشاشة: مشاهد فقط، خارج المقاعد، ما يوقف عليه أحد ──
     if (url.searchParams.get('screen') === '1') {
       // شاشة موثّقة فقط تقدر ترسل أوامر؛ غيرها مشاهدة صامتة
-      // بلا سقف كان أي أحد يعرف الرمز يفتح اتصالات شاشة بلا نهاية
-      if (this.screens.size >= FATIN_MAX_SCREENS) {
-        server.send(JSON.stringify({ type: 'error', message: 'عدد الشاشات وصل الحد' }));
-        server.close();
-        return new Response(null, { status: 101, webSocket: client });
-      }
       const trusted = !!this.room.screenToken &&
         tokenEquals(url.searchParams.get('stoken'), this.room.screenToken);
       const sid = 'screen:' + crypto.randomUUID();
       this.screens.set(sid, server);
-      // الشاشة تمر على نفس الخنق — كانت خارجه كليًا
-      server.addEventListener('message', evt => { if (trusted && this.allowMsg(sid)) this.onScreenMessage(evt); });
+      server.addEventListener('message', evt => { if (trusted) this.onScreenMessage(evt); });
       server.addEventListener('close', () => this.screens.delete(sid));
       server.addEventListener('error', () => this.screens.delete(sid));
       this.sendState(server, null, true);
@@ -4044,7 +3966,7 @@ export class FatinRoom {
 
     if (specialIds.length) {
       // أكثر من اختيار خاص: واحد بالقرعة، والباقي يسترجعون حقّهم
-      const winner = specialIds[randInt(specialIds.length)];
+      const winner = specialIds[Math.floor(Math.random() * specialIds.length)];
       for (const id of specialIds) if (id !== winner) { const q = this.findPlayer(id); if (q) q.special = true; }
       r.cat = r.specials[winner];
       const w = this.findPlayer(winner);
@@ -4055,7 +3977,7 @@ export class FatinRoom {
         if (tally[c] > best) { best = tally[c]; pool = [c]; }
         else if (tally[c] === best) pool.push(c);
       }
-      r.cat = pool[randInt(pool.length)];
+      r.cat = pool[Math.floor(Math.random() * pool.length)];
       r.specialBy = null;
     }
     await this.startHila();
@@ -4080,7 +4002,7 @@ export class FatinRoom {
     if (!r.used[r.cat]) r.used[r.cat] = [];
     if (r.used[r.cat].length >= list.length) r.used[r.cat] = [];
     const avail = list.map((_, i) => i).filter(i => !r.used[r.cat].includes(i));
-    const pick = avail[randInt(avail.length)];
+    const pick = avail[Math.floor(Math.random() * avail.length)];
     r.used[r.cat].push(pick);
     const row = list[pick];
     const opts = fatinShuffle([row[1]].concat(row[2]));
@@ -4212,60 +4134,14 @@ const CREATE_LIMIT = 8;              // غرف في الساعة لكل IP
 const CREATE_WINDOW_MS = 60 * 60 * 1000;
 const createHits = new Map();        // ip -> {n, t}
 
-// العميل على IPv6 يملك /64 كاملة (٢^٦٤ عنوانًا)، فالحدّ على العنوان
-// الكامل بلا معنى — يبدّل العنوان ويكمل. نحدّ على البادئة بدلها.
-function ipKey(ip) {
-  if (!ip) return '';
-  if (!ip.includes(':')) return ip;
-  const [head, tail] = ip.split('::');
-  const h = head ? head.split(':') : [];
-  const t = (tail === undefined || tail === '') ? [] : tail.split(':');
-  const fill = new Array(Math.max(0, 8 - h.length - t.length)).fill('0');
-  return [...h, ...fill, ...t]
-    .map(x => (x || '0').padStart(4, '0'))
-    .slice(0, 4).join(':') + '::/64';
-}
-
-// فتح الاتصالات: مع حارس وجود الغرفة صار الرمز الغلط يُرفض، لكن كل
-// محاولة تُوقظ Durable Object. نخنق المحاولات نفسها حتى ما يصير مسح
-// الرموز بالتخمين رخيصًا.
-const WS_LIMIT = 60;                 // اتصال في الدقيقة لكل بادئة
-const WS_WINDOW_MS = 60 * 1000;
-const wsHits = new Map();
-
-function allowSocket(ip) {
-  const key = ipKey(ip);
-  if (!key) return true;
-  const now = Date.now();
-  const r = wsHits.get(key) || { n: 0, t: now };
-  if (now - r.t > WS_WINDOW_MS) { r.n = 0; r.t = now; }
-  r.n++;
-  wsHits.set(key, r);
-  if (wsHits.size > 5000) {
-    for (const [k, v] of wsHits) if (now - v.t > WS_WINDOW_MS) wsHits.delete(k);
-    while (wsHits.size > 5000) wsHits.delete(wsHits.keys().next().value);
-  }
-  return r.n <= WS_LIMIT;
-}
-
 function allowCreate(ip) {
-  const key = ipKey(ip);
-  if (!key) return true;
+  if (!ip) return true;
   const now = Date.now();
-  const r = createHits.get(key) || { n: 0, t: now };
+  const r = createHits.get(ip) || { n: 0, t: now };
   if (now - r.t > CREATE_WINDOW_MS) { r.n = 0; r.t = now; }
   r.n++;
-  createHits.set(key, r);
-  // كان clear() يمسح الجميع، فصار من يبلغ السقف يصفّر عدّاد الكل معه.
-  // الآن نكنس المنتهي فقط، وإن بقي ضغط نمسح الأقدم.
-  if (createHits.size > 5000) {
-    for (const [k, v] of createHits) {
-      if (now - v.t > CREATE_WINDOW_MS) createHits.delete(k);
-    }
-    while (createHits.size > 5000) {
-      createHits.delete(createHits.keys().next().value);
-    }
-  }
+  createHits.set(ip, r);
+  if (createHits.size > 5000) createHits.clear();   // سقف ذاكرة
   return r.n <= CREATE_LIMIT;
 }
 
@@ -4290,7 +4166,13 @@ const DQ_MAX_AUTO = 3;
 
 // ── عشوائية آمنة: crypto لا Math.random ──
 // Math.random في V8 قابل للتنبؤ من مخرجات سابقة، وهنا يعني توقّع الكروت.
-function dqRandInt(n) { return randInt(n); }
+function dqRandInt(n) {
+  const limit = Math.floor(0xFFFFFFFF / n) * n;
+  const buf = new Uint32Array(1);
+  let x;
+  do { crypto.getRandomValues(buf); x = buf[0]; } while (x >= limit);
+  return x % n;
+}
 
 function dqShuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -4398,16 +4280,34 @@ export class DaqashRoom {
     return Response.json({ roomCode: this.room.code, playerId: hostId, seatToken: hostToken });
   }
 
+  // اسم مكرر يجعل التصويت والتوزيع غامضين: من «سعد» تقصد؟
+  uniqueName(raw, exceptId) {
+    const base = cleanName(raw) || 'لاعب';
+    const taken = new Set(this.room.players
+      .filter(p => p.id !== exceptId)
+      .map(p => p.name));
+    if (!taken.has(base)) return base;
+    const AR = n => String(n).replace(/[0-9]/g, d => '٠١٢٣٤٥٦٧٨٩'[d]);
+    for (let n = 2; n <= 20; n++) {
+      // نقصّ الأصل عند الحاجة كي لا يتجاوز الاسم حدّه
+      const suffix = ' ' + AR(n);
+      const cand = (base.slice(0, 14 - suffix.length) + suffix).trim();
+      if (!taken.has(cand)) return cand;
+    }
+    return base.slice(0, 10) + ' ' + Math.floor(Math.random() * 900 + 100);
+  }
+
   newSeat(id, name, token) {
     return {
       id,
-      name: cleanName(name),
+      name: this.uniqueName(name),
       seatToken: token || newSeatToken(),
       connected: false,
       chips: this.room.cfg.start,
       out: false,       // خسر كل رصيده
       sitting: false,   // مقعد احتياط (انقطع أو نام)
       autoMiss: 0,
+      kicked: false,
       av: null,
     };
   }
@@ -4427,6 +4327,7 @@ export class DaqashRoom {
 
     // التوكن السري وحده يفتح مقعدًا قائمًا. المعرّف مُذاع للجميع فلا يثبت شيئًا.
     let player = this.seatByToken(token);
+    if (player && player.kicked) player = null;     // مقعد مطرود لا يُفتح
 
     if (player) {
       const stale = this.sockets.get(player.id);
@@ -4437,15 +4338,6 @@ export class DaqashRoom {
       player.sitting = false;
       player.autoMiss = 0;
     } else {
-      // رمز ما أُنشئت له غرفة أصلًا. بدون هذا الفحص أي رمز عشوائي
-      // يفرّخ Durable Object جديدًا ويكتب في التخزين — تجاوز كامل
-      // لحدّ الإنشاء لكل IP، وسبب أن الرمز الغلط يفتح لوبي فاضيًا
-      // بدل رسالة واضحة.
-      if (!this.room.code) {
-        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
-        server.close();
-        return new Response(null, { status: 101, webSocket: client });
-      }
       if (this.room.phase !== 'lobby') {
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — انتظر الجولة الجاية' }));
         server.close();
@@ -4485,11 +4377,16 @@ export class DaqashRoom {
     this.broadcastState();
   }
 
+  // بدون هذا تتجمّد الغرفة: لا أحد يقدر يبدأ أو يطرد
   migrateHostIfNeeded() {
     const host = this.findPlayer(this.room.hostId);
-    if (host && host.connected) return;
-    const next = this.room.players.find(p => p.connected);
-    if (next) this.room.hostId = next.id;
+    if (host && host.connected && !host.kicked) return false;
+    // أول لاعب متصل بترتيب الجلوس — أقدمهم في الغرفة
+    const next = this.room.players.find(p => p.connected && !p.kicked);
+    if (!next || next.id === this.room.hostId) return false;
+    this.room.hostId = next.id;
+    this.log(next.name + ' صار المضيف');
+    return true;
   }
 
   send(playerId, obj) {
@@ -4541,7 +4438,10 @@ export class DaqashRoom {
       base.cards = showCards && inHand ? h.cards[i] : null;
       base.hand = (showCards && inHand && !h.folded[i]) ? h.evals[i].name : null;
       return base;
-    });
+    })
+      /* المطرود يبقى في المصفوفة الداخلية حتى اليد الجاية (الفهارس)،
+         لكنه ما يُعرض — وإلا شاف المضيف الطرد وكأنه ما صار */
+      .filter((_, i) => !r.players[i].kicked);
 
     const out = {
       type: 'state',
@@ -4595,7 +4495,7 @@ export class DaqashRoom {
     switch (msg.type) {
       case 'updateProfile':
         if (this.room.phase === 'lobby') {
-          if (typeof msg.name === 'string' && msg.name.trim()) p.name = cleanName(msg.name);
+          if (typeof msg.name === 'string' && msg.name.trim()) p.name = this.uniqueName(msg.name, p.id);
           if (typeof msg.av === 'string') p.av = cleanText(msg.av, 24);
           await this.persist(); this.broadcastState();
         }
@@ -4608,16 +4508,7 @@ export class DaqashRoom {
         }
         break;
       case 'kick':
-        if (playerId === this.room.hostId && this.room.phase === 'lobby') {
-          const i = this.idxOf(msg.targetId);
-          if (i > -1 && this.room.players[i].id !== this.room.hostId) {
-            const ws = this.sockets.get(msg.targetId);
-            if (ws) { try { ws.close(); } catch {} }
-            this.sockets.delete(msg.targetId);
-            this.room.players.splice(i, 1);
-            await this.persist(); this.broadcastState();
-          }
-        }
+        if (playerId === this.room.hostId) await this.kickPlayer(msg.targetId);
         break;
       case 'start':
         if (playerId === this.room.hostId && this.room.phase === 'lobby') await this.startGame();
@@ -4630,6 +4521,7 @@ export class DaqashRoom {
         if (playerId === this.room.hostId) await this.nextHand();
         break;
       case 'ready': {
+        if (p.kicked) break;
         // كان المضيف وحده يملك الانتقال؛ الآن تتقدّم اليد حين يجهز الجميع
         const h = this.room.hand;
         if (!h || h.phase !== 'reveal') break;
@@ -4646,6 +4538,83 @@ export class DaqashRoom {
         this.send(playerId, this.stateFor(playerId));
         break;
     }
+  }
+
+  /* الطرد أثناء اللعب لا يمكن أن يحذف اللاعب فورًا: مصفوفات اليد
+     (order/seats/cards/bets) كلها بالفهارس، وأي حذف يزيح الفهارس ويفسد
+     اليد الجارية. لذا نُخرجه من اليد الآن، ونحذفه فعليًا عند اليد التالية. */
+  async kickPlayer(targetId) {
+    const i = this.idxOf(targetId);
+    if (i < 0) return;
+    const p = this.room.players[i];
+    if (p.id === this.room.hostId) return;          // المضيف لا يطرد نفسه
+
+    const ws = this.sockets.get(targetId);
+    /* الإقفال فور الإرسال قد يبتلع الرسالة، فتظهر للمطرود «انقطع الاتصال»
+       ويحاول العودة بدل شاشة الطرد. نمهله لحظة ثم نقفل. */
+    if (ws) {
+      try { ws.send(JSON.stringify({ type: 'kicked' })); } catch {}
+      setTimeout(() => { try { ws.close(4003, 'kicked'); } catch {} }, 250);
+    }
+    this.sockets.delete(targetId);
+
+    if (this.room.phase === 'lobby') {
+      this.room.players.splice(i, 1);
+      await this.persist();
+      this.broadcastState();
+      return;
+    }
+
+    // التوكن يُبطَل كي لا يعود بإعادة الاتصال
+    p.kicked = true;
+    p.connected = false;
+    p.sitting = true;
+    p.out = true;
+    p.seatToken = 'kicked-' + newSeatToken();
+    this.log(p.name + ' طُرد');
+
+    const h = this.room.hand;
+    if (h && h.seats.includes(i) && h.phase !== 'reveal') {
+      if (!h.folded[i]) h.folded[i] = true;         // رهانه يبقى في القدر
+      if (h.phase === 'bet' && h.order[h.turn] === i) {
+        // كان الدور عليه: نتقدّم وإلا تجمّدت اليد
+        h.turn++;
+        this.bump();
+        await this.advanceBetting();
+      } else if (h.phase === 'offer' && h.dealerIdx === i) {
+        // الموزّع طُرد: يوزَّع بالتساوي بدل انتظار من لن يعود
+        const L = this.live(h);
+        if (L.length) {
+          h.dealerIdx = L[L.length - 1];
+          const o = this.others(h), step = this.room.cfg.min;
+          const each = o.length ? Math.floor(h.pot / o.length / step) * step : 0;
+          const shares = {};
+          o.forEach(k => { shares[this.room.players[k].id] = each; });
+          await this.doOffer(shares);
+        }
+      } else if (h.phase === 'vote') {
+        // صوته لم يعد متوقَّعًا: قد يكون هو آخر من ننتظره
+        h.votes[i] = null;
+        const pending = this.others(h).filter(x => h.votes[x] === null).length;
+        if (pending === 0) await this.resolveVotes();
+      }
+    }
+    if (h && h.ready) h.ready = h.ready.filter(x => x !== i);
+
+    this.migrateHostIfNeeded();
+    await this.persist();
+    this.broadcastState();
+    // بقاء لاعب واحد يعني نهاية الجولة
+    if (this.room.hand && this.room.hand.phase === 'reveal') this.checkReady();
+  }
+
+  // تُستدعى بعد أي خروج: قد يكون الباقون جاهزين فعلًا
+  checkReady() {
+    const h = this.room.hand;
+    if (!h || h.phase !== 'reveal') return;
+    const waiting = this.room.players
+      .filter((p, k) => p.connected && !p.out && !p.sitting && !h.ready.includes(k));
+    if (waiting.length === 0) this.nextHand();
   }
 
   async startGame() {
@@ -4676,6 +4645,16 @@ export class DaqashRoom {
   async newHand() {
     this.clearPhaseTimer();
     const r = this.room;
+
+    // الآن فقط يُحذف المطرودون: لا توجد يد جارية لتفسد فهارسها
+    if (r.players.some(p => p.kicked)) {
+      const dealerId = r.players[r.dealerIdx] ? r.players[r.dealerIdx].id : null;
+      r.players = r.players.filter(p => !p.kicked);
+      // الفهرس بعد الحذف قد يشير لمقعد آخر أو خارج المصفوفة
+      const d = r.players.findIndex(p => p.id === dealerId);
+      r.dealerIdx = d >= 0 ? d : 0;
+      this.migrateHostIfNeeded();
+    }
 
     r.players.forEach(p => { if (p.chips <= 0) p.out = true; });
     const seats = this.activeSeats();
@@ -4896,9 +4875,7 @@ export class DaqashRoom {
       const isCall = amt === h.last;
       const isRaise = amt > h.last && (amt - h.last) % step === 0;
       if (!isCall && !isRaise && !allIn) return;
-      // كان هنا شرط مستحيل (amt < h.last && amt >= h.last) لا يتحقق أبدًا.
-      // الصحيح: كل الرصيد الأقل من الرهان القائم مسموح — هو أصلاً ما
-      // يقدر يجاري، والقدور الجانبية في payShowdown تتكفّل بالعدل.
+      if (allIn && amt < h.last && amt >= h.last) return;
     }
     p.autoMiss = 0;
     await this.doBet(i, amt);
@@ -4947,6 +4924,11 @@ export class DaqashRoom {
 
   async advanceBetting() {
     const h = this.room.hand;
+    /* مقعد قد يُطوى خارج دوره (الطرد يطوي المطرود فورًا)، والدور كان
+       ينزل عليه فتقف الطاولة تنتظر لاعبًا لن يلعب حتى ينتهي مؤقّته.
+       نتخطّى المطويين، وإن بقي حيٌّ واحد ننهي المزاد فورًا. */
+    while (h.turn < h.order.length && h.folded[h.order[h.turn]]) h.turn++;
+    if (this.live(h).length <= 1) h.turn = h.order.length;
     if (h.turn < h.order.length) { this.armTurn(); return; }
     await this.startOffer();
   }
@@ -5220,748 +5202,13 @@ export class DaqashRoom {
     if (!h || h.phase !== 'reveal') return;
     this.parkIdlePlayers();
     // من رجع من انقطاع أو ضغط أي زر يعود من الاحتياط تلقائيًا
-    this.room.players.forEach(p => { if (p.connected && p.chips > 0) p.sitting = false; });
+    this.room.players.forEach(p => { if (p.connected && p.chips > 0 && !p.kicked) p.sitting = false; });
     await this.newHand();
     await this.persist();
     this.broadcastState();
   }
 }
 applyRoomCommon(DaqashRoom);
-
-// ══════════════════════ مين الدخيل — أونلاين ══════════════════════
-// غرفة واحدة = instance من DakhilRoom. الجميع في نفس المجلس، كل واحد
-// على جواله: الجهاز يوزّع الأدوار ويجمع التصويت، والكلام يصير على الطاولة.
-// الكلمة السرية لا تُرسل أبدًا لمن ما يستحقها — الدخيل ما يشوفها إلا
-// في شاشة النتائج.
-
-const DK_MIN_PLAYERS = 3;
-const DK_MAX_PLAYERS = 12;
-
-const DAKHIL_BANK = {
-  "مسلسلات": ["Game of Thrones", "Prison Break", "House", "Suits", "Breaking Bad", "Friends", "Stranger Things", "The Office", "Dark", "Money Heist", "Peaky Blinders", "The Crown", "Vikings", "Sherlock", "Better Call Saul", "The Witcher", "Narcos", "How I Met Your Mother", "The Big Bang Theory", "Squid Game"],
-  "أكلات": ["كبسة", "شاورما", "سوشي", "برجر", "مندي", "بيتزا", "باستا", "فلافل", "حمص", "تكو", "دجاج مشوي", "رز بخاري", "مقلوبة", "برياني", "سمبوسة", "كباب", "شيش طاووق", "ستيك", "سلطة سيزر", "رامن", "فتة", "مظبي", "جريش", "مرقوق", "حنيني", "مسخن", "ماكاروني", "لازانيا", "تشيز برجر", "سلمون مشوي"],
-  "حلويات": ["كنافة", "دونات", "كوكيز", "لقيمات", "بقلاوة", "أم علي", "كيك", "تشيز كيك", "آيس كريم", "مهلبية", "بسبوسة", "هريسة", "معمول", "جيلي", "فطيرة تفاح", "براونيز", "وافل", "كريب", "حلاوة جبن", "تمر"],
-  "أنمي": ["هجوم العمالقة", "ناروتو", "قاتل الشياطين", "مذكرة الموت", "ون بيس", "بليتش", "دراغون بول", "فيري تيل", "تشينسو مان", "جوجتسو كايسن", "سباي فاميلي", "فول ميتال ألكيميست", "هانتر × هانتر", "توكيو غول", "ماي هيرو أكاديميا", "ون بانش مان", "كودو غياس", "إيفانجيليون", "سيلور مون", "دورايمون"],
-  "ألعاب": ["ببجي", "فورتنايت", "دارك سولز", "ماريو", "ماين كرافت", "روبلوكس", "GTA", "فيفا", "كول أوف ديوتي", "أوفرواتش", "فالورانت", "ليج أوف ليجيندز", "ذا لاست أوف أس", "ريزيدنت إيفل", "سبايدرمان", "جود أوف وور", "زيلدا", "سونيك", "ستريت فايتر", "موبايل ليجيندز"],
-  "كيبوب": ["BTS", "BLACKPINK", "TWICE", "EXO", "SEVENTEEN", "Stray Kids", "NewJeans", "IVE", "(G)I-DLE", "ATEEZ", "ENHYPEN", "TXT", "ITZY", "Red Velvet", "NCT", "aespa", "Super Junior", "SHINee", "BIGBANG", "iKON"],
-  "أماكن": ["مستشفى", "مطار", "مدرسة", "ملعب", "سجن", "مسجد", "بنك", "سوق", "حديقة", "فندق", "مطعم", "صيدلية", "محطة قطار", "جامعة", "شاطئ", "مستشفى نفسية", "محطة بنزين", "مول", "سينما", "متحف", "مكتبة", "ملاهي", "حديقة حيوان", "مصنع", "مزرعة", "ميناء", "محكمة", "مقهى", "مسبح", "صالة رياضية", "ديسكو", "كازينو", "ملهى ليلي", "قصر مسكون", "يخت فاخر", "حفلة تنكرية", "استراحة", "صحراء ليلاً", "جزيرة مهجورة", "سطح ناطحة سحاب"],
-  "ملابس": ["ثوب", "عباية", "شماغ", "بشت", "تيشيرت", "جينز", "هودي", "فستان", "بدلة رسمية", "كاب", "جاكيت", "شورت", "تنورة", "بلوزة", "غترة", "طاقية", "جوتي", "حذاء رياضي", "معطف", "بيجامة"],
-  "رياضات": ["كرة قدم", "كرة سلة", "سباحة", "جري", "بادل", "كرة طائرة", "فنون قتالية", "تنس", "ركوب خيل", "بولينغ", "جولف", "ملاكمة", "مصارعة", "تزلج", "غوص", "رماية", "دراجات", "كرة يد", "هوكي", "كرة طاولة"],
-  "سيارات": ["تويوتا", "لكزس", "فورد", "تسلا", "بي إم دبليو", "هامر", "جيب", "فيراري", "نيسان", "كامري", "مرسيدس", "أودي", "بورش", "كورفيت", "لامبورجيني", "رنج روفر", "هوندا", "شفروليه", "مازدا", "كيا"],
-  "مدن ودول": ["الرياض", "دبي", "القاهرة", "اسطنبول", "لندن", "طوكيو", "باريس", "نيويورك", "مكة", "جدة", "برشلونة", "روما", "سيؤول", "بانكوك", "أمستردام", "فيينا", "الدوحة", "الكويت", "بيروت", "مراكش"],
-  "مهن": ["طبيب", "مهندس", "معلم", "طيار", "شرطي", "محامي", "طباخ", "مبرمج", "ممرض", "رجل إطفاء", "محاسب", "صحفي", "مصور", "نجار", "كهربائي", "سائق", "مترجم", "صيدلي", "مصمم", "بائع", "مزارع", "خياط", "حلاق", "جراح", "طبيب أسنان", "مهندس معماري", "محقق", "عالم", "رائد فضاء", "مدرب رياضي", "راقصة", "دي جي", "مغني", "ممثل", "عارض أزياء", "حارس شخصي", "جاسوس", "ساحر", "مهرج", "مذيع"],
-  "مشروبات": ["قهوة سعودية", "شاي كرك", "عصير مانجو", "كولا", "ستاربكس", "موهيتو", "لاتيه", "سوبيا", "فيمتو", "شاي أحمر", "عصير برتقال", "ميلك شيك", "سفن أب", "ريد بُل", "ماء", "نسكافيه", "شاي أخضر", "عصير ليمون بالنعناع", "كابتشينو", "هوت شوكليت"],
-  "حيوانات": ["أسد", "نمر", "جمل", "صقر", "ذئب", "فيل", "دلفين", "قط", "كلب", "حصان", "نسر", "غزال", "دب", "تمساح", "قرد", "بطريق", "زرافة", "ثعلب", "أرنب", "حوت"]
-};
-
-const DK_CATS = Object.keys(DAKHIL_BANK);
-
-const sanitizeDakhilBools = makeConfigSanitizer(
-  ['useCustom', 'mukhadiOn', 'decoyOn', 'guessOn'],
-  { dakhilCount: [1, 11, 1] }
-);
-
-function sanitizeDakhilConfig(raw) {
-  const out = sanitizeDakhilBools(raw);
-  const cat = raw && typeof raw.catKey === 'string' ? raw.catKey : '';
-  out.catKey = DK_CATS.includes(cat) ? cat : DK_CATS[0];
-  out.customWord = cleanText(raw && raw.customWord, 24);
-  out.dakhilMode = (raw && raw.dakhilMode === 'random') ? 'random' : 'fixed';
-  if (!out.customWord) out.useCustom = false;
-  if (out.useCustom) out.decoyOn = false;   // الكلمة القريبة تحتاج فئة
-  return out;
-}
-
-export class DakhilRoom {
-  constructor(state, env) {
-    this.state = state;
-    this.env = env;
-    this.sockets = new Map();
-    this.timer = null;
-    this.state.blockConcurrencyWhile(async () => {
-      this.room = (await this.state.storage.get('room')) || {
-        code: null, hostId: null, phase: 'lobby',
-        cfg: sanitizeDakhilConfig({}),
-        players: [],
-        round: null,
-        roundNo: 0,
-        usedWords: {},
-        lastSeen: Date.now(),
-      };
-    });
-  }
-
-  async fetch(request) {
-    const url = new URL(request.url);
-    if (url.pathname.endsWith('/ws')) return this.handleWebSocket(request);
-    if (url.pathname.endsWith('/create')) return this.handleCreate(request);
-    return new Response('غير موجود', { status: 404 });
-  }
-
-  async persist() {
-    await this.touchRoom();
-    await this.state.storage.put('room', this.room);
-  }
-
-  findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
-  idxOf(id) { return this.room.players.findIndex(p => p.id === id); }
-  activePlayers() { return this.room.players.filter(p => p.connected); }
-
-  setPhaseTimer(ms, fn) {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(async () => {
-      this.timer = null;
-      try { await fn(); } catch (e) {}
-    }, ms);
-  }
-  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
-
-  async handleCreate(request) {
-    let body;
-    try { body = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
-    const { name, roomCode } = body || {};
-    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
-      return new Response('room-exists', { status: 409 });
-    }
-    this.room.code = roomCode;
-    this.room.phase = 'lobby';
-    this.room.cfg = sanitizeDakhilConfig(body && body.cfg);
-    this.room.round = null;
-    this.room.roundNo = 0;
-    this.room.usedWords = {};
-    const hostId = crypto.randomUUID();
-    const hostToken = newSeatToken();
-    this.room.hostId = hostId;
-    this.room.players = [this.newSeat(hostId, name, hostToken)];
-    await this.persist();
-    return Response.json({ roomCode: this.room.code, playerId: hostId, seatToken: hostToken });
-  }
-
-  newSeat(id, name, token) {
-    return {
-      id,
-      name: cleanName(name),
-      seatToken: token || newSeatToken(),
-      connected: false,
-      score: 0,
-      g: 'm',
-      st: { right: 0, wrong: 0, target: 0, undetected: 0, wordGuessed: 0, against: 0 },
-    };
-  }
-
-  // ═══════════ الاتصال ═══════════
-  async handleWebSocket(request) {
-    const url = new URL(request.url);
-    if (request.headers.get('Upgrade') !== 'websocket') {
-      return new Response('يتطلب WebSocket', { status: 426 });
-    }
-    const pair = new WebSocketPair();
-    const [client, server] = Object.values(pair);
-    server.accept();
-
-    const token = url.searchParams.get('token');
-    const name = url.searchParams.get('name');
-
-    let player = this.seatByToken(token);
-
-    if (player) {
-      const stale = this.sockets.get(player.id);
-      if (stale && stale !== server) { try { stale.close(); } catch {} }
-      this.sockets.delete(player.id);
-      player.connected = true;
-    } else {
-      if (!this.room.code) {
-        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
-        server.close();
-        return new Response(null, { status: 101, webSocket: client });
-      }
-      if (this.room.phase !== 'lobby' && this.room.phase !== 'results') {
-        server.send(JSON.stringify({ type: 'error', message: 'الجولة شغّالة — انتظر لين تخلص' }));
-        server.close();
-        return new Response(null, { status: 101, webSocket: client });
-      }
-      if (this.room.players.length >= DK_MAX_PLAYERS) {
-        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
-        server.close();
-        return new Response(null, { status: 101, webSocket: client });
-      }
-      player = this.newSeat(crypto.randomUUID(), name, newSeatToken());
-      player.connected = true;
-      this.room.players.push(player);
-    }
-
-    this.sockets.set(player.id, server);
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id));
-
-    await this.persist();
-    this.sendPrivate(player.id, {
-      type: 'welcome',
-      playerId: player.id,
-      roomCode: this.room.code,
-      seatToken: player.seatToken,
-    });
-    this.broadcastState();
-    return new Response(null, { status: 101, webSocket: client });
-  }
-
-  async onClose(playerId) {
-    const p = this.findPlayer(playerId);
-    if (p) p.connected = false;
-    this.sockets.delete(playerId);
-    const wasHost = this.room.hostId === playerId;
-    this.migrateHostIfNeeded();
-    if (wasHost && this.room.hostId !== playerId) {
-      this.broadcast({ type: 'hostChanged', hostId: this.room.hostId });
-    }
-    await this.persist();
-    // لو كان آخر واحد ننتظره، لا نعلّق الجولة عليه
-    await this.maybeAdvance();
-    this.broadcastState();
-  }
-
-  migrateHostIfNeeded() {
-    const host = this.findPlayer(this.room.hostId);
-    if (host && host.connected) return;
-    const next = this.room.players.find(p => p.connected);
-    if (next) this.room.hostId = next.id;
-  }
-
-  send(playerId, obj) {
-    const ws = this.sockets.get(playerId);
-    if (!ws) return;
-    try { ws.send(JSON.stringify(obj)); } catch {}
-  }
-  sendPrivate(playerId, obj) { this.send(playerId, obj); }
-  broadcast(obj) { for (const id of this.sockets.keys()) this.send(id, obj); }
-  broadcastState() { for (const id of this.sockets.keys()) this.send(id, this.stateFor(id)); }
-
-  // ═══════════ الحالة المنقّاة ═══════════
-  /* جدار الأمان: الكلمة السرية والأدوار ما تُرسل إلا لمن يملكها،
-     والتصويت يبقى مخفيًا حتى شاشة النتائج. */
-  stateFor(viewerId) {
-    const r = this.room;
-    const rd = r.round;
-    const over = r.phase === 'results';
-
-    const players = r.players.map(p => {
-      const base = {
-        id: p.id, name: p.name, connected: p.connected,
-        isHost: p.id === r.hostId, score: p.score, g: p.g || 'm',
-      };
-      if (rd) {
-        base.seen = rd.seen.includes(p.id);
-        base.voted = Array.isArray(rd.votes[p.id]);
-        base.guessed = rd.guesses[p.id] !== undefined;
-        base.gain = rd.gains ? (rd.gains[p.id] || 0) : 0;
-        if (over) {
-          base.role = this.roleOf(p.id);
-          base.guess = rd.guesses[p.id] !== undefined ? rd.guesses[p.id] : null;
-          base.guessRight = rd.guesses[p.id] === rd.word;
-        }
-      }
-      return base;
-    });
-
-    const out = {
-      type: 'state',
-      phase: r.phase,
-      code: r.code,
-      cfg: r.cfg,
-      cats: DK_CATS,
-      hostId: r.hostId,
-      you: viewerId,
-      roundNo: r.roundNo,
-      players,
-      max: DK_MAX_PLAYERS,
-      min: DK_MIN_PLAYERS,
-      maxDakhil: this.maxDakhil(),
-      now: Date.now(),
-    };
-
-    if (rd) {
-      out.round = {
-        catKey: rd.custom ? null : rd.catKey,
-        custom: rd.custom,
-        endsAt: rd.endsAt || null,
-        paused: !!rd.paused,
-        remain: rd.remain != null ? rd.remain : null,
-        total: rd.total || 0,
-        waitingSeen: this.waitingIds(rd.seen).length,
-        waitingVote: this.waitingIds(Object.keys(rd.votes)).length,
-        guessTurn: r.phase === 'guess' ? rd.dakhil.filter(id => rd.guesses[id] === undefined).length : 0,
-      };
-      if (r.phase === 'expose') {
-        // الكشف الدرامي بعد التصويت: الأسماء فقط، والكلمة تبقى محجوبة
-        out.round.exposed = rd.dakhil.slice();
-        out.round.willGuess = this.guessWillRun();
-      }
-      if (over) {
-        out.round.word = rd.word;
-        out.round.dakhilCount = rd.dakhil.length;
-        out.round.hasMukhadi = !!rd.mukhadi;
-        out.round.titles = this.titles();
-        out.round.votes = r.players.map(p => ({
-          id: p.id,
-          on: (rd.votes[p.id] || []).slice(),
-        }));
-      }
-
-      // ── البطاقة الخاصة: كل واحد يشوف دوره هو فقط ──
-      const you = {};
-      const role = this.roleOf(viewerId);
-      if (role) {
-        you.role = role;
-        if (role === 'dakhil') {
-          you.decoy = rd.decoy[viewerId] || null;
-          you.catKey = rd.custom ? null : rd.catKey;
-        } else {
-          // داخل أو مخادع: الاثنين يعرفون الكلمة
-          you.word = rd.word;
-        }
-        you.seen = rd.seen.includes(viewerId);
-        you.vote = rd.votes[viewerId] || null;
-        if (r.phase === 'guess' && role === 'dakhil') {
-          you.options = rd.options[viewerId] || [];
-          you.guess = rd.guesses[viewerId] !== undefined ? rd.guesses[viewerId] : null;
-        }
-      }
-      out.me = you;
-    }
-    return out;
-  }
-
-  waitingIds(doneList) {
-    const done = new Set(doneList);
-    return this.room.players.filter(p => p.connected && !done.has(p.id)).map(p => p.id);
-  }
-
-  roleOf(id) {
-    const rd = this.room.round;
-    if (!rd) return null;
-    if (rd.dakhil.includes(id)) return 'dakhil';
-    if (rd.mukhadi === id) return 'mukhadi';
-    if (rd.seatIds.includes(id)) return 'dakhel';
-    return null;   // انضم بعد ما بدأت الجولة
-  }
-
-  maxDakhil() {
-    const n = this.activePlayers().length || this.room.players.length;
-    return Math.max(1, n - 1 - (this.room.cfg.mukhadiOn ? 1 : 0));
-  }
-
-  // ═══════════ الرسائل ═══════════
-  async onMessage(playerId, evt) {
-    if (!this.allowMsg(playerId)) return;
-    let msg;
-    try { msg = JSON.parse(evt.data); } catch { return; }
-    if (!msg || typeof msg !== 'object') return;
-    const p = this.findPlayer(playerId);
-    if (!p) return;
-    const isHost = playerId === this.room.hostId;
-
-    switch (msg.type) {
-      case 'updateName':
-        if (typeof msg.name === 'string' && msg.name.trim()) {
-          p.name = cleanName(msg.name);
-          await this.persist(); this.broadcastState();
-        }
-        break;
-
-      case 'updateSettings':
-        if (isHost && (this.room.phase === 'lobby' || this.room.phase === 'results')) {
-          this.room.cfg = sanitizeDakhilConfig(msg.cfg);
-          const mx = this.maxDakhil();
-          if (this.room.cfg.dakhilCount > mx) this.room.cfg.dakhilCount = mx;
-          await this.persist(); this.broadcastState();
-        }
-        break;
-
-      case 'kick':
-        if (isHost && (this.room.phase === 'lobby' || this.room.phase === 'results')) {
-          const i = this.idxOf(msg.targetId);
-          if (i > -1 && this.room.players[i].id !== this.room.hostId) {
-            const ws = this.sockets.get(msg.targetId);
-            if (ws) {
-              try { ws.send(JSON.stringify({ type: 'kicked', message: 'المضيف طلّعك من الغرفة' })); } catch {}
-              try { ws.close(); } catch {}
-            }
-            this.sockets.delete(msg.targetId);
-            this.room.players.splice(i, 1);
-            await this.persist(); this.broadcastState();
-          }
-        }
-        break;
-
-      case 'setGender':
-        // كل واحد يحدد جنسه هو — يستخدم في صياغة الألقاب
-        if (this.room.phase === 'lobby' || this.room.phase === 'results') {
-          p.g = msg.g === 'f' ? 'f' : 'm';
-          await this.persist(); this.broadcastState();
-        }
-        break;
-
-      case 'exposeNext':
-        if (isHost && this.room.phase === 'expose') await this.afterExpose();
-        break;
-
-      case 'start':
-        if (isHost && (this.room.phase === 'lobby' || this.room.phase === 'results')) await this.startRound();
-        break;
-
-      case 'seen':
-        if (this.room.phase === 'reveal' && this.roleOf(playerId)) {
-          const rd = this.room.round;
-          if (!rd.seen.includes(playerId)) rd.seen.push(playerId);
-          await this.persist();
-          if (!(await this.maybeAdvance())) this.broadcastState();
-        }
-        break;
-
-      case 'startTimer':
-        if (isHost && this.room.phase === 'discuss') {
-          const mins = Math.min(10, Math.max(1, Number(msg.minutes) || 3));
-          const rd = this.room.round;
-          rd.total = mins * 60;
-          rd.remain = null;
-          rd.paused = false;
-          rd.endsAt = Date.now() + rd.total * 1000;
-          this.setPhaseTimer(rd.total * 1000, () => this.startVote());
-          await this.persist(); this.broadcastState();
-        }
-        break;
-
-      case 'pauseTimer':
-        // لا نشترط endsAt: الإيقاف يمسحه، فلو اشترطناه ما رجع أحد يكمّل أبدًا
-        if (isHost && this.room.phase === 'discuss' && this.room.round &&
-            (this.room.round.endsAt || this.room.round.paused)) {
-          const rd = this.room.round;
-          if (rd.paused) {
-            rd.paused = false;
-            rd.endsAt = Date.now() + (rd.remain || 0) * 1000;
-            rd.remain = null;
-            this.setPhaseTimer(Math.max(0, rd.endsAt - Date.now()), () => this.startVote());
-          } else {
-            rd.paused = true;
-            rd.remain = Math.max(0, Math.round((rd.endsAt - Date.now()) / 1000));
-            rd.endsAt = null;
-            this.clearPhaseTimer();
-          }
-          await this.persist(); this.broadcastState();
-        }
-        break;
-
-      case 'goVote':
-        if (isHost && this.room.phase === 'discuss') await this.startVote();
-        break;
-
-      case 'vote': {
-        if (this.room.phase !== 'vote' || !this.roleOf(playerId)) break;
-        const rd = this.room.round;
-        const ids = Array.isArray(msg.on) ? msg.on : [];
-        const valid = ids
-          .filter(id => id !== playerId && rd.seatIds.includes(id))
-          .filter((id, i, a) => a.indexOf(id) === i)
-          .slice(0, DK_MAX_PLAYERS);
-        rd.votes[playerId] = valid;
-        await this.persist();
-        if (!(await this.maybeAdvance())) this.broadcastState();
-        break;
-      }
-
-      case 'unvote':
-        if (this.room.phase === 'vote') {
-          delete this.room.round.votes[playerId];
-          await this.persist(); this.broadcastState();
-        }
-        break;
-
-      case 'guess': {
-        if (this.room.phase !== 'guess') break;
-        const rd = this.room.round;
-        if (!rd.dakhil.includes(playerId)) break;
-        const opts = rd.options[playerId] || [];
-        if (!opts.includes(msg.word)) break;
-        rd.guesses[playerId] = msg.word;
-        await this.persist();
-        if (!(await this.maybeAdvance())) this.broadcastState();
-        break;
-      }
-
-      case 'force':
-        // صمّام أمان: المضيف يقدر يقدّم أي شاشة انتظار
-        if (isHost) await this.forceAdvance();
-        break;
-
-      case 'ping':
-        this.send(playerId, this.stateFor(playerId));
-        break;
-    }
-  }
-
-  // ═══════════ الجولة ═══════════
-  pickWord(cfg) {
-    if (cfg.useCustom && cfg.customWord) return cfg.customWord;
-    const pool = DAKHIL_BANK[cfg.catKey] || [];
-    let used = this.room.usedWords[cfg.catKey] || [];
-    let avail = pool.filter(w => used.indexOf(w) === -1);
-    if (!avail.length) { avail = pool; used = []; }
-    const w = avail[randInt(avail.length)];
-    this.room.usedWords[cfg.catKey] = used.concat([w]);
-    return w;
-  }
-
-  buildOptions(word, catKey, decoyWord) {
-    const pool = DAKHIL_BANK[catKey] || [];
-    const opts = [];
-    if (decoyWord && decoyWord !== word) opts.push(decoyWord);
-    const rest = shuffle(pool.filter(w => w !== word && opts.indexOf(w) === -1));
-    const cap = Math.min(6, pool.length);
-    for (let i = 0; i < rest.length && opts.length < cap - 1; i++) opts.push(rest[i]);
-    opts.push(word);
-    return shuffle(opts);
-  }
-
-  async startRound() {
-    this.clearPhaseTimer();
-    const r = this.room;
-    const seats = this.activePlayers();
-    if (seats.length < DK_MIN_PLAYERS) {
-      this.send(r.hostId, { type: 'error', message: 'محتاج ٣ لاعبين متصلين على الأقل' });
-      return;
-    }
-    if (r.cfg.useCustom && !r.cfg.customWord) {
-      this.send(r.hostId, { type: 'error', message: 'اكتب الكلمة المخصصة أول' });
-      return;
-    }
-    const n = seats.length;
-    if (n - (r.cfg.mukhadiOn ? 1 : 0) < 2) {
-      this.send(r.hostId, { type: 'error', message: 'عدد اللاعبين قليل على هذي الإعدادات' });
-      return;
-    }
-
-    const word = this.pickWord(r.cfg);
-    const maxD = Math.max(1, n - 1 - (r.cfg.mukhadiOn ? 1 : 0));
-    const count = r.cfg.dakhilMode === 'fixed'
-      ? Math.min(r.cfg.dakhilCount, maxD)
-      : 1 + randInt(maxD);
-
-    const order = shuffle(seats.map(p => p.id));
-    const dakhil = order.slice(0, count);
-    const mukhadi = r.cfg.mukhadiOn ? (order[count] || null) : null;
-
-    const decoy = {};
-    if (r.cfg.decoyOn && !r.cfg.useCustom) {
-      const alt = shuffle((DAKHIL_BANK[r.cfg.catKey] || []).filter(w => w !== word));
-      dakhil.forEach((id, i) => { if (alt.length) decoy[id] = alt[i % alt.length]; });
-    }
-
-    r.roundNo++;
-    r.round = {
-      word,
-      catKey: r.cfg.catKey,
-      custom: !!r.cfg.useCustom,
-      seatIds: order.slice(),
-      dakhil, mukhadi, decoy,
-      seen: [], votes: {}, guesses: {}, options: {},
-      gains: null,
-      endsAt: null, remain: null, paused: false, total: 0,
-    };
-    r.phase = 'reveal';
-    await this.persist();
-    this.broadcastState();
-  }
-
-  async startVote() {
-    if (this.room.phase !== 'discuss') return;  // حارس حسم مزدوج
-    this.clearPhaseTimer();
-    const rd = this.room.round;
-    rd.endsAt = null; rd.remain = null; rd.paused = false;
-    this.room.phase = 'vote';
-    await this.persist();
-    this.broadcastState();
-  }
-
-  async startDiscuss() {
-    if (this.room.phase !== 'reveal') return;
-    this.room.phase = 'discuss';
-    await this.persist();
-    this.broadcastState();
-  }
-
-  guessWillRun() {
-    const r = this.room, rd = r.round;
-    if (!rd) return false;
-    const pool = DAKHIL_BANK[rd.catKey] || [];
-    return !!(r.cfg.guessOn && !rd.custom && rd.dakhil.length > 0 && pool.length > 1);
-  }
-
-  async startGuessOrResults() {
-    if (this.room.phase !== 'vote') return;
-    this.clearPhaseTimer();
-    const r = this.room;
-    // شاشة كشف الدخيل بين التصويت والتخمين — مثل الوضع المحلي
-    if (r.round.dakhil.length > 0) {
-      r.phase = 'expose';
-      await this.persist();
-      this.broadcastState();
-      return;
-    }
-    return this.afterExpose();
-  }
-
-  async afterExpose() {
-    const r = this.room, rd = r.round;
-    if (r.phase !== 'expose' && r.phase !== 'vote') return;
-    const doGuess = this.guessWillRun();
-    if (doGuess) {
-      rd.options = {};
-      rd.dakhil.forEach(id => { rd.options[id] = this.buildOptions(rd.word, rd.catKey, rd.decoy[id]); });
-      rd.guesses = {};
-      r.phase = 'guess';
-      await this.persist();
-      this.broadcastState();
-    } else {
-      await this.finishRound();
-    }
-  }
-
-  async finishRound() {
-    if (this.room.phase === 'results') return;   // حارس حسم مزدوج
-    this.clearPhaseTimer();
-    const r = this.room, rd = r.round;
-    const targets = rd.dakhil.concat(rd.mukhadi ? [rd.mukhadi] : []);
-    const isTarget = id => targets.includes(id);
-    const gains = {};
-    rd.seatIds.forEach(id => { gains[id] = 0; });
-
-    // تخمين المشتبهين
-    for (const voter of rd.seatIds) {
-      const on = rd.votes[voter] || [];
-      let right = 0, wrong = 0;
-      on.forEach(id => { if (isTarget(id)) right++; else wrong++; });
-      gains[voter] += right - wrong;
-      const p = this.findPlayer(voter);
-      if (p) { p.st.right += right; p.st.wrong += wrong; }
-    }
-
-    // مكافأة من ما انكشف
-    // كم صوتًا وقع على كل لاعب (لقب كبش الفدا)
-    rd.seatIds.forEach(id => {
-      let n = 0;
-      rd.seatIds.forEach(v => { if ((rd.votes[v] || []).includes(id)) n++; });
-      const pp = this.findPlayer(id);
-      if (pp && n) pp.st.against = (pp.st.against || 0) + n;
-    });
-
-    const nSeats = rd.seatIds.length;
-    targets.forEach(id => {
-      let hits = 0;
-      rd.seatIds.forEach(v => { if ((rd.votes[v] || []).includes(id)) hits++; });
-      const p = this.findPlayer(id);
-      if (p) p.st.target += 1;
-      if (hits === 0) {
-        gains[id] = (gains[id] || 0) + 3;
-        if (p) p.st.undetected += 1;
-      } else if (hits < Math.ceil((nSeats - 1) / 2)) {
-        gains[id] = (gains[id] || 0) + 1;
-      }
-    });
-
-    // تخمين الدخيل للكلمة
-    Object.keys(rd.guesses).forEach(id => {
-      if (rd.guesses[id] === rd.word) {
-        gains[id] = (gains[id] || 0) + 2;
-        const p = this.findPlayer(id);
-        if (p) p.st.wordGuessed += 1;
-      }
-    });
-
-    rd.seatIds.forEach(id => {
-      const p = this.findPlayer(id);
-      if (p) p.score = Math.max(0, p.score + (gains[id] || 0));
-    });
-    rd.gains = gains;
-    r.phase = 'results';
-    await this.persist();
-    this.broadcastState();
-  }
-
-  titles() {
-    const top = key => {
-      let best = null, n = 0;
-      for (const p of this.room.players) {
-        const v = (p.st && p.st[key]) || 0;
-        if (v > n) { n = v; best = p; }
-      }
-      return best ? { p: best, n } : null;
-    };
-    const f = p => (p.g === 'f');
-    const times = n => n + ' ' + (n === 1 ? 'مرة' : 'مرات');
-    const innocents = n => n === 1 ? 'بريئًا واحدًا' : n === 2 ? 'بريئين'
-      : n <= 10 ? n + ' أبرياء' : n + ' بريئًا';
-
-    const out = [];
-    const actor = top('undetected');
-    if (actor) out.push({
-      em: '🎭', kind: 'actor', name: actor.p.name, n: actor.n,
-      lb: f(actor.p) ? 'أفضل ممثلة' : 'أفضل ممثل',
-      sb: (f(actor.p) ? 'نجت بدون ما يشك فيها أحد ' : 'نجا بدون ما يشك فيه أحد ') + times(actor.n),
-    });
-    const det = top('right');
-    if (det) out.push({
-      em: '🕵️', kind: 'detective', name: det.p.name, n: det.n,
-      lb: f(det.p) ? 'أذكى محققة' : 'أذكى محقق',
-      sb: (f(det.p) ? 'صابت ' : 'صاب ') + det.n + ' تخمين صحيح خلال الجلسة',
-    });
-    const reck = top('wrong');
-    if (reck) out.push({
-      em: '🤡', kind: 'reckless', name: reck.p.name, n: reck.n,
-      lb: f(reck.p) ? 'المتهوّرة' : 'المتهوّر',
-      sb: (f(reck.p) ? 'اتهمت ' : 'اتهم ') + innocents(reck.n) + ' بلا وجه حق',
-    });
-    const scape = top('against');
-    if (scape) out.push({
-      em: '🩸', kind: 'scapegoat', name: scape.p.name, n: scape.n,
-      lb: 'كبش الفدا',
-      sb: 'صوّتوا ' + (f(scape.p) ? 'عليها' : 'عليه') + ' ' + times(scape.n) + ' خلال الجلسة',
-    });
-    return out;
-  }
-
-  // ── الانتقال التلقائي حين يخلص الجميع ──
-  async maybeAdvance() {
-    const r = this.room, rd = r.round;
-    if (!rd) return false;
-    const active = this.activePlayers().filter(p => this.roleOf(p.id));
-    if (!active.length) return false;
-    if (r.phase === 'reveal' && active.every(p => rd.seen.includes(p.id))) {
-      await this.startDiscuss(); return true;
-    }
-    if (r.phase === 'vote' && active.every(p => Array.isArray(rd.votes[p.id]))) {
-      await this.startGuessOrResults(); return true;
-    }
-    if (r.phase === 'guess') {
-      const waiting = rd.dakhil.filter(id => {
-        const p = this.findPlayer(id);
-        return p && p.connected && rd.guesses[id] === undefined;
-      });
-      if (!waiting.length) { await this.finishRound(); return true; }
-    }
-    return false;
-  }
-
-  // ── صمّام الأمان: المضيف يقدّم الطور مهما كان المعلّق ──
-  async forceAdvance() {
-    const r = this.room;
-    if (r.phase === 'reveal') return this.startDiscuss();
-    if (r.phase === 'discuss') return this.startVote();
-    if (r.phase === 'vote') return this.startGuessOrResults();
-    if (r.phase === 'expose') return this.afterExpose();
-    if (r.phase === 'guess') return this.finishRound();
-  }
-}
-applyRoomCommon(DakhilRoom);
 
 export default {
   async fetch(request, env) {
@@ -5972,12 +5219,8 @@ export default {
       return new Response(null, { headers: corsFor(origin) });
     }
 
-    // ── حارس المصدر ──
-    // تنبيه: هذا ليس طبقة أمان. ترويسة Origin يضبطها المتصفح فقط،
-    // وأي سكربت (curl / Node) يزيّفها بسطر. فائدتها منع صفحات الآخرين
-    // من استدعاء الـ API من متصفح زائرهم، لا أكثر. الإثبات الحقيقي
-    // للهوية هو seatToken وحده.
-    // ولا بد من CORS حتى على الرفض، وإلا حجب المتصفحُ الردَّ وظهر
+    // ── حارس المصدر: يمنع أي طلب من خارج الموقع ──
+    // لا بد من CORS حتى على الرفض، وإلا حجب المتصفحُ الردَّ وظهر
     // "Failed to fetch" بدل السبب الحقيقي.
     if (!isAllowedOrigin(origin)) {
       return withCors(new Response('origin-not-allowed: ' + (origin || 'بلا مصدر'), { status: 403 }), origin);
@@ -5987,23 +5230,22 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        games: ['mafia', 'got', 'mawwih', 'fatin', 'daqash', 'dakhil'],
+        games: ['mafia', 'got', 'mawwih', 'fatin', 'daqash'],
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
-          DAQASH_ROOM: !!env.DAQASH_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
+          DAQASH_ROOM: !!env.DAQASH_ROOM,
         },
       }), origin);
     }
 
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
     // حتى الانضمام لاحقًا بنفس الكود يوصل لنفس الغرفة دائمًا
-    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/dakhil/room/create') {
+    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create' || url.pathname === '/daqash/room/create') {
       const gameNS = url.pathname.startsWith('/got/') ? env.GOT_ROOM
                     : url.pathname.startsWith('/mawwih/') ? env.MAWWIH_ROOM
                     : url.pathname.startsWith('/fatin/') ? env.FATIN_ROOM
                     : url.pathname.startsWith('/daqash/') ? env.DAQASH_ROOM
-                    : url.pathname.startsWith('/dakhil/') ? env.DAKHIL_ROOM
                     : env.MAFIA_ROOM;
       // بدون هذا الفحص يرمي الربطُ المفقود استثناءً فيرجع 500 بلا CORS،
       // ويظهر عند اللاعب كـ "Failed to fetch" بلا أي دلالة على السبب
@@ -6021,11 +5263,8 @@ export default {
       catch { return withCors(new Response('bad-json', { status: 400 }), origin); }
       // لو صادف الكود غرفة حيّة، نولّد غيره بدل ما نمسحها
       for (let attempt = 0; attempt < 6; attempt++) {
-        // كانت randInt(32) والأبجدية ٣١ حرفًا، فالفهرس ٣١ يرجع undefined
-        // وjoin يبلعه: نحو سُدس الأكواد كان يطلع بخمسة رموز بدل ستة
-        const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
         const code = Array.from({ length: 6 }, () =>
-          CODE_ALPHABET[randInt(CODE_ALPHABET.length)]
+          '23456789ABCDEFGHJKMNPQRSTUVWXYZ'[Math.floor(Math.random() * 32)]
         ).join('');
         const id = gameNS.idFromName(code);
         const stub = gameNS.get(id);
@@ -6039,20 +5278,10 @@ export default {
     }
 
     // الانضمام لغرفة موجودة بالكود، أو فتح اتصال WebSocket لغرفة قائمة
-    const match = url.pathname.match(/^\/(got|mawwih|fatin|daqash|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(got|mawwih|fatin|daqash)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
-      // مثل مسار الإنشاء: ربط ناقص يرمي استثناء فيرجع ٥٠٠ بلا CORS،
-      // ويظهر عند اللاعب كـ "Failed to fetch" بلا أي دلالة على السبب
-      if (!gameNS) {
-        return withCors(new Response(
-          'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
-          { status: 501 }), origin);
-      }
-      if (!allowSocket(request.headers.get('CF-Connecting-IP') || '')) {
-        return withCors(new Response('too-many-connections', { status: 429 }), origin);
-      }
+      const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : env.MAFIA_ROOM;
       const code = match[2].toUpperCase();
       const id = gameNS.idFromName(code);
       const stub = gameNS.get(id);
@@ -6066,7 +5295,7 @@ export default {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، فَطِن، داقش، ومين الدخيل أونلاين — استوديو يا٧ · /health للفحص',
+      'مافيا، لمن العرش، موّه، فَطِن، وداقش أونلاين — استوديو يا٧ · /health للفحص',
       { status: 200 }), origin);
   },
 };
