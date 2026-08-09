@@ -4163,6 +4163,8 @@ const DQ_TURN_MS_DEFAULT = 25000;
 const DQ_REVEAL_MS = 30000;
 // كم دور متتالٍ ينتهي وقته قبل ما يُقعد اللاعب على الاحتياط
 const DQ_MAX_AUTO = 3;
+// أهداف الفوز المسموحة (صفر = بدون هدف)
+const DQ_TARGETS = [0, 100000, 250000, 500000, 1000000];
 
 // ── عشوائية آمنة: crypto لا Math.random ──
 // Math.random في V8 قابل للتنبؤ من مخرجات سابقة، وهنا يعني توقّع الكروت.
@@ -4222,6 +4224,8 @@ const sanitizeDaqashConfig = (raw) => {
     // القدور الجانبية: تمنع استغلال «قلّل رصيدك واكسب القدر كامل»
     sidepot: r.sidepot === undefined ? true : !!r.sidepot,
     turnSec: Number.isInteger(turn) ? Math.min(Math.max(turn, 15), 60) : 25,
+    // الفوز عند رصيد معيّن — صفر يعني اللعب مستمر حتى ما يبقى إلا واحد
+    target: DQ_TARGETS.includes(Number(r.target)) ? Number(r.target) : 0,
   };
 };
 
@@ -4334,11 +4338,14 @@ export class DaqashRoom {
       if (stale && stale !== server) { try { stale.close(); } catch {} }
       this.sockets.delete(player.id);
       player.connected = true;
-      // رجع من انقطاع: يرجع لنفس اليد بنفس كروته تلقائيًا
-      player.sitting = false;
+      /* رجع من انقطاع: يرجع لنفس اليد بنفس كروته. أما من لم يُوزَّع له
+         هذي اليد فيبقى احتياطًا — وإلا ظهر جالسًا على الطاولة بلا كروت،
+         وهذا سبب «الأوراق اختفت». يدخل تلقائيًا في اليد الجاية. */
+      const _h = this.room.hand;
+      if (!_h || _h.seats.includes(this.idxOf(player.id))) player.sitting = false;
       player.autoMiss = 0;
     } else {
-      if (this.room.phase !== 'lobby') {
+      if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — انتظر الجولة الجاية' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -4432,7 +4439,9 @@ export class DaqashRoom {
       base.rebel = (h.rebels || []).includes(i);
       base.ready = (h.ready || []).includes(i);
       base.won = (h.winners || []).includes(i);
-      base.gain = h.gains ? (h.gains[i] || 0) : 0;
+      /* الربح صافيًا: كان يُعرض إجماليًا فيرى اللاعب «+٥٠٠٠» ورصيده
+         ما تحرّك — لأن الخمسة آلاف هي رهانه نفسه راجعًا من القدر */
+      base.gain = h.gains ? ((h.gains[i] || 0) - (h.bets[i] || 0)) : 0;
 
       const showCards = i === vIdx || (revealAll && (h.shown || []).includes(i));
       base.cards = showCards && inHand ? h.cards[i] : null;
@@ -4511,7 +4520,9 @@ export class DaqashRoom {
         if (playerId === this.room.hostId) await this.kickPlayer(msg.targetId);
         break;
       case 'start':
-        if (playerId === this.room.hostId && this.room.phase === 'lobby') await this.startGame();
+        // 'over' كذلك: بدونها تبقى الغرفة ميتة بعد نهاية اللعبة
+        if (playerId === this.room.hostId
+          && (this.room.phase === 'lobby' || this.room.phase === 'over')) await this.startGame();
         break;
       case 'bet':      await this.actBet(playerId, msg); break;
       case 'fold':     await this.actFold(playerId, msg); break;
@@ -4657,6 +4668,19 @@ export class DaqashRoom {
     }
 
     r.players.forEach(p => { if (p.chips <= 0) p.out = true; });
+
+    // بلغ الهدف: اللعبة تنتهي هنا بدل ما تستمر بلا نهاية
+    if (r.cfg.target > 0 && r.handNo > 0) {
+      const champ = r.players.reduce((a, b) => (a && a.chips >= b.chips ? a : b), null);
+      if (champ && champ.chips >= r.cfg.target) {
+        r.phase = 'over';
+        r.hand = null;
+        await this.persist();
+        this.broadcastState();
+        return;
+      }
+    }
+
     const seats = this.activeSeats();
 
     if (seats.length < 2) {
@@ -4904,7 +4928,7 @@ export class DaqashRoom {
     const i = this.gate(playerId, msg, 'bet');
     if (i === null) return;
     if (h.order[h.turn] !== i) return;
-    if (!this.room.cfg.fold || h.last === 0) return; // الانسحاب مو متاح
+    if (!this.room.cfg.fold) return;                 // الانسحاب مطفي أصلًا
     if (Date.now() > h.endsAt + 1500) return;
     this.room.players[i].autoMiss = 0;
     await this.doFold(i);
