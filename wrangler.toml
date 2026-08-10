@@ -2,11 +2,6 @@ name = "ya7-mafia-online"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
-# ═══════════════ ربطات الغرف (Durable Objects) ═══════════════
-# ثمانية أصناف، وكلها مصدَّرة من worker.js — تحقّقنا منها واحدًا واحدًا.
-# DAKHIL_ROOM رجع: الدخيل أونلاين فعلًا وله كائنات حيّة على هذا الووركر،
-# وكان الربط يشير لصنف محذوف من الملف، وهذا ما أوقف النشر خمسة أيام.
-
 [[durable_objects.bindings]]
 name = "MAFIA_ROOM"
 class_name = "MafiaRoom"
@@ -38,13 +33,6 @@ class_name = "WalimaRoom"
 [[durable_objects.bindings]]
 name = "LUDO_ROOM"
 class_name = "LudoRoom"
-
-# ═══════════════ الترحيلات (Migrations) ═══════════════
-# رانجلر لا يطابق الترحيل المسجَّل على الإصدار المنشور، فيسقط على سلوكه
-# الاحتياطي: «تطبيق كل الترحيلات المتاحة». لذلك لم يبقَ هنا إلا الترحيل
-# المطلوب فعلًا، فيصير «كل المتاح» = الصنفان الجديدان لا غير.
-#
-# ولا يوجد deleted_classes: حذف DakhilRoom كان سيمسح غرف الدخيل الحيّة.
 
 [[migrations]]
 tag = "v8"
