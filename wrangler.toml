@@ -51,5 +51,9 @@ tag = "v5"
 new_sqlite_classes = ["DaqashRoom"]
 
 [[migrations]]
+tag = "v6"
+new_sqlite_classes = ["DakhilRoom"]
+
+[[migrations]]
 tag = "v7"
 new_sqlite_classes = ["WalimaRoom", "LudoRoom"]
