@@ -5,6 +5,10 @@ compatibility_date = "2025-01-01"
 # ═══════════════ ربطات الغرف (Durable Objects) ═══════════════
 # name       = الاسم الذي يقرأه الكود عبر env.<name>
 # class_name = اسم الكلاس في worker.js — حرفيًا، حسّاس لحالة الأحرف
+#
+# worker.js يصدّر سبعة أصناف فقط، وهي المذكورة أدناه.
+# كان هنا ربط DAKHIL_ROOM → DakhilRoom، وهذا الصنف غير موجود في الملف
+# (الدخيل يشتغل على ووركر آخر)، فكان رانجلر يرفض النشر من أساسه.
 
 [[durable_objects.bindings]]
 name = "MAFIA_ROOM"
@@ -27,12 +31,21 @@ name = "DAQASH_ROOM"
 class_name = "DaqashRoom"
 
 [[durable_objects.bindings]]
-name = "DAKHIL_ROOM"
-class_name = "DakhilRoom"
+name = "WALIMA_ROOM"
+class_name = "WalimaRoom"
+
+[[durable_objects.bindings]]
+name = "LUDO_ROOM"
+class_name = "LudoRoom"
 
 # ═══════════════ الترحيلات (Migrations) ═══════════════
-# تُطبَّق بالترتيب مرة واحدة فقط. لا تعدّل ترحيلًا قديمًا ولا تعِد استخدام tag —
-# كل كلاس جديد يأخذ ترحيلًا جديدًا برقم أعلى. الترحيل التالي عندك هو v7.
+# تُطبَّق بالترتيب مرة واحدة فقط، وكلاودفلير يحفظ آخر tag طُبِّق على حسابك.
+#
+# ملاحظة على v6: كان ينشئ DakhilRoom. وبما أن النشر كان يفشل قبل أن تصل
+# الترحيلات أصلاً، فـ v6 لم يُطبَّق أبدًا — لذلك حُذف بالكامل.
+# والأصناف الجديدة أخذت tag جديدًا هو v7 بدل إعادة استخدام v6:
+# لو اتضح أن v6 طُبِّق فعلاً، سيقول رانجلر ذلك صراحةً بدل أن يتخطّى
+# إنشاء WalimaRoom و LudoRoom بصمت ويتركك مع غرف لا تعمل.
 
 [[migrations]]
 tag = "v1"
@@ -55,5 +68,5 @@ tag = "v5"
 new_sqlite_classes = ["DaqashRoom"]
 
 [[migrations]]
-tag = "v6"
-new_sqlite_classes = ["DakhilRoom"]
+tag = "v7"
+new_sqlite_classes = ["WalimaRoom", "LudoRoom"]
