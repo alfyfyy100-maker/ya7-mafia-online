@@ -89,7 +89,7 @@ const sanitizeMafiaConfig = makeConfigSanitizer(
   { mafia: [1, 6, 1] }
 );
 const sanitizeGotConfig = makeConfigSanitizer(
-  ['varys','melisandre','hound','baelish','lovers','craster','bronn']
+  ['varys','melisandre','hound','baelish','lovers','craster','bronn','faceless']
 );
 
 // خنق الرسائل: كل رسالة تقريبًا تكتب في التخزين، فبلا حدّ يقدر لاعب واحد
@@ -135,6 +135,24 @@ const RoomCommon = {
     return this.room.players.find(p => tokenEquals(p.seatToken, token)) || null;
   },
 };
+
+/* أبجدية كود الغرفة: 31 حرفًا (بلا I و L و O لالتباسها).
+   كانت تُفهرَس بـ *32 فيخرج undefined ويبتلعه join() ⇒ كود من 5 محارف
+   لا يطابق مسار الانضمام [A-Z0-9]{6} ⇒ 17% من الغرف تُنشأ ولا يدخلها أحد. */
+const CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+function newRoomCode() {
+  const b = new Uint8Array(6);
+  crypto.getRandomValues(b);          // الكود هو بيان الاعتماد الوحيد للغرفة
+  return Array.from(b, x => CODE_ALPHABET[x % CODE_ALPHABET.length]).join('');
+}
+
+/* المعرّف يأتي من الرابط ويُستعمل مفتاحًا في كائنات ويُخزَّن ويُبَث.
+   بلا هذا: __proto__ يبتلع الأصوات بصمت فتتجمّد المرحلة، ومعرّف ضخم
+   يتجاوز سقف قيمة الـ Durable Object فتفشل الكتابة للغرفة كلها. */
+const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+function validPlayerId(v) {
+  return typeof v === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(v) && !RESERVED_IDS.has(v);
+}
 
 function applyRoomCommon(cls) {
   for (const [k, v] of Object.entries(RoomCommon)) {
@@ -597,7 +615,7 @@ export class MafiaRoom {
     if (player) {
       // عودة بمقعد قائم — نسمح بتغيير المعرّف (بعض المتصفحات تفقد التخزين)
       const oldId = player.id;
-      const newId = (typeof playerId === 'string' && playerId) ? playerId : oldId;
+      const newId = (validPlayerId(playerId) && !this.room.players.some(p => p.id === playerId)) ? playerId : oldId;
       if (newId !== oldId && !this.room.players.some(p => p.id === newId)) {
         player.id = newId;
         if (this.room.hostId === oldId) this.room.hostId = newId;
@@ -609,6 +627,14 @@ export class MafiaRoom {
         const stale = this.sockets.get(oldId);
         if (stale && stale !== server) { try { stale.close(); } catch {} }
       }
+    }
+
+    // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
+    // بدون هذا يتجاوز المهاجم حدّ allowCreate بالكامل ويفرّخ غرفًا بلا سقف.
+    if (!player && !this.room.code) {
+      server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+      server.close();
+      return new Response(null, { status: 101, webSocket: client });
     }
 
     if (!player) {
@@ -796,6 +822,8 @@ export class MafiaRoom {
   }
 
   async startGame() {
+    // بدون هذا الشرط يقدر المضيف يعيد توزيع الأدوار في نص اللعبة
+    if (this.room.phase !== 'lobby' && this.room.phase !== 'over') return;
     const n = this.room.players.length;
     if (n < 4) {
       this.sendPrivate(this.room.hostId, { type: 'error', message: 'أقل عدد للبدء ٤ لاعبين' });
@@ -824,7 +852,11 @@ export class MafiaRoom {
         twins[1].twinId = twins[0].id;
       }
     }
+    // تصفير حالة اللعبة السابقة — بدونه تُحسم أول ليلة بأهداف الجولة الماضية
     this.room.firstDeathDone = false;
+    this.room.nightActions = {};
+    this.room.dayVotes = {};
+    this.room.lastDeaths = [];
     this.room.phase = 'night';
     this.room.dayNum = 1;
     await this.persist();
@@ -1178,6 +1210,11 @@ export class MafiaRoom {
   async handleVote(playerId, targetId) {
     const voter = this.findPlayer(playerId);
     if (!voter || !voter.alive) return;
+    // الهدف لازم يكون لاعبًا حيًّا فعلًا — وإلا فاز اسم وهمي بالأغلبية وانتهى النهار بصمت
+    if (targetId != null) {
+      const t = this.findPlayer(targetId);
+      if (!t || !t.alive) return;
+    }
     this.room.dayVotes[playerId] = targetId; // null = امتناع
     await this.persist();
     this.broadcastPublic({
@@ -1205,9 +1242,10 @@ export class MafiaRoom {
       const top = entries.filter(e => e[1] === max);
       if (top.length === 1) executedId = top[0][0]; // لازم أغلبية واضحة بدون تعادل
     }
-    if (executedId) {
-      const p = this.findPlayer(executedId);
-      if (p && p.alive) {
+    const execP = executedId ? this.findPlayer(executedId) : null;
+    if (execP && execP.alive) {
+      {
+        const p = execP;
         const execDead = [];
         this.killPlayer(p, execDead);
         executedName = p.name;
@@ -1220,6 +1258,7 @@ export class MafiaRoom {
         });
       }
     } else {
+      // يشمل التعادل وأي هدف لم يعد صالحًا — لازم يوصل بث للواجهة في الحالتين
       this.broadcastPublic({ type: 'executionResult', id: null, name: null, message: 'تعادل الأصوات — ما حد أُعدم اليوم' });
     }
 
@@ -1346,6 +1385,7 @@ const GOT_ROLES = {
   talisa:     { name:'تاليسا ستارك',  team:'stark',     icon:'💞', desc:'مرتبطة بمصير روب — إن مات ماتت معه.' },
   craster:    { name:'أبناء كرستر',   team:'neutral',   icon:'👶', desc:'بريء بالظاهر، حتى يتحوّل لقاتل مستقل بعد الليلة الرابعة أو نجاته من هجوم.' },
   bronn:      { name:'برون',          team:'neutral',   icon:'🏹', desc:'سهم واحد طوال اللعبة، ولاؤك يتحدد بأثر رجعي حسب من تقتل.' },
+  faceless:   { name:'متعدد الوجوه',  team:'neutral',   icon:'🎭', desc:'لا وجه لك ولا فريق — أول من يموت في اللعبة ترث دوره وفريقه، وتلعب به إلى النهاية.' },
 };
 
 // ══════════════════════ لمن العرش؟ — مكتبة جُمل البوتات ══════════════════════
@@ -2074,7 +2114,7 @@ function gotPick(kind, dialect, targetGender) {
 
 function gotLannisterCount(n){ return n>=10?3:n>=7?2:1; }
 function gotDefaultConfig(n){
-  return { varys:true, melisandre:n>=6, hound:n>=8, baelish:n>=5, lovers:false, craster:false, bronn:false };
+  return { varys:true, melisandre:n>=6, hound:n>=8, baelish:n>=5, lovers:false, craster:false, bronn:false, faceless:false };
 }
 function gotBuildRoles(n, cfg){
   const roles=[];
@@ -2089,25 +2129,57 @@ function gotBuildRoles(n, cfg){
   if(cfg.lovers) roles.push('robb','talisa');
   if(cfg.craster) roles.push('craster');
   if(cfg.bronn) roles.push('bronn');
+  if(cfg.faceless) roles.push('faceless');
   while(roles.length<n) roles.push('stark');
   while(roles.length>n) roles.pop();
   return roles;
 }
+
+
+// ══════════════════════ لمن العرش؟ — رسائل الغراب (فاريس وبيليش) ══════════════════════
+// جُمل جاهزة فقط، بلا كتابة حرة: تمنع الإساءة وتخلّي الرسالة بنكهة الدور.
+// بيليش: عروض تحالف وإغراء. فاريس: همس من يعرف ولاءك — ولا يرسل إلا لمن كشفه فعلًا.
+const GOT_RAVEN = {
+  baelish: [
+    "الفوضى سُلّم، ومن يخشى الصعود يبقى في القاع. ثِق بي أرفعك معي.",
+    "أنا إلى جانبك منذ هذه الليلة؛ صوّت كما أصوّت، ولا تسألني عن السبب.",
+    "أعرف ولاء كل من في هذا المجلس، واسمٌ واحد يكفيك — وثمنه صوتك.",
+    "لا تدافع عني في الجلسة؛ من يدافع عني يُشنق مكاني.",
+    "من سيتّهمك غدًا يعلم أنك بريء، وهذا وحده سبب اتهامه لك.",
+    "امنحني ثقتك مرة واحدة، وسيعود إليك الغراب بالأسماء لا بالوعود.",
+    "لا أنحاز إلا إلى الجانب الرابح، فاجعله جانبك.",
+    "إن سقطتُ غدًا، فتذكّر أنني كنتُ الوحيد الذي بعث إليك.",
+  ],
+  varys: [
+    "رأتك عصافيري في الظلام، فنمتُ بعدها مطمئنًا.",
+    "أعرف حقيقتك، ولستُ ممن يقولون كل ما يعرفون؛ فتصرّف بحكمة غدًا.",
+    "لا تسألني كيف عرفت، واكتفِ بأنني عرفتُ وما زلتُ صامتًا.",
+    "أنا لا أخدم ملكًا، بل أخدم المملكة؛ فإن كنتَ معها فأنت في أمان مني.",
+    "في الليلة التي كشفتك فيها لم أُخبر أحدًا، وقد أُخبرهم غدًا إن أجبرتني.",
+    "ابقَ قريبًا مني في التصويت، ولا تلفت الأنظار إليّ.",
+    "همسة واحدة تكفي لهدم بيت، فلا تدفعني إلى الهمس عنك.",
+    "صوّت غدًا لمن أصوّت له، وسيصلك غرابٌ آخر.",
+  ],
+};
+
 
 export class GotRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
     this.sockets = new Map();
+    // من أعلن دعمه لواجهة الغراب — ما ننتظر إلا هؤلاء، وإلا تجمّدت الليلة على نسخة قديمة مخزّنة في المتصفح
+    this.ravenClients = new Set();
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
         players: [], // {id,name,gender,alive,role,partnerId,connected,usedRevive}
-        config: { varys:true, melisandre:false, hound:false, baelish:false, lovers:false, craster:false, bronn:false },
+        config: { varys:true, melisandre:false, hound:false, baelish:false, lovers:false, craster:false, bronn:false, faceless:false },
         nightActions: {}, nightNum: 0, deathsTotal: 0,
         crasterTransformed: false, bronnArrowUsed: false, bronnContract: null, baelishSide: null,
         accuseVotes: {}, accusedId: null, finalVotes: {},
         lastDeaths: [],
+        ravenUsed: {}, ravenPending: [], ravenLog: {}, varysKnown: [],
       };
     });
   }
@@ -2152,7 +2224,7 @@ export class GotRoom {
 
     if (player) {
       const oldId = player.id;
-      const newId = (typeof playerId === 'string' && playerId) ? playerId : oldId;
+      const newId = (validPlayerId(playerId) && !this.room.players.some(p => p.id === playerId)) ? playerId : oldId;
       if (newId !== oldId && !this.room.players.some(p => p.id === newId)) {
         player.id = newId;
         if (this.room.hostId === oldId) this.room.hostId = newId;
@@ -2164,6 +2236,14 @@ export class GotRoom {
         const stale = this.sockets.get(oldId);
         if (stale && stale !== server) { try { stale.close(); } catch {} }
       }
+    }
+
+    // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
+    // بدون هذا يتجاوز المهاجم حدّ allowCreate بالكامل ويفرّخ غرفًا بلا سقف.
+    if (!player && !this.room.code) {
+      server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+      server.close();
+      return new Response(null, { status: 101, webSocket: client });
     }
 
     if (!player) {
@@ -2237,6 +2317,9 @@ export class GotRoom {
     if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
     if (msg.type === 'nightAction' && this.room.phase === 'night') await this.handleNightAction(playerId, msg);
     if (msg.type === 'baelishAlign') await this.handleBaelishAlign(playerId, msg.side);
+    if (msg.type === 'ravenSend') await this.handleRavenSend(playerId, msg);
+    if (msg.type === 'ravenSkip') await this.handleRavenSkip(playerId);
+    if (msg.type === 'ravenReady') this.ravenClients.add(playerId);
     if (msg.type === 'startAccusation' && playerId === this.room.hostId && this.room.phase === 'day') await this.startAccusation();
     if (msg.type === 'accuseVote' && this.room.phase === 'accusing') await this.handleAccuseVote(playerId, msg.targetId);
     if (msg.type === 'startFinalVote' && playerId === this.room.hostId && this.room.phase === 'trial') await this.startFinalVote();
@@ -2413,11 +2496,21 @@ export class GotRoom {
   }
 
   async startGame() {
+    // بدون هذا الشرط يقدر المضيف يعيد توزيع الأدوار في نص اللعبة
+    if (this.room.phase !== 'lobby' && this.room.phase !== 'over') return;
     const n = this.room.players.length;
     if (n < 4) { this.sendPrivate(this.room.hostId, { type:'error', message:'أقل عدد للبدء ٤ لاعبين' }); return; }
     const roles = gotBuildRoles(n, this.room.config);
     for (let i=roles.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [roles[i],roles[j]]=[roles[j],roles[i]]; }
-    this.room.players.forEach((p,i)=>{ p.role = roles[i]; p.alive = true; });
+    // تصفير حالة الجولة السابقة — وإلا ورث «متعدد الوجوه» من لعبة سابقة أو بقيت كشوف فاريس القديمة
+    this.room.firstDeathDone = false;
+    this.room.ravenUsed = {}; this.room.ravenPending = []; this.room.ravenLog = {}; this.room.varysKnown = [];
+    this.room.deathsTotal = 0; this.room.crasterTransformed = false;
+    this.room.bronnArrowUsed = false; this.room.bronnContract = null; this.room.baelishSide = null;
+    this.room.accuseVotes = {}; this.room.finalVotes = {}; this.room.accusedId = null; this.room.lastDeaths = [];
+
+    this.room.players.forEach((p,i)=>{ p.role = roles[i]; p.alive = true; p.partnerId = null; p.usedRevive = false; });
+    // الربط بعد التصفير — وإلا انمسح ارتباط العاشقين توًّا
     const robb = this.room.players.find(p=>p.role==='robb');
     const talisa = this.room.players.find(p=>p.role==='talisa');
     if (robb && talisa) { robb.partnerId = talisa.id; talisa.partnerId = robb.id; }
@@ -2442,6 +2535,13 @@ export class GotRoom {
   async handleNightAction(playerId, msg){
     const p = this.findPlayer(playerId);
     if (!p || !p.alive) return;
+    // الهدف لازم يكون لاعبًا حقيقيًا — وإلا انفجر حسم الليل وتجمّدت الغرفة.
+    // الإحياء وحده يستهدف ميتًا، فيُستثنى من شرط الحياة.
+    if (msg.targetId != null) {
+      const tgt = this.findPlayer(msg.targetId);
+      const isRevive = (p.role === 'melisandre' && msg.action === 'revive');
+      if (!tgt || (!tgt.alive && !isRevive)) msg = { ...msg, targetId: null };
+    }
     const na = this.room.nightActions;
     const leader = this.leaderPlayer();
 
@@ -2479,8 +2579,20 @@ export class GotRoom {
       na.bronnResponded = true;
     }
 
+    const rvs = this.ravenStateFor(p);
+    if (rvs) this.sendPrivate(p.id, rvs);
     await this.persist();
     if (this.allNightActionsIn()) await this.resolveNight();
+  }
+
+  // الليلة ما تُحسم قبل ما صاحب الغراب يرسل أو يتخطّى — نفس أسلوب برون
+  ravenPendingFrom(){
+    return this.alivePlayers().filter(p =>
+      !p.isBot && p.connected && this.ravenClients.has(p.id) &&
+      (p.role === 'varys' || p.role === 'baelish') &&
+      !(this.room.ravenUsed || {})[p.id] &&
+      !(((this.room.nightActions || {}).ravenDone || {})[p.id]) &&
+      this.ravenTargetsFor(p).length > 0);
   }
 
   allNightActionsIn(){
@@ -2494,6 +2606,7 @@ export class GotRoom {
     // ننتظر ردًّا من برون ما دام سهمه موجود
     const bronn = this.alivePlayers().find(p=>p.role==='bronn' && this.isHere(p));
     if (bronn && !this.room.bronnArrowUsed && !na.bronnResponded) return false;
+    if (this.ravenPendingFrom().length) return false;
     return true;
   }
 
@@ -2529,6 +2642,7 @@ export class GotRoom {
     for (const target of attempts) {
       if (seen.has(target)) continue; seen.add(target);
       const targetPlayer = this.findPlayer(target);
+      if (!targetPlayer) continue;
       if (na.protectTarget===target) {
         if (targetPlayer.role==='craster') crasterSurvivedAttack = true;
       } else if (na.guardTarget===target) {
@@ -2541,7 +2655,8 @@ export class GotRoom {
     if (crasterSurvivedAttack && !this.room.crasterTransformed) this.room.crasterTransformed = true;
     if (na.bronnTarget!==null && na.bronnTarget!==undefined && !this.room.bronnArrowUsed) {
       this.room.bronnArrowUsed = true;
-      const targetTeam = GOT_ROLES[this.findPlayer(na.bronnTarget).role].team;
+      const bt = this.findPlayer(na.bronnTarget);
+      const targetTeam = bt ? GOT_ROLES[bt.role].team : null;
       this.room.bronnContract = targetTeam==='lannister' ? 'stark' : (targetTeam==='stark' ? 'lannister' : null);
     }
 
@@ -2552,6 +2667,7 @@ export class GotRoom {
       if (p && p.alive) {
         p.alive = false; this.room.deathsTotal++;
         deadNames.push({ id:p.id, name:p.name });
+        this.tryInherit(p);
         if (p.partnerId) { const partner=this.findPlayer(p.partnerId); if (partner && partner.alive) applyDeath(partner.id); }
       }
     };
@@ -2565,6 +2681,8 @@ export class GotRoom {
     // تُسلَّم لفاريس فقط لو نجا الليلة (والإحياء يُحتسب)
     if (varysResult && varysActor && varysActor.alive) {
       this.sendPrivate(varysActor.id, { type:'investigateResult', ...varysResult });
+      this.room.varysKnown = this.room.varysKnown || [];
+      if (!this.room.varysKnown.includes(varysResult.targetId)) this.room.varysKnown.push(varysResult.targetId);
     }
 
     this.room.nightNum++;
@@ -2577,6 +2695,7 @@ export class GotRoom {
     this.room.phase = 'day';
     this.room.lastDeaths = deadNames;
     this.room.lastNightNum = this.room.nightNum - 1;
+    this.deliverRavens();
     await this.persist();
     this.broadcastPublic({ type:'dawnResult', nightNum:this.room.lastNightNum, deaths:deadNames });
     this.broadcastLobby();
@@ -2595,6 +2714,8 @@ export class GotRoom {
         bronnArrowUsed: this.room.bronnArrowUsed,
         usedRevive: !!p.usedRevive,
       });
+      const rv = this.ravenStateFor(p);
+      if (rv) this.sendPrivate(p.id, rv);
     }
   }
 
@@ -2624,7 +2745,12 @@ export class GotRoom {
   async handleAccuseVote(playerId, targetId){
     const voter = this.findPlayer(playerId);
     if (!voter || !voter.alive) return;
-    this.room.accuseVotes[playerId] = targetId;
+    // لازم يكون الهدف لاعبًا حيًّا فعلًا — وإلا اتُّهم اسم وهمي وانهارت المحاكمة
+    if (targetId) {
+      const t = this.findPlayer(targetId);
+      if (!t || !t.alive) return;
+    }
+    this.room.accuseVotes[playerId] = targetId || null;
     await this.persist();
     const expA = this.votersExpected();
     this.broadcastPublic({ type:'voteUpdate', votesIn:Object.keys(this.room.accuseVotes).length, totalAlive:expA });
@@ -2684,6 +2810,7 @@ export class GotRoom {
       const p = this.findPlayer(this.room.accusedId);
       p.alive = false; this.room.deathsTotal++;
       name = p.name; roleName = GOT_ROLES[p.role].name;
+      this.tryInherit(p);
       // الشريك يموت معه — ولازم يُعلن، وإلا بقي ظاهرًا حيًّا للجماعة وبنوا تصويتهم على معلومة غلط
       if (p.partnerId) {
         const partner = this.findPlayer(p.partnerId);
@@ -2754,8 +2881,13 @@ export class GotRoom {
           bronnArrowUsed: this.room.bronnArrowUsed,
           usedRevive: !!me.usedRevive,
         });
+        const rv = this.ravenStateFor(me);
+        if (rv) this.sendPrivate(playerId, rv);
       }
-    } else if (this.room.phase === 'day') {
+    }
+    const mine = (this.room.ravenLog || {})[playerId];
+    if (mine && mine.length) this.sendPrivate(playerId, { type:'ravenHistory', items: mine });
+    if (this.room.phase === 'day') {
       this.sendPrivate(playerId, { type:'dawnResult', nightNum:this.room.lastNightNum||this.room.nightNum, deaths:this.room.lastDeaths||[] });
     } else if (this.room.phase === 'accusing') {
       this.sendPrivate(playerId, { type:'phaseChanged', phase:'accusing' });
@@ -2782,6 +2914,124 @@ export class GotRoom {
     const ws = this.sockets.get(playerId);
     if (ws) { try { ws.send(JSON.stringify(payload)); } catch {} }
   }
+  /* ═══════════ متعدد الوجوه ═══════════ */
+  // يرث دور وفريق أول من يموت في اللعبة — مرة واحدة فقط، أيًّا كان دوره
+  tryInherit(deadPlayer){
+    if (this.room.firstDeathDone) return;
+    this.room.firstDeathDone = true;
+    const fl = this.room.players.find(p => p.alive && p.role === 'faceless');
+    if (!fl || fl.id === deadPlayer.id) return;
+    fl.role = deadPlayer.role;
+    fl.partnerId = null;   // ارتباط العاشقين يموت مع صاحبه
+    fl.usedRevive = false; // يبدأ قدرات الدور من جديد
+    const info = GOT_ROLES[fl.role];
+    if (fl.isBot) return;
+    this.sendPrivate(fl.id, {
+      type: 'roleInherited', role: fl.role, roleName: info.name,
+      icon: info.icon, team: info.team, desc: info.desc,
+      note: 'سقط ' + deadPlayer.name + ' فلبستَ وجهه — صرتَ الآن: ' + info.name,
+    });
+  }
+
+  /* ═══════════ رسائل الغراب ═══════════ */
+  // من يملك غرابًا: فاريس (لمن كشفه فقط) وبيليش (لأي حي). غراب واحد لكل ليلة.
+  ravenTargetsFor(p){
+    if (!p || !p.alive) return [];
+    if (p.role === 'baelish') return this.alivePlayers().filter(x => x.id !== p.id);
+    if (p.role === 'varys') {
+      const known = (this.room.varysKnown || []).slice();
+      // أول ما ينكشف له اللاعب يقدر يبعث له — حتى في نفس الليلة
+      const cur = (this.room.nightActions || {}).inspectTarget;
+      if (cur && !known.includes(cur)) known.push(cur);
+      return this.alivePlayers().filter(x => x.id !== p.id && known.includes(x.id));
+    }
+    return [];
+  }
+
+  ravenStateFor(p){
+    if (!p || !p.alive || (p.role !== 'varys' && p.role !== 'baelish')) return null;
+    const used = !!(this.room.ravenUsed || {})[p.id];
+    const targets = this.ravenTargetsFor(p);
+    return {
+      type: 'ravenState',
+      role: p.role,
+      used,
+      canSend: !used && targets.length > 0,
+      targets: targets.map(x => ({ id: x.id, name: x.name })),
+      lines: (GOT_RAVEN[p.role] || []).map((text, id) => ({ id, text })),
+      note: p.role === 'varys'
+        ? 'لا ترسل إلا لمن كشفت ولاءه من قبل'
+        : 'ترسل إلى أي لاعب حيّ',
+    };
+  }
+
+  async handleRavenSend(playerId, msg){
+    if (this.room.phase !== 'night') return;
+    const p = this.findPlayer(playerId);
+    if (!p || !p.alive || (p.role !== 'varys' && p.role !== 'baelish')) return;
+    if (!this.room.nightActions) this.room.nightActions = {};
+    this.room.ravenUsed = this.room.ravenUsed || {};
+    if (this.room.ravenUsed[p.id]) {
+      this.sendPrivate(p.id, { type:'error', message:'غرابك طار هذه الليلة — غراب واحد لكل ليلة' });
+      return;
+    }
+    const lines = GOT_RAVEN[p.role] || [];
+    // جملة من عند اللاعب نفسه: تُنقّى وتُقصّ في السيرفر
+    let text = null;
+    if (msg.custom) {
+      text = cleanText(msg.text, 160);
+      if (text.length < 2) { this.sendPrivate(p.id, { type:'error', message:'اكتب رسالتك أولًا' }); return; }
+    } else {
+      const li = Number(msg.lineId);
+      if (!Number.isInteger(li) || li < 0 || li >= lines.length) return;
+      text = lines[li];
+    }
+    const t = this.findPlayer(msg.targetId);
+    if (!t || !t.alive || t.id === p.id) return;
+    if (!this.ravenTargetsFor(p).some(x => x.id === t.id)) {
+      this.sendPrivate(p.id, { type:'error', message:'ما تقدر ترسل غرابك إلا لمن كشفته' });
+      return;
+    }
+    this.room.ravenUsed[p.id] = true;
+    this.room.nightActions.ravenDone = this.room.nightActions.ravenDone || {};
+    this.room.nightActions.ravenDone[p.id] = true;
+    this.room.ravenPending = this.room.ravenPending || [];
+    // الهوية ما تُكشف للمستلم — الجملة وحدها هي التلميح
+    this.room.ravenPending.push({ to: t.id, from: p.id, text });
+    await this.persist();
+    this.sendPrivate(p.id, { type:'ravenSent', targetName: t.name });
+    const st = this.ravenStateFor(p); if (st) this.sendPrivate(p.id, st);
+    if (this.allNightActionsIn()) await this.resolveNight();
+  }
+
+  async handleRavenSkip(playerId){
+    if (this.room.phase !== 'night') return;
+    const p = this.findPlayer(playerId);
+    if (!p || !p.alive || (p.role !== 'varys' && p.role !== 'baelish')) return;
+    if (!this.room.nightActions) this.room.nightActions = {};
+    this.room.nightActions.ravenDone = this.room.nightActions.ravenDone || {};
+    this.room.nightActions.ravenDone[p.id] = true;
+    await this.persist();
+    this.sendPrivate(p.id, { type:'ravenState', role:p.role, used:false, canSend:false, targets:[], lines:[], note:'' });
+    if (this.allNightActionsIn()) await this.resolveNight();
+  }
+
+  // الغراب يطير مع الفجر: يصل حتى لو مات مُرسِله، ويسقط لو مات المستلم
+  deliverRavens(){
+    const pend = this.room.ravenPending || [];
+    const n = this.room.lastNightNum || this.room.nightNum;
+    this.room.ravenLog = this.room.ravenLog || {};
+    for (const r of pend) {
+      const t = this.findPlayer(r.to);
+      if (!t || !t.alive) continue;
+      const item = { nightNum: n, text: r.text };
+      (this.room.ravenLog[t.id] = this.room.ravenLog[t.id] || []).push(item);
+      this.sendPrivate(t.id, { type:'raven', ...item });
+    }
+    this.room.ravenPending = [];
+    this.room.ravenUsed = {};
+  }
+
   async persist(){ await this.touchRoom(); await this.state.storage.put('room', this.room); }
 }
 
@@ -3097,7 +3347,7 @@ export class MawwihRoom {
       const seat = player;
       {
         const oldId = seat.id;
-        const newId = (typeof playerId === 'string' && playerId && !this.room.players.some(p => p.id === playerId)) ? playerId : oldId;
+        const newId = (validPlayerId(playerId) && !this.room.players.some(p => p.id === playerId)) ? playerId : oldId;
         seat.id = newId;
         // ننقل كل ما هو مرتبط بالمعرّف القديم
         if (this.room.subs && oldId in this.room.subs) { this.room.subs[newId] = this.room.subs[oldId]; delete this.room.subs[oldId]; }
@@ -3109,6 +3359,14 @@ export class MawwihRoom {
         this.sockets.delete(oldId);
         player = seat;
       }
+    }
+
+    // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
+    // بدون هذا يتجاوز المهاجم حدّ allowCreate بالكامل ويفرّخ غرفًا بلا سقف.
+    if (!player && !this.room.code) {
+      server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+      server.close();
+      return new Response(null, { status: 101, webSocket: client });
     }
 
     if (!player) {
@@ -3280,6 +3538,8 @@ export class MawwihRoom {
   }
 
   async startGame() {
+    // بدونها يقدر المضيف يعيد اللعبة من الصفر في نص جولة جارية
+    if (this.room.phase !== 'lobby' && this.room.phase !== 'over') return;
     if (this.room.players.length < 3) { this.sendPrivate(this.room.hostId, { type: 'error', message: 'تحتاجون ٣ لاعبين على الأقل' }); return; }
     if (this.room.teams > 0) {
       if (this.room.players.length < this.room.teams) { this.sendPrivate(this.room.hostId, { type: 'error', message: 'اللاعبون أقل من عدد الفرق' }); return; }
@@ -3367,17 +3627,32 @@ export class MawwihRoom {
       opts.push({ k, text: t, by: [p.id] });
     }
     this.room.options = shuffleArr(opts);
+    /* المفتاح الحقيقي كان يفضح كل شيء: 'T' = الإجابة الصحيحة (يصوّت لها ويكسب دائمًا)،
+       و'F'+معرّف = صاحب الكذبة. الاثنان يوصلان العميل. نرسل بدلاً منهما اسمًا
+       مستعارًا عشوائيًا يُولَّد كل جولة، ونترجمه عند استلام الصوت. */
+    this.room.alias = {};
+    for (const o of this.room.options) this.room.alias[crypto.randomUUID().slice(0, 8)] = o.k;
     this.room.phase = 'voting';
     await this.persist();
     // كل لاعب يستلم قائمة خاصة فيه، بدون إجابته هو — يمنع تصويت غلط لا يُحتسب بصمت
     for (const p of this.room.players) {
-      const myOptions = this.room.options.filter(o => !this.blockedFor(p.id, o)).map(o => ({ key: o.k, text: o.text }));
+      const myOptions = this.optionsFor(p.id);
       this.sendPrivate(p.id, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: myOptions, teams: this.room.teams });
     }
   }
 
-  async submitVote(playerId, key) {
-    const opt = this.room.options.find(o => o.k === key);
+  /* قائمة الخيارات كما يراها لاعب واحد: بلا إجابته وإجابات فريقه، وبأسماء مستعارة */
+  optionsFor(playerId) {
+    const rev = {};
+    for (const [a, k] of Object.entries(this.room.alias || {})) rev[k] = a;
+    return this.room.options
+      .filter(o => !this.blockedFor(playerId, o))
+      .map(o => ({ key: rev[o.k] || o.k, text: o.text }));
+  }
+
+  async submitVote(playerId, aliasKey) {
+    const key = (this.room.alias && this.room.alias[aliasKey]) || null;
+    const opt = key ? this.room.options.find(o => o.k === key) : null;
     if (!opt || this.blockedFor(playerId, opt)) {
       this.sendPrivate(playerId, {
         type: 'error',
@@ -3456,7 +3731,7 @@ export class MawwihRoom {
     if (this.room.phase === 'picking') this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'picking', round: this.room.round, rounds: this.room.rounds, chooserId: this.chooser().id, chooserName: this.chooser().name, choices: this.catOptions() });
     else if (this.room.phase === 'writing') this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'writing', cat: this.room.q.cat, text: this.room.q.text, chooserName: this.chooser().name });
     else if (this.room.phase === 'voting') {
-      const myOptions = this.room.options.filter(o => !this.blockedFor(playerId, o)).map(o => ({ key: o.k, text: o.text }));
+      const myOptions = this.optionsFor(playerId);
       this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: myOptions, teams: this.room.teams });
     }
   }
@@ -3715,7 +3990,7 @@ export class FatinRoom {
       const seat = player;
       {
         const oldId = seat.id;
-        const newId = (typeof playerId === 'string' && playerId && !this.room.players.some(p => p.id === playerId)) ? playerId : oldId;
+        const newId = (validPlayerId(playerId) && !this.room.players.some(p => p.id === playerId)) ? playerId : oldId;
         seat.id = newId;
         for (const bag of ['votes', 'specials', 'hilas', 'effects', 'answers', 'gains']) {
           if (this.room[bag] && oldId in this.room[bag]) {
@@ -4123,11 +4398,574 @@ export class FatinRoom {
   async persist() { await this.touchRoom(); await this.state.storage.put('room', this.room); }
 }
 
+
+/* ══════════════════════ وَليمة — أونلاين ══════════════════════
+   كل ضيف على جواله. الأدوار تُوزَّع في السيرفر ولا تُبَث للجميع،
+   ونداء «المحقق» (الذكاء) يتم من السيرفر — العميل ما يعرف دور غيره أصلًا. */
+const WL_SCENES = [
+  {
+    "occ": "عشاءُ جمعِ شملِ العائلة",
+    "crime": "اختفى عِقدُ الجدّة الذهبيّ من الدُّرجِ المُقفَل.",
+    "detail": "وقعتِ السرقةُ بين المغربِ والعشاء، حين انشغل الجميعُ بتجهيزِ المائدة. الدُّرجُ فُتح بمفتاحه لا بالكسر — أي أنّ الفاعلَ يعرف مكانَ المفتاح.",
+    "confession": "أنتَ من أخذ العِقد. تسلّلتَ إلى الغرفةِ وقتَ صلاةِ المغرب، أخرجتَ المفتاحَ من تحتِ المزهريّة — تعرف مكانَه منذ سنين — وأخذتَ العِقدَ ودسستَه في جيبِك. أعِدِ المفتاحَ مكانَه، ولا أحدَ رآك… على حدِّ علمك."
+  },
+  {
+    "occ": "مأدبةُ خطوبة",
+    "crime": "وصلت رسالةٌ تكشف أنّ أحدَ الحاضرين متزوّجٌ في الخفاء.",
+    "detail": "الرسالةُ وصلت لهاتفِ العريسِ من رقمٍ مجهول، في تمامِ التاسعة، أثناءَ تقديمِ القهوة. من أرسلها يعرف تفاصيلَ دقيقةً لا يعرفها غريب.",
+    "confession": "أنتَ من أرسل الرسالة. تعرفُ سرَّ الزواجِ الخفيّ منذ شهور، وجهّزتَ شريحةً جديدةً لهذا الغرض. أرسلتَها من دورةِ المياهِ في التاسعةِ تماماً، ثم عدتَ إلى مقعدِك وكأنّ شيئاً لم يكن."
+  },
+  {
+    "occ": "عزاءُ الوالد",
+    "crime": "اكتُشف أنّ الوصيّةَ زُوِّرت قبل ساعاتٍ من الدفن.",
+    "detail": "الوصيّةُ الأصليّةُ كانت في مكتبِ المرحوم. النسخةُ المزوّرةُ كُتبت بقلمٍ مختلفٍ وأُعيدت للملفِّ نفسِه — والمكتبُ لم يدخله إلا القليل صباحَ ذلك اليوم.",
+    "confession": "أنتَ من زوّر الوصيّة. دخلتَ المكتبَ فجراً بحجّةِ ترتيبِ أوراقِ العزاء، بدّلتَ الصفحةَ الأخيرةَ بأخرى كتبتَها بخطٍّ مقلَّد، وأعدتَ الملفَّ مكانَه. القلمُ الذي استعملتَه ما زال في جيبِك."
+  },
+  {
+    "occ": "وليمةُ مصالحةٍ بين فرعين متخاصمين",
+    "crime": "دُسَّ شيءٌ في طعامِ أحدِ الجالسين فاعتلَّ على المائدة.",
+    "detail": "الصحنُ المقصودُ مرَّ من المطبخِ إلى المائدةِ على أيدٍ ثلاث. المادّةُ المدسوسةُ لا تُميتُ لكن تفضح — أثرُها يظهر خلالَ دقائق، وقد ظهر.",
+    "confession": "أنتَ من دسَّ المادّة. أخذتَها من صيدليّةِ البيت، ورششتَها على الصحنِ حين تطوّعتَ لحملِه من المطبخ. اخترتَ الضحيّةَ عمداً — لحسابٍ قديمٍ بينكما لا يعرفه أحدٌ هنا."
+  },
+  {
+    "occ": "غداءُ العائلةِ الأسبوعيّ",
+    "crime": "تبيّن أنّ مبلغاً كبيراً سُرق من حسابِ الشركةِ العائليّة.",
+    "detail": "التحويلُ تمَّ قبلَ الغداءِ بيومين، من جهازٍ داخلَ البيتِ نفسِه، إلى حسابٍ وسيطٍ أُغلق بعدها. من فعلها يعرف كلمةَ المرورِ — وهي لا يعرفها إلا المقرّبون.",
+    "confession": "أنتَ من حوّل المبلغ. تعرفُ كلمةَ المرورِ لأنّك رأيتَها تُكتب أمامك قبل شهور ولم تنسَها. استعملتَ حاسوبَ البيتِ ليلاً، وحوّلتَ المبلغَ لحسابٍ وسيطٍ جهّزتَه من قبل. الدَّينُ الذي عليك كان سيفضحُك لولا هذا المال."
+  },
+  {
+    "occ": "حفلُ عودةِ الابنِ المغترب",
+    "crime": "عُثر على تهديدٍ مكتوبٍ تحت طبقِ أحدِهم.",
+    "detail": "الورقةُ كُتبت بخطٍّ مُتعمَّدِ التغيير، وطُويت بعنايةٍ ووُضعت تحتَ الطبقِ قبل الجلوسِ بقليل — أي أثناءَ ترتيبِ المائدةِ تحديداً.",
+    "confession": "أنتَ من كتب التهديد. كتبتَه بيدِك اليسرى ليتغيّرَ خطُّك، وطويتَه ودسستَه تحت الطبقِ حين تطوّعتَ بترتيبِ المائدة. تقصدُ صاحبَ الطبقِ تحديداً — رسالةٌ يفهمها هو وحدَه، وقد فهمها."
+  }
+];
+
+const WL_CLUES = [
+  "يُقال إنّ أحدَهم غادر المائدة دقائقَ قبل أن يُكتشف الأمر.",
+  "بقيت أثارٌ غريبةٌ على ما لا ينبغي لمسُه.",
+  "سمِع أحدُ الخدمِ همساً متوتّراً في الممرّ.",
+  "كان أحدُهم يرتجف حين طُرح الأمرُ أوّلَ مرّة.",
+  "اختفى شيءٌ صغيرٌ من مكانه، لم ينتبه له إلا القليل.",
+  "تناقَضَ ما قيل عن توقيتِ الحادثةِ مرّتين.",
+  "رائحةٌ لا تخصّ المكان عَلِقت بالهواء."
+];
+
+const WL_ALIBIS = [
+  "كنتَ في المطبخِ تساعد في تجهيزِ الصحون.",
+  "كنتَ في الحوشِ تردُّ على مكالمةٍ طالت.",
+  "كنتَ جالساً قربَ كبيرِ العائلةِ تسمع قصصَه.",
+  "كنتَ تلاعبُ الأطفالَ في الغرفةِ المجاورة.",
+  "كنتَ خارجَ البيتِ تُوقفُ سيارتَك من جديد.",
+  "كنتَ في دورةِ المياهِ وقتَها — ولا شاهدَ لك.",
+  "كنتَ تُصوّرُ المائدةَ والضيوفَ بهاتفِك.",
+  "كنتَ نائماً في الغرفةِ الجانبيّةِ من التعب.",
+  "كنتَ تبحثُ عن شاحنٍ لهاتفِك في أرجاءِ البيت.",
+  "كنتَ واقفاً عندَ البابِ تستقبلُ ضيفاً متأخّراً."
+];
+
+const WL_ROLES = [
+  {
+    "key": "culprit",
+    "t": "الجاني",
+    "evil": true,
+    "winType": "escape",
+    "secret": "أنتَ من فعلها. لا أحدَ يعلم بعد.",
+    "goal": "حوّل الشكَّ إلى غيرك، واخرُج من الوليمة دون أن يتّهمك المضيف.",
+    "desc": "أنتَ صاحبُ الجريمة. حوّلِ الشكَّ إلى غيرك واخرُج دون أن يتّهمك المضيف. يفوز إن لم يُتّهم."
+  },
+  {
+    "key": "innocent",
+    "t": "ضيفٌ بريء",
+    "winType": "escape",
+    "secret": "لا شيءَ يُثقل صدرَك، ولا سرَّ تخفيه.",
+    "goal": "تصرّف بطبيعتك، ولا تدَع الشكَّ يقعَ عليك.",
+    "desc": "ضيفٌ عاديّ، لا سرَّ له ولا هدفَ خاصّاً. يفوز إن لم يُتّهم."
+  },
+  {
+    "key": "framed",
+    "t": "البريء المُدان",
+    "winType": "escape",
+    "secret": "كلُّ القرائنِ تشير إليك، وأنتَ بريءٌ تماماً.",
+    "goal": "أقنِع المضيفَ ببراءتك حتى لا يتّهمك.",
+    "desc": "القرائنُ كلُّها تشير إليك وأنتَ بريء. أقنِعِ المضيفَ ببراءتك. يفوز إن لم يُتّهم."
+  },
+  {
+    "key": "protector",
+    "t": "الحامي",
+    "winType": "protect",
+    "needs": "protect",
+    "secret": "تحبّ أحدَ الجالسين وستحميه مهما بدا مذنباً.",
+    "goal": "احرِص ألّا يقعَ الاتّهامُ على {target}.",
+    "desc": "تحمي أحدَ الجالسين سرّاً. يفوز إن لم يقعِ الاتّهامُ على محميِّه."
+  },
+  {
+    "key": "avenger",
+    "t": "المنتقم",
+    "winType": "avenge",
+    "needs": "enemy",
+    "secret": "جئتَ لهذه المائدةِ لحسابٍ قديم.",
+    "goal": "اجعلِ المضيفَ يتّهم {target} مهما كلّفك.",
+    "desc": "جئتَ لحسابٍ قديم مع أحدِهم. يفوز إن اتّهم المضيفُ خصمَك."
+  },
+  {
+    "key": "scapegoat",
+    "t": "كبشُ الفداء",
+    "winType": "scapegoat",
+    "secret": "قرّرتَ أن تحملَ الذنبَ على عاتقك — لسببٍ تعرفه أنت وحدك.",
+    "goal": "اجعلِ المضيفَ يتّهمك أنتَ، دون أن يبدوَ تورّطُك مفتعلاً.",
+    "desc": "تريد أن يقعَ الاتّهامُ عليك أنتَ (تحمي الجاني أو لحسابٍ خاص). تفوز إن اتّهمك المضيف."
+  },
+  {
+    "key": "accomplice",
+    "t": "المتواطئ",
+    "winType": "complicit",
+    "secret": "مصلحتُك مع الجاني لا مع المائدة؛ أنتَ في صفّه سرّاً.",
+    "goal": "اِزرعِ الشكَّ ووجِّهِ المضيفَ نحو بريء، حتى يفلتَ الجاني.",
+    "desc": "أنتَ في صفِّ الجاني سرّاً. اِزرعِ الشكَّ ووجّهِ المضيفَ نحو بريء. تفوز إن لم يُمسكِ المضيفُ الجاني."
+  }
+];
+
+const WL_DISPOSITIONS = [
+  {
+    "key": "merciful",
+    "text": "أنت رحيمٌ تكره إدانةَ بريء؛ تبحث عن اعترافٍ صادقٍ لا عن كبشِ فداء، وتتمهّل قبل أن تتّهم."
+  },
+  {
+    "key": "ruthless",
+    "text": "أنت صارمٌ تريد جانياً قبل أن تنفضَّ المائدة؛ تضغط بقوّةٍ ولا ترحم المتلعثم."
+  },
+  {
+    "key": "cynical",
+    "text": "لا تثق بأحدٍ على هذه المائدة؛ ترى الكذبَ في كلِّ وجهٍ وتفترض أنّ الجميع يُخفون شيئاً."
+  },
+  {
+    "key": "biased",
+    "target": true,
+    "text": "في قلبك ميلٌ قديمٌ ضدّ {target}؛ تميل لتصديقِ أنّه الفاعل ما لم يُفحِمك الآخرون بعكس ذلك."
+  },
+  {
+    "key": "soft",
+    "target": true,
+    "text": "تحبّ {target} في قرارةِ نفسك وتميل لحمايته؛ يصعُب عليك توجيهُ الاتّهامِ إليه."
+  }
+];
+
+const WL_ROUNDS = 2;
+const WL_AI_ENDPOINT = 'https://ya7-ai-proxy.alfyfyy100.workers.dev/walima/chat';
+const WL_AI_MODEL = 'deepseek/deepseek-v4-flash';
+const WL_MAX_STATEMENT = 400;
+
+function wlPick(a){ return a[Math.floor(Math.random()*a.length)]; }
+function wlShuffle(a){ const c=a.slice(); for(let i=c.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [c[i],c[j]]=[c[j],c[i]]; } return c; }
+function wlGrab(text, tag){
+  const m = String(text||'').match(new RegExp('<'+tag+'>([\\s\\S]*?)</'+tag+'>'));
+  return m ? m[1].trim() : '';
+}
+function wlSafeJSON(t){
+  if (!t) return null;
+  try { return JSON.parse(t); } catch {}
+  const m = String(t).match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch {} }
+  return null;
+}
+
+export class WalimaRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.sockets = new Map();
+    this.state.blockConcurrencyWhile(async () => {
+      this.room = (await this.state.storage.get('room')) || {
+        code: null, hostId: null, phase: 'lobby',
+        players: [], // {id,name,connected,seatToken,role,alibi,target,enemy,sus,statement,submitted}
+        scene: null, clues: [], disposition: null,
+        round: 1, rounds: WL_ROUNDS, transcript: [],
+        hostSays: '', lastSus: {}, verdict: null, thinking: false,
+      };
+    });
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith('/ws')) return this.handleWebSocket(request);
+    if (url.pathname.endsWith('/create')) return this.handleCreate(request);
+    return new Response('غير موجود', { status: 404 });
+  }
+
+  async handleCreate(request) {
+    let body;
+    try { body = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
+    const { name, roomCode } = body || {};
+    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
+      return new Response('room-exists', { status: 409 });
+    }
+    this.room.code = roomCode;
+    const hostId = crypto.randomUUID();
+    const hostToken = newSeatToken();
+    this.room.hostId = hostId;
+    this.room.players = [{ id: hostId, name: cleanName(name), connected: false, seatToken: hostToken, role: null, sus: 0 }];
+    await this.persist();
+    return Response.json({ roomCode: this.room.code, playerId: hostId, seatToken: hostToken });
+  }
+
+  async handleWebSocket(request) {
+    const url = new URL(request.url);
+    const playerId = url.searchParams.get('playerId');
+    const name = url.searchParams.get('name');
+    if (request.headers.get('Upgrade') !== 'websocket') return new Response('يتطلب WebSocket', { status: 426 });
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    const token = url.searchParams.get('token');
+    let player = this.seatByToken(token);
+    if (player) {
+      const oldId = player.id;
+      const newId = (validPlayerId(playerId) && !this.room.players.some(p => p.id === playerId)) ? playerId : oldId;
+      if (newId !== oldId && !this.room.players.some(p => p.id === newId)) {
+        player.id = newId;
+        if (this.room.hostId === oldId) this.room.hostId = newId;
+        const stale = this.sockets.get(oldId);
+        if (stale) { try { stale.close(); } catch {} }
+        this.sockets.delete(oldId);
+      } else {
+        const stale = this.sockets.get(oldId);
+        if (stale && stale !== server) { try { stale.close(); } catch {} }
+      }
+    }
+
+    // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
+    // بدون هذا يتجاوز المهاجم حدّ allowCreate بالكامل ويفرّخ غرفًا بلا سقف.
+    if (!player && !this.room.code) {
+      server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+      server.close();
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
+    if (!player) {
+      if (this.room.phase !== 'lobby') {
+        server.send(JSON.stringify({ type: 'error', message: 'الوليمة بدأت، ما تقدر تنضم الآن' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.players.length >= 10) {
+        server.send(JSON.stringify({ type: 'error', message: 'المائدة ممتلئة' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      player = { id: crypto.randomUUID(), name: cleanName(name), connected: true, seatToken: newSeatToken(), role: null, sus: 0 };
+      this.room.players.push(player);
+    } else {
+      player.connected = true;
+    }
+    if (!player.seatToken) player.seatToken = newSeatToken();
+
+    this.sockets.set(player.id, server);
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id));
+
+    await this.persist();
+    this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code, seatToken: player.seatToken });
+    this.broadcastState();
+    if (player.role) this.sendPrivate(player.id, this.roleMessageFor(player));
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  seatByToken(token){
+    if (!token) return null;
+    return this.room.players.find(p => p.seatToken === token) || null;
+  }
+  findPlayer(id){ return this.room.players.find(p => p.id === id) || null; }
+  async persist(){ await this.state.storage.put('room', this.room); }
+  sendPrivate(id, payload){
+    const ws = this.sockets.get(id);
+    if (ws) { try { ws.send(JSON.stringify(payload)); } catch {} }
+  }
+  broadcastPublic(payload){
+    for (const ws of this.sockets.values()) { try { ws.send(JSON.stringify(payload)); } catch {} }
+  }
+
+  // الحالة العامة: بلا أدوار ولا نصوص سرّية — الأدوار تُرسل خاصة فقط
+  broadcastState(){
+    const pub = {
+      type: 'state', phase: this.room.phase, code: this.room.code, hostId: this.room.hostId,
+      round: this.room.round, rounds: this.room.rounds,
+      scene: this.room.phase === 'lobby' ? null : this.room.scene && {
+        occ: this.room.scene.occ, crime: this.room.scene.crime, detail: this.room.scene.detail,
+      },
+      clues: this.room.phase === 'lobby' ? [] : this.room.clues,
+      players: this.room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected, sus: p.sus || 0, submitted: !!p.submitted })),
+      transcript: this.room.transcript,
+      hostSays: this.room.hostSays, lastSus: this.room.lastSus, thinking: !!this.room.thinking,
+      verdict: this.room.verdict,
+    };
+    this.broadcastPublic(pub);
+  }
+
+  roleMessageFor(p){
+    const r = p.role ? WL_ROLES.find(x => x.key === p.role) : null;
+    if (!r) return { type: 'yourRole', role: null };
+    let goal = r.goal;
+    if (p.target) goal = goal.replace('{target}', p.target);
+    if (p.enemy) goal = goal.replace('{target}', p.enemy);
+    return {
+      type: 'yourRole', role: r.key, roleName: r.t, secret: r.secret, goal,
+      alibi: p.alibi, evil: !!r.evil,
+      confession: r.key === 'culprit' && this.room.scene ? this.room.scene.confession : null,
+    };
+  }
+
+  async onMessage(playerId, evt){
+    if (!this.allowMsg(playerId)) return;
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    if (!msg || typeof msg !== 'object') return;
+
+    if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
+    if (msg.type === 'statement' && this.room.phase === 'writing') await this.handleStatement(playerId, msg.text);
+    if (msg.type === 'nextRound' && playerId === this.room.hostId && this.room.phase === 'beat') await this.nextRound();
+    if (msg.type === 'hostForce' && playerId === this.room.hostId && this.room.phase === 'writing') await this.forceRound();
+  }
+
+  async onClose(playerId){
+    const p = this.findPlayer(playerId);
+    if (p) p.connected = false;
+    this.sockets.delete(playerId);
+    if (this.room.hostId === playerId) {
+      const next = this.room.players.find(x => x.connected);
+      if (next) this.room.hostId = next.id;
+    }
+    await this.persist();
+    this.broadcastState();
+    // ما ننتظر منقطعًا: لو الباقون سلّموا، امضِ
+    if (this.room.phase === 'writing' && this.allIn()) await this.runHost(false);
+  }
+
+  async startGame(){
+    if (this.room.phase !== 'lobby' && this.room.phase !== 'over') return;
+    const seated = this.room.players.filter(p => p.connected);
+    if (seated.length < 3) {
+      this.sendPrivate(this.room.hostId, { type: 'error', message: 'محتاج ٣ ضيوف على الأقل' });
+      return;
+    }
+    this.room.players = seated;
+    const n = seated.length;
+
+    const culprit = WL_ROLES.find(r => r.key === 'culprit');
+    const innocent = WL_ROLES.find(r => r.key === 'innocent');
+    const pool = WL_ROLES.filter(r => r.key !== 'culprit' && r.key !== 'innocent');
+    const rest = wlShuffle(pool).slice(0, Math.max(0, Math.min(n - 1, pool.length)));
+    while (rest.length < n - 1) rest.push(innocent);
+    const dealt = wlShuffle([culprit, ...rest]);
+
+    const alibis = wlShuffle(WL_ALIBIS);
+    this.room.players.forEach((p, i) => {
+      p.role = dealt[i].key;
+      p.sus = 0; p.statement = ''; p.submitted = false;
+      p.target = null; p.enemy = null;
+      p.alibi = alibis[i % alibis.length];
+    });
+    // أهداف الحامي والمنتقم — تُختار بعد التوزيع
+    this.room.players.forEach(p => {
+      const r = WL_ROLES.find(x => x.key === p.role);
+      if (!r || !r.needs) return;
+      const others = this.room.players.filter(x => x.id !== p.id);
+      const pick = wlPick(others);
+      if (r.needs === 'protect') p.target = pick.name;
+      if (r.needs === 'enemy') p.enemy = pick.name;
+    });
+
+    this.room.scene = wlPick(WL_SCENES);
+    this.room.clues = wlShuffle(WL_CLUES).slice(0, 2);
+    const disp = { ...wlPick(WL_DISPOSITIONS) };
+    if (disp.target) disp._target = wlPick(this.room.players).name;
+    this.room.disposition = disp;
+
+    this.room.round = 1; this.room.rounds = WL_ROUNDS;
+    this.room.transcript = []; this.room.hostSays = ''; this.room.lastSus = {};
+    this.room.verdict = null; this.room.thinking = false;
+    this.room.phase = 'writing';
+    await this.persist();
+
+    for (const p of this.room.players) this.sendPrivate(p.id, this.roleMessageFor(p));
+    this.broadcastState();
+  }
+
+  allIn(){
+    const live = this.room.players.filter(p => p.connected);
+    return live.length > 0 && live.every(p => p.submitted);
+  }
+
+  async handleStatement(playerId, text){
+    const p = this.findPlayer(playerId);
+    if (!p || p.submitted) return;
+    const clean = cleanText(text, WL_MAX_STATEMENT);
+    if (clean.length < 2) { this.sendPrivate(p.id, { type:'error', message:'اكتب شيئًا أولًا' }); return; }
+    p.statement = clean; p.submitted = true;
+    this.room.transcript.push({ round: this.room.round, name: p.name, text: clean });
+    await this.persist();
+    this.broadcastState();
+    if (this.allIn()) await this.runHost(this.room.round >= this.room.rounds);
+  }
+
+  // من لم يتكلّم يُسجَّل صمته — أفضل من تجميد المائدة
+  async forceRound(){
+    for (const p of this.room.players) {
+      if (p.connected && !p.submitted) {
+        p.submitted = true; p.statement = '';
+        this.room.transcript.push({ round: this.room.round, name: p.name, text: 'صمَت ولم يُجب.' });
+      }
+    }
+    await this.persist();
+    await this.runHost(this.room.round >= this.room.rounds);
+  }
+
+  buildPrompt(final){
+    const names = this.room.players.map(p => p.name).join('، ');
+    const dispText = (this.room.disposition.text || '').replace('{target}', this.room.disposition._target || '');
+    const said = this.room.transcript.map(t => '[جولة ' + t.round + '] ' + t.name + ': «' + t.text + '»').join('\n') || '— لم يتكلّموا بعد —';
+    const head = 'أنت «المحقق»، حاضرٌ في «' + this.room.scene.occ + '». أثناءها وقعت مصيبة: ' + this.room.scene.crime + '\n'
+      + (this.room.scene.detail ? 'تفاصيل الحادثة كما وصلتك: ' + this.room.scene.detail : '')
+      + '\nأنت تشكّ أنّ أحدَ الجالسين هو الفاعل، وتحقّق بنفسك على المائدة.'
+      + '\nطبعك في هذا التحقيق: ' + dispText
+      + '\nخيوطٌ همست بها الجلسة:\n- ' + this.room.clues[0] + '\n- ' + this.room.clues[1]
+      + '\nالجالسون: ' + names + '.'
+      + '\nما صرّح به كلُّ ضيفٍ عن مكانه وقتَ الحادثة (قد يكون بعضُها كذباً):\n'
+      + this.room.players.map(p => '- ' + p.name + ': ' + (p.alibi || 'لم يُصرِّح بمكانه')).join('\n')
+      + '\nأنت لا تعرف يقيناً من الفاعل؛ تستنتج من كلامهم وتناقضاتهم وارتباكهم. تتكلّم بالعربية الفصحى بإيجازٍ مهيب.'
+      + '\n\nما قيل حتى الآن:\n' + said;
+    const tail = !final
+      ? 'ردَّ على المائدة برسالةٍ واحدةٍ موجزة (لا تتجاوز 55 كلمة): علّق على ما لفتك، اضغط على من بدا متلعثماً أو متناقضاً، واطرح في آخرها سؤالاً أو تحدّياً جديداً للجولة القادمة.\n'
+        + 'ثم أعطِ تقديرَ شكّك السرّيّ: لكلِّ ضيفٍ رقمٌ من -3 إلى +3 (الموجبُ يعني ازدادت ريبتُك فيه).\n'
+        + 'أعد ردّك بهذا الشكل حصراً:\n<مضيف>كلامك هنا</مضيف>\n<شك>{'
+        + this.room.players.map(p => '"' + p.name + '":0').join(',') + '}</شك>'
+      : 'انتهى التحقيق. حان وقتُ الحكم. تكلّم كلمةً أخيرةً موجزةً بليغة (لا تتجاوز 55 كلمة) تبني فيها قرارك، ثم اتّهم ضيفاً واحداً بأنّه الفاعل (اسمٌ واحدٌ من القائمة فقط)، وسبباً مختصراً.\n'
+        + 'أعد ردّك بهذا الشكل حصراً:\n<مضيف>كلمتك الأخيرة هنا</مضيف>\n<تهمة>اسم المتّهم</تهمة>\n<تعليل>سببك في جملة</تعليل>';
+    return head + '\n\n' + tail;
+  }
+
+  matchName(raw){
+    const s = String(raw || '').trim();
+    if (!s) return null;
+    const exact = this.room.players.find(p => p.name === s);
+    if (exact) return exact.name;
+    const part = this.room.players.find(p => s.includes(p.name) || p.name.includes(s));
+    return part ? part.name : null;
+  }
+
+  async askAI(prompt){
+    const resp = await fetch(WL_AI_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: WL_AI_MODEL, max_tokens: 1000, messages: [{ role: 'user', content: prompt }] }),
+    });
+    if (!resp.ok) throw new Error('ai-' + resp.status);
+    const data = await resp.json();
+    const viaOR = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
+    if (viaOR) return viaOR;
+    return (data.content || []).filter(b => b.text).map(b => b.text).join('\n');
+  }
+
+  // مضيف احتياطي بلا ذكاء: يمنع تعليق الوليمة لو تعطّل المزوّد
+  fallbackHost(final){
+    const sus = {};
+    for (const p of this.room.players) {
+      const last = [...this.room.transcript].reverse().find(t => t.name === p.name && t.round === this.room.round);
+      const txt = last ? last.text : '';
+      let v = 0;
+      if (txt.length < 14) v += 1;
+      if (txt.length > 80) v -= 1;
+      if (Math.random() < 0.4) v += Math.random() < 0.5 ? 1 : -1;
+      sus[p.name] = Math.max(-3, Math.min(3, v));
+    }
+    if (!final) return { says: 'صمتُ بعضِكم أبلغُ من كلامِ بعضِكم… أكمِلوا، فالمائدةُ طويلة.', sus };
+    const top = [...this.room.players].sort((a, b) => (b.sus || 0) - (a.sus || 0))[0];
+    return { says: 'قد سمعتُ ما يكفي.', accused: top.name, reason: 'أثقلُكم ريبةً في كلامه.' };
+  }
+
+  async runHost(final){
+    if (this.room.thinking) return;
+    this.room.thinking = true;
+    this.room.phase = 'thinking';
+    await this.persist();
+    this.broadcastState();
+
+    let out;
+    try {
+      const raw = await this.askAI(this.buildPrompt(final));
+      const says = wlGrab(raw, 'مضيف') || String(raw).replace(/<[^>]+>/g, '').trim().slice(0, 400);
+      if (!final) {
+        out = { says, sus: wlSafeJSON(wlGrab(raw, 'شك')) || {} };
+      } else {
+        out = {
+          says,
+          accused: this.matchName(wlGrab(raw, 'تهمة')) || wlPick(this.room.players).name,
+          reason: wlGrab(raw, 'تعليل') || 'حدسُ المحقّق.',
+        };
+      }
+    } catch (e) {
+      out = this.fallbackHost(final);
+    }
+
+    this.room.thinking = false;
+    if (!final) {
+      const deltas = {};
+      for (const p of this.room.players) {
+        const d = Number(out.sus && out.sus[p.name]) || 0;
+        const capped = Math.max(-3, Math.min(3, d));
+        p.sus = (p.sus || 0) + capped;
+        deltas[p.name] = capped;
+      }
+      this.room.hostSays = out.says;
+      this.room.lastSus = deltas;
+      this.room.phase = 'beat';
+      await this.persist();
+      this.broadcastState();
+    } else {
+      const accused = out.accused;
+      const culprit = this.room.players.find(p => p.role === 'culprit');
+      const results = this.room.players.map(p => ({
+        id: p.id, name: p.name, role: p.role,
+        roleName: (WL_ROLES.find(r => r.key === p.role) || {}).t || '',
+        target: p.target, enemy: p.enemy,
+        won: this.didWin(p, accused, culprit ? culprit.name : null),
+      }));
+      this.room.verdict = { accused, reason: out.reason, says: out.says, culprit: culprit ? culprit.name : null, results };
+      this.room.phase = 'over';
+      await this.persist();
+      this.broadcastState();
+    }
+  }
+
+  didWin(p, accused, culpritName){
+    const r = WL_ROLES.find(x => x.key === p.role) || {};
+    switch (r.winType) {
+      case 'complicit': return accused !== culpritName;
+      case 'protect':   return accused !== p.target;
+      case 'avenge':    return accused === p.enemy;
+      case 'scapegoat': return accused === p.name;
+      default:          return accused !== p.name;
+    }
+  }
+
+  async nextRound(){
+    this.room.round++;
+    this.room.hostSays = ''; this.room.lastSus = {};
+    this.room.players.forEach(p => { p.submitted = false; p.statement = ''; });
+    this.room.phase = 'writing';
+    await this.persist();
+    this.broadcastState();
+  }
+}
+
 // تفعيل الخنق والتنظيف واستعادة المقعد على كل الغرف
 applyRoomCommon(MafiaRoom);
 applyRoomCommon(GotRoom);
 applyRoomCommon(MawwihRoom);
 applyRoomCommon(FatinRoom);
+applyRoomCommon(WalimaRoom);
 
 // حدّ إنشاء الغرف لكل IP — يمنع تفريخ غرف بلا نهاية
 const CREATE_LIMIT = 8;              // غرف في الساعة لكل IP
@@ -4345,6 +5183,12 @@ export class DaqashRoom {
       if (!_h || _h.seats.includes(this.idxOf(player.id))) player.sitting = false;
       player.autoMiss = 0;
     } else {
+      // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket
+      if (!this.room.code) {
+        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
       if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — انتظر الجولة الجاية' }));
         server.close();
@@ -4899,7 +5743,6 @@ export class DaqashRoom {
       const isCall = amt === h.last;
       const isRaise = amt > h.last && (amt - h.last) % step === 0;
       if (!isCall && !isRaise && !allIn) return;
-      if (allIn && amt < h.last && amt >= h.last) return;
     }
     p.autoMiss = 0;
     await this.doBet(i, amt);
@@ -5234,6 +6077,221 @@ export class DaqashRoom {
 }
 applyRoomCommon(DaqashRoom);
 
+// ══════════════════════ لودو الكذب (LudoRoom) ══════════════════════
+// نموذج مختلف عن بقية الألعاب: HTTP قصير (استطلاع كل ١.٢ث) بدل WebSocket،
+// لأن المحرك يعمل عند كل لاعب ويتزامن عبر سجل أحداث. الخادم يحتفظ بشيئين فقط
+// لا يجوز أن يعرفهما أحد غيره: قيمة النرد الحقيقية، ورصيد الكذب لكل لاعب.
+const LUDO_MAX_PLAYERS = 4;
+const LUDO_ROLL_LOCK_MS = 90 * 1000;      // بعدها تُعتبر الرمية مهجورة
+const LUDO_CARDS = ['freeze', 'shield', 'push', 'swap'];   // مطابقة CARDS في ludo/index.html
+const LUDO_BY_ACTIONS = new Set(['pick', 'reveal', 'veto', 'card']);
+
+// عدد صحيح داخل مدى، أو null
+function ludoInt(v, min, max) {
+  const n = Number(v);
+  return (Number.isInteger(n) && n >= min && n <= max) ? n : null;
+}
+
+/* يبني حركة نظيفة من جسم الطلب: نوع معروف وحقول معروفة فقط.
+   أي شيء ناقص أو خارج المدى = رفض، لأن السجل يُعاد تشغيله عند كل لاعب. */
+function ludoCleanAction(raw, mySeat) {
+  if (!raw || typeof raw !== 'object' || typeof raw.t !== 'string') return null;
+  const seat = (v) => ludoInt(v, 0, LUDO_MAX_PLAYERS - 1);
+  const piece = (v) => ludoInt(v, 0, 3);
+  switch (raw.t) {
+    case 'roll':
+    case 'nomove':
+    case 'commit':
+      return { t: raw.t };
+    case 'pick': {
+      const by = seat(raw.by);
+      if (by === null || !LUDO_CARDS.includes(raw.kind)) return null;
+      return { t: 'pick', by, kind: raw.kind };
+    }
+    case 'declare': {
+      const v = ludoInt(raw.v, 1, 6), i = piece(raw.i);
+      if (v === null || i === null) return null;
+      return { t: 'declare', v, i };
+    }
+    case 'reveal': {
+      const by = seat(raw.by);
+      if (by === null) return null;
+      return { t: 'reveal', by };          // real تُضاف من الخادم
+    }
+    case 'veto': {
+      const by = seat(raw.by);
+      if (by === null) return null;
+      return { t: 'veto', by };
+    }
+    case 'card': {
+      const by = seat(raw.by);
+      if (by === null || !LUDO_CARDS.includes(raw.kind)) return null;
+      const out = { t: 'card', by, kind: raw.kind };
+      if (raw.kind === 'freeze' || raw.kind === 'push' || raw.kind === 'swap') {
+        const target = seat(raw.target);
+        if (target === null) return null;
+        out.target = target;
+      }
+      if (raw.kind === 'push' || raw.kind === 'swap') {
+        const tp = piece(raw.tp);
+        if (tp === null) return null;
+        out.tp = tp;
+      }
+      if (raw.kind === 'swap') {
+        const mp = piece(raw.mp);
+        if (mp === null) return null;
+        out.mp = mp;
+      }
+      return out;
+    }
+    default:
+      return null;
+  }
+}
+
+export class LudoRoom {
+  constructor(state) {
+    this.s = state;
+    this.d = { code: '', names: [], started: false, actions: [],
+               secret: null, seat: null, lieLimit: 1, lies: [], tokens: [], revealed: false, ts: Date.now() };
+    this.loaded = this.s.blockConcurrencyWhile(async () => {
+      const saved = await this.s.storage.get('d');
+      if (saved) this.d = saved;
+    });
+  }
+  save() {
+    this.d.ts = Date.now();
+    // لودو ما يمرّ على RoomCommon (بنيته مختلفة)، فمنبّهه مكتوب هنا —
+    // بدونه تبقى كل غرفة لودو مخزّنة للأبد
+    try { this.s.storage.setAlarm(Date.now() + ROOM_TTL_MS); } catch {}
+    return this.s.storage.put('d', this.d);
+  }
+
+  async alarm() {
+    if (Date.now() - (this.d.ts || 0) >= ROOM_TTL_MS) await this.s.storage.deleteAll();
+    else { try { await this.s.storage.setAlarm(Date.now() + ROOM_TTL_MS); } catch {} }
+  }
+  static json(o, st = 200) {
+    return new Response(JSON.stringify(o), { status: st, headers: { 'content-type': 'application/json' } });
+  }
+
+  async fetch(request) {
+    await this.loaded;
+    const url = new URL(request.url);
+    const J = LudoRoom.json;
+    let body = {};
+    if (request.method === 'POST') { try { body = await request.json(); } catch { body = {}; } }
+    const d = this.d;
+    const path = url.pathname.replace(/^.*\/room\/[A-Z0-9]{4,8}/i, '') || url.pathname;
+
+    // إنشاء: يأتي من الراوتر ومعه roomCode. 409 = الكود مستعمل فيولّد الراوتر غيره
+    if (url.pathname.endsWith('/create')) {
+      if (d.started || d.names.length) return new Response('busy', { status: 409 });
+      d.code = String(body.roomCode || '').toUpperCase();
+      d.names = [cleanName(body.name)];
+      d.tokens = [newSeatToken()];
+      await this.save();
+      return J({ code: d.code, seat: 0, names: d.names, token: d.tokens[0] });
+    }
+    if (path === '/join') {
+      if (d.started) return J({ error: 'اللعبة بدأت' }, 400);
+      if (!d.names.length) return J({ error: 'غرفة غير موجودة' }, 404);
+      if (d.names.length >= LUDO_MAX_PLAYERS) return J({ error: 'الغرفة ممتلئة' }, 400);
+      d.names.push(cleanName(body.name));
+      d.tokens = d.tokens || [];
+      d.tokens[d.names.length - 1] = newSeatToken();
+      await this.save();
+      return J({ seat: d.names.length - 1, names: d.names, token: d.tokens[d.names.length - 1] });
+    }
+    // المقعد يُشتقّ من التوكن السرّي، لا من جسم الطلب — وإلا لعب أيُّ أحدٍ بمقعد غيره
+    const hasTokens = Array.isArray(d.tokens) && d.tokens.length > 0;
+    const seatOf = () => {
+      if (!hasTokens) return typeof body.seat === 'number' ? body.seat : -1;  // غرف قديمة قبل التحديث
+      const t = body.token;
+      if (!t) return -1;
+      const i = d.tokens.indexOf(t);
+      return i;
+    };
+    const mySeat = seatOf();
+    const needSeat = () => mySeat >= 0;
+
+    if (path === '/start') {
+      if (!needSeat() || mySeat !== 0) return J({ error: 'المضيف بس يبدأ' }, 403);
+      if (d.names.length < 2) return J({ error: 'لازم لاعبين على الأقل' }, 400);
+      d.lieLimit = body.lieLimit === -1 ? -1 : Math.max(0, Number(body.lieLimit ?? 1));
+      d.lies = d.names.map(() => d.lieLimit);
+      d.started = true;
+      await this.save();
+      return J({ ok: true });
+    }
+    if (path === '/state') {
+      const since = Math.max(0, Number(url.searchParams.get('since') || 0));
+      return J({ started: d.started, names: d.names, actions: d.actions.slice(since), n: d.actions.length });
+    }
+    if (path === '/roll') {
+      if (!d.started) return J({ error: 'اللعبة ما بدأت' }, 400);
+      if (!needSeat()) return J({ error: 'مقعد غير معروف' }, 403);
+      // رمية معلّقة لغيرك = ممنوع ترمي فوقها. بدون هذا يقدر أي لاعب يرمي في أي
+      // لحظة فيصير هو صاحب الإعلان بدل صاحب الدور. المهلة تفكّ القفل لو انقطع.
+      if (d.secret != null && d.seat !== mySeat
+          && Date.now() - (d.rollAt || 0) < LUDO_ROLL_LOCK_MS) {
+        return J({ error: 'مو دورك — فيه رمية معلّقة' }, 403);
+      }
+      d.rollAt = Date.now();
+      d.secret = 1 + Math.floor(Math.random() * 6);
+      d.seat = mySeat;
+      d.revealed = false;
+      await this.save();
+      return J({ value: d.secret, lieLimit: d.lieLimit,
+                 liesLeft: d.lieLimit === -1 ? -1 : (d.lies[mySeat] ?? 0) });
+    }
+    if (path === '/reveal') {
+      if (d.secret == null) return J({ error: 'ما فيه رمية' }, 400);
+      // لا يُسلَّم الرقم الحقيقي قبل أن يُعلَن الكشف فعلًا — وإلا استرقّه أيُّ لاعبٍ
+      // قبل أن يقرّر: يصيح «كذاب» أو يسكت، فتنهار اللعبة كلها
+      if (!d.revealed) return J({ error: 'ما انكشفت بعد' }, 403);
+      return J({ real: d.secret });
+    }
+    if (path === '/action') {
+      if (!d.started) return J({ error: 'اللعبة ما بدأت' }, 400);
+      if (!needSeat()) return J({ error: 'مقعد غير معروف' }, 403);
+      // الحركة تُبنى من جديد بحقولها المعروفة فقط: أي حقل غريب أو نوع مجهول
+      // كان يُخزَّن في السجل للأبد، ويكسر apply() عند كل اللاعبين عند أي مزامنة
+      const a = ludoCleanAction(body.action, mySeat);
+      if (!a) return J({ error: 'حركة غير صالحة' }, 400);
+      // الحركات المرتبطة بصاحبها لا تُقبل إلا منه هو
+      if (LUDO_BY_ACTIONS.has(a.t) && a.by !== mySeat) return J({ error: 'مقعد غير مطابق' }, 403);
+      if (a.t === 'roll' && mySeat !== d.seat) return J({ error: 'ارمِ أول' }, 400);
+      if (a.t === 'declare' && mySeat !== d.seat) return J({ error: 'ما هو دورك' }, 403);
+      if ((a.t === 'nomove' || a.t === 'commit') && d.seat != null && mySeat !== d.seat) {
+        return J({ error: 'ما هو دورك' }, 403);
+      }
+      if (a.t === 'reveal') {
+        if (d.secret == null) return J({ error: 'ما فيه رمية' }, 400);
+        a.real = d.secret;              // الحقيقة من الخادم لا من العميل
+        d.revealed = true;
+      }
+      let liesLeft = null;
+      if (a.t === 'declare' && d.lieLimit !== -1) {
+        const lying = d.secret != null && a.v !== d.secret;
+        if (lying && (d.lies[mySeat] || 0) <= 0)
+          return J({ error: 'خلصت كذبتك — لازم تعلن الرقم الحقيقي', liesLeft: 0 }, 403);
+        if (lying) d.lies[mySeat] -= 1;
+        liesLeft = d.lies[mySeat];
+      }
+      if (d.actions.length > 4000) return J({ error: 'الجولة طويلة جدًا' }, 409);
+      d.actions.push(a);
+      // 'nomove' كذلك يُنهي الرمية — بدونها بقي القفل مغلقًا على اللاعب التالي
+      if (a.t === 'commit' || a.t === 'reveal' || a.t === 'veto' || a.t === 'nomove') {
+        d.secret = null; d.seat = null; d.rollAt = 0;
+      }
+      await this.save();
+      return J({ ok: true, n: d.actions.length, liesLeft });
+    }
+    return J({ error: 'unknown: ' + url.pathname }, 404);
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -5254,22 +6312,55 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        games: ['mafia', 'got', 'mawwih', 'fatin', 'daqash'],
+        games: ['mafia', 'got', 'mawwih', 'fatin', 'daqash', 'ludo'],
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
-          DAQASH_ROOM: !!env.DAQASH_ROOM,
+          DAQASH_ROOM: !!env.DAQASH_ROOM, LUDO_ROOM: !!env.LUDO_ROOM,
         },
       }), origin);
     }
 
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
     // حتى الانضمام لاحقًا بنفس الكود يوصل لنفس الغرفة دائمًا
-    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create' || url.pathname === '/daqash/room/create') {
+    // ── لودو: HTTP بدل WebSocket ──
+    const ludoCreate = url.pathname === '/ludo/room/create';
+    const ludoOp = url.pathname.match(/^\/ludo\/room\/([A-Z0-9]{6})\/(join|start|state|roll|reveal|action)$/i);
+    if (ludoCreate || ludoOp) {
+      if (!env.LUDO_ROOM) {
+        return withCors(new Response(
+          'binding-missing: أضف ربط LUDO_ROOM في wrangler.toml ثم أعد النشر', { status: 501 }), origin);
+      }
+      if (ludoCreate) {
+        const ip = request.headers.get('CF-Connecting-IP') || '';
+        if (!allowCreate(ip)) return withCors(new Response('too-many-rooms', { status: 429 }), origin);
+        let body;
+        try { body = await request.json(); } catch { return withCors(new Response('bad-json', { status: 400 }), origin); }
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const code = newRoomCode();
+          const stub = env.LUDO_ROOM.get(env.LUDO_ROOM.idFromName(code));
+          const resp = await stub.fetch(new Request(url.origin + '/create', {
+            method: 'POST', body: JSON.stringify({ ...body, roomCode: code }),
+          }));
+          if (resp.status !== 409) return withCors(resp, origin);
+        }
+        return withCors(new Response('تعذّر إنشاء غرفة، حاول مرة ثانية', { status: 503 }), origin);
+      }
+      const code = ludoOp[1].toUpperCase();
+      const stub = env.LUDO_ROOM.get(env.LUDO_ROOM.idFromName(code));
+      const resp = await stub.fetch(new Request(url.origin + '/room/' + code + '/' + ludoOp[2].toLowerCase() + url.search, {
+        method: request.method,
+        body: request.method === 'POST' ? await request.text() : undefined,
+      }));
+      return withCors(resp, origin);
+    }
+
+    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create') {
       const gameNS = url.pathname.startsWith('/got/') ? env.GOT_ROOM
                     : url.pathname.startsWith('/mawwih/') ? env.MAWWIH_ROOM
                     : url.pathname.startsWith('/fatin/') ? env.FATIN_ROOM
                     : url.pathname.startsWith('/daqash/') ? env.DAQASH_ROOM
+                    : url.pathname.startsWith('/walima/') ? env.WALIMA_ROOM
                     : env.MAFIA_ROOM;
       // بدون هذا الفحص يرمي الربطُ المفقود استثناءً فيرجع 500 بلا CORS،
       // ويظهر عند اللاعب كـ "Failed to fetch" بلا أي دلالة على السبب
@@ -5287,9 +6378,7 @@ export default {
       catch { return withCors(new Response('bad-json', { status: 400 }), origin); }
       // لو صادف الكود غرفة حيّة، نولّد غيره بدل ما نمسحها
       for (let attempt = 0; attempt < 6; attempt++) {
-        const code = Array.from({ length: 6 }, () =>
-          '23456789ABCDEFGHJKMNPQRSTUVWXYZ'[Math.floor(Math.random() * 32)]
-        ).join('');
+        const code = newRoomCode();
         const id = gameNS.idFromName(code);
         const stub = gameNS.get(id);
         const resp = await stub.fetch(new Request(url.origin + '/create', {
@@ -5302,10 +6391,11 @@ export default {
     }
 
     // الانضمام لغرفة موجودة بالكود، أو فتح اتصال WebSocket لغرفة قائمة
-    const match = url.pathname.match(/^\/(got|mawwih|fatin|daqash)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(got|mawwih|fatin|daqash|walima)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : env.MAFIA_ROOM;
+      if (!gameNS) return withCors(new Response('binding-missing: WALIMA_ROOM', { status: 501 }), origin);
       const code = match[2].toUpperCase();
       const id = gameNS.idFromName(code);
       const stub = gameNS.get(id);
@@ -5319,7 +6409,7 @@ export default {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، فَطِن، وداقش أونلاين — استوديو يا٧ · /health للفحص',
+      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، ولودو أونلاين — استوديو يا٧ · /health للفحص',
       { status: 200 }), origin);
   },
 };
