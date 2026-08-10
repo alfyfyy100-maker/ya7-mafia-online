@@ -2,6 +2,14 @@ name = "ya7-mafia-online"
 main = "worker.js"
 compatibility_date = "2025-01-01"
 
+# ═══════════════ ربطات الغرف (Durable Objects) ═══════════════
+# name       = ما يقرأه الكود عبر env.<name>
+# class_name = اسم الكلاس في worker.js — حسّاس لحالة الأحرف
+#
+# worker.js يصدّر هذه السبعة فقط. كان هنا ربط ثامن DAKHIL_ROOM لكلاس
+# DakhilRoom غير موجود في الملف (الدخيل على ووركر آخر)، وهو ما كان
+# يوقف النشر من أساسه.
+
 [[durable_objects.bindings]]
 name = "MAFIA_ROOM"
 class_name = "MafiaRoom"
@@ -21,3 +29,27 @@ class_name = "FatinRoom"
 [[durable_objects.bindings]]
 name = "DAQASH_ROOM"
 class_name = "DaqashRoom"
+
+[[durable_objects.bindings]]
+name = "WALIMA_ROOM"
+class_name = "WalimaRoom"
+
+[[durable_objects.bindings]]
+name = "LUDO_ROOM"
+class_name = "LudoRoom"
+
+# ═══════════════ الترحيلات (Migrations) ═══════════════
+# رانجلر يقول في سجل البناء إنه لا يجد الترحيل المسجَّل على الإصدار
+# المنشور، فيسقط على سلوكه الاحتياطي: «تطبيق كل الترحيلات المتاحة».
+# ومع القائمة الكاملة كان ذلك يعني إعادة إنشاء MafiaRoom الموجودة
+# أصلًا، فيفشل بالخطأ 10074.
+#
+# لذلك لم يبقَ هنا إلا الترحيل المطلوب فعلًا: «كل المتاح» = الكلاسان
+# الجديدان فقط، ولا شيء يمسّ الكلاسات القائمة.
+#
+# حذف الترحيلات القديمة لا يمسّ الغرف ولا بياناتها: الكلاسات منشأة
+# على الحساب من قبل، والترحيل مجرد أمر إنشاء يُنفَّذ مرة واحدة.
+
+[[migrations]]
+tag = "v8"
+new_sqlite_classes = ["WalimaRoom", "LudoRoom"]
