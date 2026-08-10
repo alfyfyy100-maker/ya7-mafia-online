@@ -6301,24 +6301,27 @@ export default {
       return new Response(null, { headers: corsFor(origin) });
     }
 
+    /* /health قبل حارس المصدر عمدًا: فتحه من شريط المتصفح لا يرسل Origin،
+       فكان الحارس يردّه بـ origin-not-allowed ويصير الفحص عديم الفائدة
+       وقت ما تحتاجه بالضبط. لا يكشف إلا وجود الربطات من عدمه. */
+    if (url.pathname === '/health') {
+      return withCors(Response.json({
+        ok: true,
+        version: 'v24',
+        bindings: {
+          MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
+          MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
+          DAQASH_ROOM: !!env.DAQASH_ROOM, WALIMA_ROOM: !!env.WALIMA_ROOM,
+          LUDO_ROOM: !!env.LUDO_ROOM,
+        },
+      }), origin);
+    }
+
     // ── حارس المصدر: يمنع أي طلب من خارج الموقع ──
     // لا بد من CORS حتى على الرفض، وإلا حجب المتصفحُ الردَّ وظهر
     // "Failed to fetch" بدل السبب الحقيقي.
     if (!isAllowedOrigin(origin)) {
       return withCors(new Response('origin-not-allowed: ' + (origin || 'بلا مصدر'), { status: 403 }), origin);
-    }
-
-    // فحص سريع للنسخة المنشورة: افتح هذا المسار في المتصفح
-    if (url.pathname === '/health') {
-      return withCors(Response.json({
-        ok: true,
-        games: ['mafia', 'got', 'mawwih', 'fatin', 'daqash', 'ludo'],
-        bindings: {
-          MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
-          MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
-          DAQASH_ROOM: !!env.DAQASH_ROOM, LUDO_ROOM: !!env.LUDO_ROOM,
-        },
-      }), origin);
     }
 
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
