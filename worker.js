@@ -855,6 +855,9 @@ export class MafiaRoom {
       p.alive = true;
       p.twinId = null;
       p.usedSave = false; p.usedPoison = false;
+      /* بدون تصفير المعلّق: لعبة انتهت والساحرة عندها إنقاذ معلّق تُحرق
+         قدرتها في اللعبة الجاية على لاعب ما اختارها */
+      p.pendingWitchSave = false; p.pendingWitchPoison = false;
       p.revengeTargetId = null;
     });
     // ربط التوأمين حسب الدور الفعلي بعد الخلط (مو حسب موضعهم قبله)
@@ -1015,6 +1018,12 @@ export class MafiaRoom {
 
     switch (player.role) {
       case 'mafia':
+        // بدون هذا: هدف غير صالح يُخزَّن كـ null، و allNightActionsIn
+        // ينتظر صوتًا ما يجي أبدًا فتعلّق الليلة على الجميع
+        if (!msg.targetId) {
+          this.sendPrivate(playerId, { type: 'error', message: 'اختر هدفًا حيًّا' });
+          return;
+        }
         na.mafiaVotes = na.mafiaVotes || {};
         na.mafiaVotes[playerId] = msg.targetId;
         break;
@@ -1087,10 +1096,14 @@ export class MafiaRoom {
     let killedByMafia = null;
     if (na.mafiaVotes && Object.keys(na.mafiaVotes).length) {
       const tally = {};
-      for (const t of Object.values(na.mafiaVotes)) tally[t] = (tally[t] || 0) + 1;
-      const max = Math.max(...Object.values(tally));
-      const top = Object.keys(tally).filter(k => tally[k] === max);
-      killedByMafia = top[Math.floor(Math.random() * top.length)];
+      // الصوت الفاضي كان يصير مفتاحًا اسمه "null" ويربح الأغلبية أحيانًا
+      for (const t of Object.values(na.mafiaVotes)) { if (!t) continue; tally[t] = (tally[t] || 0) + 1; }
+      const keys = Object.keys(tally);
+      if (keys.length) {
+        const max = Math.max(...keys.map(k => tally[k]));
+        const top = keys.filter(k => tally[k] === max);
+        killedByMafia = top[Math.floor(Math.random() * top.length)];
+      }
     }
 
     // نثبّت الفاحصين الحقيقيين قبل تنفيذ أي وفاة — عشان لا تُسلّم النتيجة لوريث ورث الدور توًّا
@@ -1361,8 +1374,26 @@ export class MafiaRoom {
 
   // صمام أمان: المضيف يقدر يفرض حسم المرحلة لو علقت (مثلًا لاعب انقطع وما رجع)
   async forceAdvance() {
-    if (this.room.phase === 'night') await this.resolveNight();
-    else if (this.room.phase === 'voting') await this.resolveVote();
+    if (this.room.phase === 'night') { await this.resolveNight(); return; }
+    if (this.room.phase === 'voting') { await this.resolveVote(); return; }
+    /* لو انقطع الحسم في نصّه بقيت الغرفة على طور مؤقّت ما يستقبل شيئًا —
+       المضيف يقدر يخرجها منه بدل ما تموت الجلسة */
+    if (this.room.phase === 'resolvingNight') {
+      this.room.phase = 'day';
+      this.room.nightActions = {};
+      await this.persist();
+      this.broadcastPublic({ type: 'dawnResult', dayNum: this.room.dayNum, deaths: this.room.lastDeaths || [] });
+      this.broadcastLobby();
+    } else if (this.room.phase === 'resolvingVote') {
+      this.room.dayNum++;
+      this.room.phase = 'night';
+      this.room.nightActions = {};
+      this.autoBotNightActions();
+      await this.persist();
+      this.broadcastPublic({ type: 'phaseChanged', phase: 'night', dayNum: this.room.dayNum });
+      this.sendAvengerInfo();
+      if (this.allNightActionsIn()) await this.resolveNight();
+    }
   }
 
   broadcastPublic(payload) {
@@ -3287,16 +3318,36 @@ const MAWWIH_TEAMS = ['الذهبي', 'الأزرق', 'الأخضر', 'البن�
 
 // ألقاب النهاية — لقب واحد لكل لاعب بالأولوية، بصيغة تناسب ولد/بنت
 const MAWWIH_TITLES = [
-  { m: 'أبو الحيَل', f: 'أم الحيَل', pick: (p, st) => p.sweeps > 0 },
-  { m: 'الثعلب',      f: 'الثعلبة',      pick: (p, st) => p.fool > 0 && p.fool === st.maxFool },
-  { m: 'جوجل القبيلة',      f: 'جوجل القبيلة',      pick: (p, st) => p.right > 0 && p.right === st.maxRight },
-  { m: 'أسطورة الجولة',      f: 'أسطورة الجولة',      pick: (p, st) => p.best >= 3 },
-  { m: 'ما يفوته شي',      f: 'ما يفوتها شي',      pick: (p, st) => st.played >= 3 && p.right === st.played },
-  { m: 'الثابت',     f: 'الثابتة',     pick: (p, st) => st.played >= 3 && p.zeros === 0 },
-  { m: 'ذيبان ما يمشي عليه',      f: 'أميرة ما ينساق عليها',      pick: (p, st) => st.played >= 3 && p.fell === 0 },
-  { m: 'الساذج',    f: 'الساذجة',    pick: (p, st) => p.fell > 0 && p.fell === st.maxFell },
-  { m: 'بريء بزيادة',      f: 'بريئة بزيادة',      pick: (p, st) => p.fool === 0 && p.right > 0 },
-  { m: 'كتاب مفتوح',     f: 'كتاب مفتوح',     pick: (p, st) => p.fool === 0 },
+  { m: 'أبو الحيَل', f: 'أم الحيَل',
+    dm: 'خدع كل اللاعبين بإجابة مزيّفة في جولة وحدة.', df: 'خدعت كل اللاعبين بإجابة مزيّفة في جولة وحدة.',
+    pick: (p, st) => p.sweeps > 0 },
+  { m: 'الثعلب', f: 'الثعلبة',
+    dm: 'أكثر واحد صدّقوا إجاباته المزيّفة.', df: 'أكثر وحدة صدّقوا إجاباتها المزيّفة.',
+    pick: (p, st) => p.fool > 0 && p.fool === st.maxFool },
+  { m: 'جوجل القبيلة', f: 'جوجل القبيلة',
+    dm: 'أكثر واحد عرف الإجابة الصحيحة.', df: 'أكثر وحدة عرفت الإجابة الصحيحة.',
+    pick: (p, st) => p.right > 0 && p.right === st.maxRight },
+  { m: 'أسطورة الجولة', f: 'أسطورة الجولة',
+    dm: 'طلع بثلاث نقاط أو أكثر في جولة وحدة.', df: 'طلعت بثلاث نقاط أو أكثر في جولة وحدة.',
+    pick: (p, st) => p.best >= 3 },
+  { m: 'ما يفوته شي', f: 'ما يفوتها شي',
+    dm: 'أصاب الصح في كل جولة، بدون ما يفوته شي.', df: 'أصابت الصح في كل جولة، بدون ما يفوتها شي.',
+    pick: (p, st) => st.played >= 3 && p.right === st.played },
+  { m: 'الثابت', f: 'الثابتة',
+    dm: 'ما مرّت عليه ولا جولة بصفر نقاط.', df: 'ما مرّت عليها ولا جولة بصفر نقاط.',
+    pick: (p, st) => st.played >= 3 && p.zeros === 0 },
+  { m: 'ذيبان ما يمشي عليه', f: 'أميرة ما ينساق عليها',
+    dm: 'ما صدّق ولا إجابة مزيّفة طول اللعبة.', df: 'ما صدّقت ولا إجابة مزيّفة طول اللعبة.',
+    pick: (p, st) => st.played >= 3 && p.fell === 0 },
+  { m: 'الساذج', f: 'الساذجة',
+    dm: 'أكثر واحد وقع في الإجابات المزيّفة.', df: 'أكثر وحدة وقعت في الإجابات المزيّفة.',
+    pick: (p, st) => p.fell > 0 && p.fell === st.maxFell },
+  { m: 'بريء بزيادة', f: 'بريئة بزيادة',
+    dm: 'يعرف الصح، بس ما خدع ولا واحد.', df: 'تعرف الصح، بس ما خدعت ولا واحد.',
+    pick: (p, st) => p.fool === 0 && p.right > 0 },
+  { m: 'كتاب مفتوح', f: 'كتاب مفتوح',
+    dm: 'ولا أحد صدّق إجاباته المزيّفة.', df: 'ولا أحد صدّق إجاباتها المزيّفة.',
+    pick: (p, st) => p.fool === 0 },
 ];
 
 export class MawwihRoom {
@@ -3432,7 +3483,13 @@ export class MawwihRoom {
     }
     if (msg.type === 'updateSettings' && playerId === this.room.hostId) {
       // حدود صريحة — كانت أي مصفوفة/رقم يُقبل ويُخزَّن للأبد
-      if (Array.isArray(msg.cats)) this.room.cats = msg.cats.slice(0, 40).map(c => cleanText(c, 40));
+      if (Array.isArray(msg.cats)) {
+        // أرقام فئات فقط، داخل مدى البنك — قبل كذا كانت تُخزَّن نصوصاً بدون تحقق فتوقف الغرفة
+        const picked = msg.cats.map(c => parseInt(c, 10))
+          .filter(c => Number.isInteger(c) && c >= 0 && c < BANK.length);
+        this.room.cats = [...new Set(picked)].slice(0, BANK.length);
+        if (!this.room.cats.length) this.room.cats = BANK.map((_, i) => i);
+      }
       if (Number.isInteger(msg.rounds)) this.room.rounds = Math.min(Math.max(msg.rounds, 1), 20);
       if ([0, 2, 3, 4].includes(msg.teams)) {
         this.room.teams = msg.teams;
@@ -3531,7 +3588,7 @@ export class MawwihRoom {
     const out = {};
     for (const p of this.room.players) {
       const t = MAWWIH_TITLES.find(x => x.pick({ fool: p.fool || 0, fell: p.fell || 0, right: p.right || 0, best: p.best || 0, zeros: p.zeros || 0, sweeps: p.sweeps || 0 }, st));
-      if (t) out[p.id] = p.gender === 'f' ? t.f : t.m;
+      if (t) out[p.id] = { label: p.gender === 'f' ? t.f : t.m, desc: p.gender === 'f' ? t.df : t.dm };
     }
     return out;
   }
@@ -3578,8 +3635,8 @@ export class MawwihRoom {
       this.advanceChooser();
     }
     const avail = this.room.cats.filter(ci => BANK[ci][1].some((_, qi) => !this.room.used.includes(ci + ':' + qi)));
-    const pool = avail.length >= 3 ? avail : (this.room.used = [], this.room.cats.slice());
-    const choices = shuffleArr(pool.slice()).slice(0, Math.min(3, pool.length));
+    const pool = avail.length >= 5 ? avail : (this.room.used = [], this.room.cats.slice());
+    const choices = shuffleArr(pool.slice()).slice(0, Math.min(5, pool.length));
     this.room.choices = choices;
     this.room.phase = 'picking';
     await this.persist();
@@ -3730,11 +3787,11 @@ export class MawwihRoom {
     await this.persist();
     const titles = this.titlesFor();
     const teams = this.teamsOn() ? this.teamTotals() : null;
-    if (teams) teams.forEach(t => { t.members.forEach(m => { m.title = titles[m.id] || null; }); });
+    if (teams) teams.forEach(t => { t.members.forEach(m => { const ti = titles[m.id]; m.title = ti ? ti.label : null; m.titleDesc = ti ? ti.desc : null; }); });
     this.broadcastPublic({
       type: 'gameOver',
       players: [...this.room.players].sort((a, b) => b.score - a.score)
-        .map(p => ({ id: p.id, name: p.name, score: p.score, title: titles[p.id] || null })),
+        .map(p => { const ti = titles[p.id]; return { id: p.id, name: p.name, score: p.score, title: ti ? ti.label : null, titleDesc: ti ? ti.desc : null }; }),
       teams,
     });
   }
@@ -5114,6 +5171,8 @@ const sanitizeDaqashConfig = (raw) => {
     turnSec: Number.isInteger(turn) ? Math.min(Math.max(turn, 15), 60) : 25,
     // الفوز عند رصيد معيّن — صفر يعني اللعب مستمر حتى ما يبقى إلا واحد
     target: DQ_TARGETS.includes(Number(r.target)) ? Number(r.target) : 0,
+    // كشف أوراق من بقي في اليد عند نهايتها — حتى لو رضوا كلهم بالتوزيع
+    openCards: r.openCards === undefined ? true : !!r.openCards,
   };
 };
 
@@ -5336,6 +5395,9 @@ export class DaqashRoom {
       /* الربح صافيًا: كان يُعرض إجماليًا فيرى اللاعب «+٥٠٠٠» ورصيده
          ما تحرّك — لأن الخمسة آلاف هي رهانه نفسه راجعًا من القدر */
       base.gain = h.gains ? ((h.gains[i] || 0) - (h.bets[i] || 0)) : 0;
+      /* المبلغ اللي وصله فعلًا من القدر — الصافي وحده كان يخفي التوزيع:
+         من أخذ ٥٠٠٠ وكان رهانه ٥٠٠٠ يشوف صفر وكأن ما أحد عطاه شي */
+      base.took = h.gains ? (h.gains[i] || 0) : 0;
 
       const showCards = i === vIdx || (revealAll && (h.shown || []).includes(i));
       base.cards = showCards && inHand ? h.cards[i] : null;
@@ -5870,7 +5932,7 @@ export class DaqashRoom {
       h.gains[w] = h.pot;
       h.winners = [w];
       h.prize = h.pot;
-      h.phase = 'reveal'; h.revealed = true; h.shown = [];
+      h.phase = 'reveal'; h.revealed = true; h.shown = L.slice();
       h.title = this.room.players[w].name + ' بقي لحاله وأخذ القدر — ' + h.pot;
       this.bump(); this.armRevealTimer();
       return;
@@ -5987,8 +6049,10 @@ export class DaqashRoom {
         h.gains[i] = h.offer[i];
       });
       h.winners = this.live(h).filter(i => h.offer[i] > 0);
-      h.revealed = false;
-      h.shown = [];
+      // الأوراق تنكشف بعد إقفال التوزيع — القرار انتهى فما تتأثر اللعبة،
+      // واللاعبون كانوا يشتكون إنهم ما يشوفون على وش راضوا
+      h.revealed = !!cfg.openCards;
+      h.shown = cfg.openCards ? this.live(h) : [];
       h.phase = 'reveal';
       h.title = 'رضوا كلهم — ' + this.room.players[h.dealerIdx].name
         + ' أخذ ' + h.offer[h.dealerIdx] + ' بلا كشف';
@@ -6134,7 +6198,8 @@ applyRoomCommon(DaqashRoom);
 const LUDO_MAX_PLAYERS = 4;
 const LUDO_ROLL_LOCK_MS = 90 * 1000;      // بعدها تُعتبر الرمية مهجورة
 const LUDO_CARDS = ['freeze', 'shield', 'push', 'swap'];   // مطابقة CARDS في ludo/index.html
-const LUDO_BY_ACTIONS = new Set(['pick', 'reveal', 'veto', 'card']);
+const LUDO_SKINS = ['classic', 'disc', 'gem', 'hex'];      // مطابقة SKINS في ludo/index.html
+const LUDO_BY_ACTIONS = new Set(['pick', 'reveal', 'veto', 'card', 'skin']);
 
 // عدد صحيح داخل مدى، أو null
 function ludoInt(v, min, max) {
@@ -6157,6 +6222,11 @@ function ludoCleanAction(raw, mySeat) {
       const by = seat(raw.by);
       if (by === null || !LUDO_CARDS.includes(raw.kind)) return null;
       return { t: 'pick', by, kind: raw.kind };
+    }
+    case 'skin': {   // شكل الحجر — يشوفه الجميع، فيمرّ في سجل الأحداث
+      const by = seat(raw.by);
+      if (by === null || !LUDO_SKINS.includes(raw.skin)) return null;
+      return { t: 'skin', by, skin: raw.skin };
     }
     case 'declare': {
       const v = ludoInt(raw.v, 1, 6), i = piece(raw.i);
@@ -6377,6 +6447,9 @@ const sanitizeDakhilBools = makeConfigSanitizer(
 
 function sanitizeDakhilConfig(raw) {
   const out = sanitizeDakhilBools(raw);
+  /* تخمين الدخيل مفعّل افتراضيًا مثل وضع الجهاز الواحد — كان يبدأ مطفأً
+     أونلاين فقط، فالغرف الجديدة تلعب بلا شاشة التخمين إلا لو انتبه المضيف */
+  out.guessOn = raw && Object.prototype.hasOwnProperty.call(raw, 'guessOn') ? !!raw.guessOn : true;
   const cat = raw && typeof raw.catKey === 'string' ? raw.catKey : '';
   out.catKey = DK_CATS.includes(cat) ? cat : DK_CATS[0];
   out.customWord = cleanText(raw && raw.customWord, 24);
