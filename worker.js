@@ -6358,6 +6358,7 @@ export class LudoRoom {
         return J({ error: 'مو دورك — فيه رمية معلّقة' }, 403);
       }
       d.rollAt = Date.now();
+      d.declared = false;
       d.secret = 1 + Math.floor(Math.random() * 6);
       d.seat = mySeat;
       d.revealed = false;
@@ -6382,7 +6383,12 @@ export class LudoRoom {
       // الحركات المرتبطة بصاحبها لا تُقبل إلا منه هو
       if (LUDO_BY_ACTIONS.has(a.t) && a.by !== mySeat) return J({ error: 'مقعد غير مطابق' }, 403);
       if (a.t === 'roll' && mySeat !== d.seat) return J({ error: 'ارمِ أول' }, 400);
-      if (a.t === 'declare' && mySeat !== d.seat) return J({ error: 'ما هو دورك' }, 403);
+      if (a.t === 'declare') {
+        if (mySeat !== d.seat) return J({ error: 'ما هو دورك' }, 403);
+        // إعلان ثانٍ لنفس الرمية (ضغطة مكرّرة أو إعادة إرسال) كان يخصم
+        // كذبة ثانية ويضيف حركة ثانية إلى السجل
+        if (d.declared) return J({ error: 'أعلنت رقمك' }, 409);
+      }
       if ((a.t === 'nomove' || a.t === 'commit') && d.seat != null && mySeat !== d.seat) {
         return J({ error: 'ما هو دورك' }, 403);
       }
@@ -6402,8 +6408,9 @@ export class LudoRoom {
       if (d.actions.length > 4000) return J({ error: 'الجولة طويلة جدًا' }, 409);
       d.actions.push(a);
       // 'nomove' كذلك يُنهي الرمية — بدونها بقي القفل مغلقًا على اللاعب التالي
+      if (a.t === 'declare') d.declared = true;
       if (a.t === 'commit' || a.t === 'reveal' || a.t === 'veto' || a.t === 'nomove') {
-        d.secret = null; d.seat = null; d.rollAt = 0;
+        d.secret = null; d.seat = null; d.rollAt = 0; d.declared = false;
       }
       await this.save();
       return J({ ok: true, n: d.actions.length, liesLeft });
@@ -7151,7 +7158,7 @@ export class DakhilRoom {
 applyRoomCommon(DakhilRoom);
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const origin = request.headers.get('Origin');
 
@@ -7165,12 +7172,14 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v25',
+        version: 'v33',
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
           DAQASH_ROOM: !!env.DAQASH_ROOM, WALIMA_ROOM: !!env.WALIMA_ROOM,
           LUDO_ROOM: !!env.LUDO_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
+          DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET,
+          ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
         },
       }), origin);
     }
@@ -7180,6 +7189,11 @@ export default {
     // "Failed to fetch" بدل السبب الحقيقي.
     if (!isAllowedOrigin(origin)) {
       return withCors(new Response('origin-not-allowed: ' + (origin || 'بلا مصدر'), { status: 403 }), origin);
+    }
+
+    // ── الحسابات: يوزر + رمز استرجاع (D1) ──
+    if (url.pathname.startsWith('/account/')) {
+      return handleAccount(request, env, url, ctx);
     }
 
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
@@ -7284,3 +7298,645 @@ export default {
       { status: 200 }), origin);
   },
 };
+
+/* ============================================================================
+   YA7 ACCOUNTS v3  —  يطابق عقد صفحة /account/index.html الموجودة
+   ----------------------------------------------------------------------------
+   الفروق عن v2: كل المسارات POST، التوكن داخل جسم الطلب، شكل الرد {ok, player},
+   ورمز الاسترجاع مشفّر (قابل للفك) بدل هاش حتى يعمل زر "أظهر رمزي".
+
+   الأسرار المطلوبة (wrangler secret put — لا تضعها في wrangler.toml):
+     ACCOUNT_SECRET     توقيع التوكنات
+     ACCOUNT_CODE_KEY   تشفير رمز الاسترجاع والإيميل
+   ========================================================================== */
+
+const ACCOUNTS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS players (
+  device_id       TEXT PRIMARY KEY,
+  username        TEXT,
+  username_norm   TEXT,
+  display_name    TEXT NOT NULL DEFAULT '',
+  avatar          TEXT NOT NULL DEFAULT '',
+  code_cipher     TEXT,
+  code_lookup     TEXT,
+  contact_cipher  TEXT,
+  wins            INTEGER NOT NULL DEFAULT 0,
+  losses          INTEGER NOT NULL DEFAULT 0,
+  games_played    INTEGER NOT NULL DEFAULT 0,
+  best_streak     INTEGER NOT NULL DEFAULT 0,
+  cur_streak      INTEGER NOT NULL DEFAULT 0,
+  username_set_at INTEGER,
+  token_ver       INTEGER NOT NULL DEFAULT 1,
+  visit_streak      INTEGER NOT NULL DEFAULT 0,
+  best_visit_streak INTEGER NOT NULL DEFAULT 0,
+  last_visit_day    INTEGER,
+  created_at      INTEGER NOT NULL,
+  last_seen       INTEGER NOT NULL,
+  banned          INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_players_username
+  ON players(username_norm) WHERE username_norm IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_players_code
+  ON players(code_lookup) WHERE code_lookup IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_players_seen ON players(last_seen);
+
+CREATE TABLE IF NOT EXISTS username_holds (
+  username_norm TEXT PRIMARY KEY,
+  device_id     TEXT NOT NULL,
+  until         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_holds_until ON username_holds(until);
+
+CREATE TABLE IF NOT EXISTS rate_limits (
+  k        TEXT PRIMARY KEY,
+  n        INTEGER NOT NULL,
+  reset_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rate_reset ON rate_limits(reset_at);
+`;
+
+const ACC = {
+  USER_MIN: 3,
+  USER_MAX: 16,
+  NAME_MAX: 24,
+  CHANGE_COOLDOWN_MS: 30 * 24 * 60 * 60 * 1000,
+  HOLD_MS: 30 * 24 * 60 * 60 * 1000,
+  CODE_ALPHABET: 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789', // 32 حرفاً بالضبط
+  CODE_LEN: 10,
+  MAX_BODY: 4096,
+  SEEN_THROTTLE_MS: 5 * 60 * 1000,
+};
+
+const RESERVED_USERNAMES = [
+  'ya7', 'ya7studio', 'ya7game', 'ya7games', 'yaseven', 'ya7official',
+  'playsmart', 'playsmart2030',
+  'admin', 'administrator', 'adm', 'sysadmin', 'root', 'superuser', 'super',
+  'owner', 'staff', 'team', 'mod', 'mods', 'moderator', 'moderators',
+  'system', 'sys', 'server', 'service', 'services', 'official', 'support',
+  'help', 'helpdesk', 'contact', 'info', 'security', 'abuse', 'billing',
+  'noreply', 'nobody', 'anonymous', 'anon', 'guest', 'user', 'users',
+  'test', 'testing', 'demo', 'null', 'undefined', 'none', 'deleted',
+  'api', 'www', 'app', 'web', 'cdn', 'static', 'assets', 'auth', 'login',
+  'logout', 'signup', 'register', 'account', 'accounts', 'profile',
+  'settings', 'dashboard', 'console', 'bot', 'bots', 'webhook',
+  'mafia', 'khawana', 'dakhil', 'walima', 'ludo', 'daqash', 'mawwih',
+  'fatin', 'fateel', 'kalimat', 'sukoon', 'snake', 'ramad', 'murawagha',
+  'liar', 'juraa', 'island', 'throne', 'westeros', 'darbah', 'guest13',
+];
+
+/* القصيرة تُطابق ككلمة كاملة فقط — الفحص بالتضمين كان يحظر Nikos و Essex */
+const BANNED_EXACT = ['kos', 'sex', 'kkk', 'ass'];
+const BANNED_SUBSTRINGS = [
+  'fuck', 'shit', 'bitch', 'cunt', 'whore', 'slut', 'rape', 'nigg',
+  'faggot', 'retard', 'pussy', 'penis', 'vagina', 'porn', 'dick',
+  'nazi', 'hitler', 'isis', 'daesh',
+  'sharmot', 'sharmoot', 'gahba', 'kahba', 'khara', '9ahba',
+];
+
+/* ------------------------------ أدوات ------------------------------ */
+
+const te = new TextEncoder();
+const td = new TextDecoder();
+
+function timingSafeEqual(a, b) {
+  const A = te.encode(String(a)), B = te.encode(String(b));
+  let diff = A.length ^ B.length;
+  const n = Math.max(A.length, B.length);
+  for (let i = 0; i < n; i++) diff |= (A[i] || 0) ^ (B[i] || 0);
+  return diff === 0;
+}
+
+function b64urlFromBytes(bytes) {
+  let s = '';
+  const v = new Uint8Array(bytes);
+  for (let i = 0; i < v.length; i++) s += String.fromCharCode(v[i]);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function bytesFromB64url(str) {
+  const s = String(str).replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(s + '='.repeat((4 - (s.length % 4)) % 4));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function hmac(secret, msg) {
+  const key = await crypto.subtle.importKey(
+    'raw', te.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+  );
+  return b64urlFromBytes(await crypto.subtle.sign('HMAC', key, te.encode(msg)));
+}
+
+/* مفتاح AES مشتق من السر — يُخزَّن مؤقتاً لتفادي الاشتقاق في كل طلب */
+let _aesKey = null, _aesFrom = null;
+async function aesKey(secret) {
+  if (_aesKey && _aesFrom === secret) return _aesKey;
+  const raw = await crypto.subtle.digest('SHA-256', te.encode('ya7-code-key:' + secret));
+  _aesKey = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+  _aesFrom = secret;
+  return _aesKey;
+}
+
+async function encryptText(secret, plain) {
+  const key = await aesKey(secret);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, te.encode(plain));
+  const both = new Uint8Array(iv.length + ct.byteLength);
+  both.set(iv, 0); both.set(new Uint8Array(ct), iv.length);
+  return b64urlFromBytes(both);
+}
+
+async function decryptText(secret, packed) {
+  try {
+    const key = await aesKey(secret);
+    const raw = bytesFromB64url(packed);
+    if (raw.length < 13) return null;
+    const iv = raw.slice(0, 12), ct = raw.slice(12);
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return td.decode(pt);
+  } catch { return null; }
+}
+
+/* فهرس أعمى: يسمح بإيجاد الصف من الرمز بدون فك تشفير كل الصفوف */
+async function blindIndex(secret, value) {
+  return hmac(secret, 'idx:' + value);
+}
+
+function makeCode() {
+  const A = ACC.CODE_ALPHABET;                       // 32 حرفاً => (byte & 31) بلا انحياز
+  const bytes = crypto.getRandomValues(new Uint8Array(ACC.CODE_LEN));
+  let out = '';
+  for (let i = 0; i < ACC.CODE_LEN; i++) out += A[bytes[i] & 31];
+  return out.slice(0, 5) + '-' + out.slice(5);
+}
+
+function makeDeviceId() {
+  return b64urlFromBytes(crypto.getRandomValues(new Uint8Array(16)));
+}
+
+/* رقم اليوم بتوقيت الرياض (UTC+3 بلا توقيت صيفي).
+   بـ UTC كان من يدخل الساعة ٢ فجرًا يُحسب على اليوم السابق فتنكسر
+   سلسلته وهو داخل يوميًا فعلًا — وهذا يبدو ظلمًا بلا سبب. */
+const RIYADH_OFFSET_MS = 3 * 60 * 60 * 1000;
+function riyadhDay(ms) {
+  return Math.floor((ms + RIYADH_OFFSET_MS) / 86400000);
+}
+
+/* يحدّث سلسلة الدخول ويعيد القيم الجديدة. لا يعتمد على recordResult
+   إطلاقًا: الزيارة شيء يعرفه الخادم بنفسه، فتشتغل من أول يوم. */
+async function touchVisit(env, row, now) {
+  const today = riyadhDay(now);
+  const last = row.last_visit_day;
+  if (last === today) return { streak: row.visit_streak, best: row.best_visit_streak, isNewDay: false };
+
+  const streak = (last === today - 1) ? (row.visit_streak || 0) + 1 : 1;
+  const best = Math.max(streak, row.best_visit_streak || 0);
+  try {
+    await env.DB.prepare(
+      `UPDATE players SET visit_streak = ?2, best_visit_streak = ?3,
+                          last_visit_day = ?4, last_seen = ?5
+       WHERE device_id = ?1`
+    ).bind(row.device_id, streak, best, today, now).run();
+  } catch { return { streak: row.visit_streak || 0, best: row.best_visit_streak || 0, isNewDay: false }; }
+  return { streak, best, isNewDay: true };
+}
+
+/* --------------------- تحقق اليوزر والاسم --------------------- */
+
+const normUsername = (u) => String(u).toLowerCase();
+
+function visualNorm(u) {
+  return String(u).toLowerCase()
+    .replace(/[il|]/g, '1').replace(/o/g, '0').replace(/s/g, '5')
+    .replace(/[a@]/g, '4').replace(/e/g, '3').replace(/t/g, '7')
+    .replace(/b/g, '8').replace(/g/g, '9');
+}
+
+function validateUsername(raw) {
+  if (typeof raw !== 'string') return { ok: false, ar: 'اليوزر غير صالح' };
+  const u = raw.trim();
+  if (u.length < ACC.USER_MIN) return { ok: false, ar: 'اليوزر لازم ٣ خانات فأكثر' };
+  if (u.length > ACC.USER_MAX) return { ok: false, ar: 'اليوزر أطول من ' + ACC.USER_MAX + ' خانة' };
+  if (!/^[A-Za-z0-9]+$/.test(u)) return { ok: false, ar: 'إنجليزي وأرقام فقط، بدون رموز' };
+  if (!/[A-Za-z]/.test(u)) return { ok: false, ar: 'لازم يحتوي حرفاً واحداً على الأقل' };
+
+  const norm = normUsername(u), vis = visualNorm(u);
+  for (const r of RESERVED_USERNAMES)
+    if (norm === r || vis === visualNorm(r)) return { ok: false, ar: 'هذا اليوزر محجوز' };
+  for (const b of BANNED_EXACT)
+    if (norm === b || vis === visualNorm(b)) return { ok: false, ar: 'اليوزر غير مسموح' };
+  for (const b of BANNED_SUBSTRINGS)
+    if (norm.includes(b) || vis.includes(visualNorm(b))) return { ok: false, ar: 'اليوزر غير مسموح' };
+  return { ok: true, username: u, norm };
+}
+
+/* الاسم حر تماماً، لكن محارف التحكم والاتجاه تُزال (بند م-٣ المؤجل) */
+function sanitizeDisplayName(raw) {
+  if (typeof raw !== 'string') return '';
+  let s = raw
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const chars = Array.from(s);
+  if (chars.length > ACC.NAME_MAX) s = chars.slice(0, ACC.NAME_MAX).join('');
+  return s;
+}
+
+/* --------------------------- الحد من المعدل --------------------------- */
+
+async function rateLimit(env, key, limit, windowMs, failClosed = false) {
+  const now = Date.now();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO rate_limits (k, n, reset_at) VALUES (?1, 1, ?2)
+       ON CONFLICT(k) DO UPDATE SET
+         n = CASE WHEN rate_limits.reset_at < ?3 THEN 1 ELSE rate_limits.n + 1 END,
+         reset_at = CASE WHEN rate_limits.reset_at < ?3 THEN ?2 ELSE rate_limits.reset_at END`
+    ).bind(key, now + windowMs, now).run();
+    const row = await env.DB.prepare('SELECT n FROM rate_limits WHERE k = ?1').bind(key).first();
+    return !row || row.n <= limit;
+  } catch { return !failClosed; }
+}
+
+function clientKey(request) {
+  const ip = request.headers.get('CF-Connecting-IP') || '';
+  if (!ip) return 'noip:' + (request.headers.get('CF-Ray') || Math.random());
+  if (ip.includes(':')) return ip.split(':').slice(0, 4).join(':');
+  return ip;
+}
+
+async function maybeCleanup(env, ctx) {
+  if (Math.random() > 0.02) return;
+  const job = (async () => {
+    const now = Date.now();
+    try {
+      await env.DB.prepare('DELETE FROM rate_limits WHERE reset_at < ?1').bind(now).run();
+      await env.DB.prepare('DELETE FROM username_holds WHERE until < ?1').bind(now).run();
+    } catch {}
+  })();
+  if (ctx && ctx.waitUntil) ctx.waitUntil(job); else await job;
+}
+
+/* ------------------------------- التوكن ------------------------------- */
+/* يحمل رقم إصدار: رفعه (تسجيل الخروج) يبطل كل التوكنات القديمة فوراً */
+
+async function issueToken(env, deviceId, ver) {
+  const v = Number(ver) || 1;
+  return deviceId + '.' + v + '.' + await hmac(env.ACCOUNT_SECRET, 'v3:' + deviceId + ':' + v);
+}
+
+async function verifyToken(env, token) {
+  if (typeof token !== 'string' || token.length > 256) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [deviceId, verStr, sig] = parts;
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(deviceId)) return null;
+  if (!/^[0-9]{1,9}$/.test(verStr)) return null;
+  const ver = Number(verStr);
+  const expect = await hmac(env.ACCOUNT_SECRET, 'v3:' + deviceId + ':' + ver);
+  return timingSafeEqual(sig, expect) ? { deviceId, ver } : null;
+}
+
+async function authFromBody(env, body) {
+  const parsed = await verifyToken(env, body && body.token);
+  if (!parsed) return null;
+  const row = await env.DB.prepare('SELECT * FROM players WHERE device_id = ?1')
+    .bind(parsed.deviceId).first();
+  if (!row || row.banned) return null;
+  if (Number(row.token_ver || 1) !== parsed.ver) return null;
+  return row;
+}
+
+/* ------------------------------- الردود ------------------------------- */
+
+/* يعيد استخدام corsFor/isAllowedOrigin الموجودتين في الـ worker بدل قائمة
+   مصادر ثانية تتفرّع عنهما مع الوقت */
+function corsHeaders(request) {
+  const origin = request.headers.get('Origin');
+  return Object.assign(
+    { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+    corsFor(origin)
+  );
+}
+
+const J = (request, obj, status = 200) =>
+  new Response(JSON.stringify(obj), { status, headers: corsHeaders(request) });
+
+const fail = (request, error, ar, status = 200) =>
+  J(request, ar ? { ok: false, error, ar } : { ok: false, error }, status);
+
+/* السقف يُفرض على التدفق: ترويسة Content-Length اختيارية، وطلب chunked
+   بلا ترويسة كان يحمّل الجسم كله في ذاكرة الـ Worker قبل أي فحص. */
+async function readBody(request) {
+  const declared = Number(request.headers.get('Content-Length') || 0);
+  if (declared > ACC.MAX_BODY) return null;
+  if (!request.body) return null;
+  const reader = request.body.getReader();
+  const chunks = []; let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > ACC.MAX_BODY) { try { await reader.cancel(); } catch {} return null; }
+      chunks.push(value);
+    }
+  } catch { return null; }
+  const buf = new Uint8Array(total); let off = 0;
+  for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
+  try {
+    const v = JSON.parse(td.decode(buf));
+    return (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
+  } catch { return null; }
+}
+
+/* الصفحة تقرأ: username, display_name, avatar, games, wins */
+function playerOf(row) {
+  return {
+    username: row.username || '',
+    display_name: row.display_name || '',
+    avatar: row.avatar || '',
+    games: row.games_played,
+    wins: row.wins,
+    losses: row.losses,
+    streak: row.cur_streak,
+    best_streak: row.best_streak,
+    visit_streak: row.visit_streak || 0,
+    best_visit_streak: row.best_visit_streak || 0,
+    has_contact: !!row.contact_cipher,
+    can_change_username_at: row.username_set_at
+      ? row.username_set_at + ACC.CHANGE_COOLDOWN_MS : null,
+  };
+}
+
+async function isUsernameTaken(env, norm, myDeviceId, now) {
+  const hit = await env.DB.prepare('SELECT device_id FROM players WHERE username_norm = ?1')
+    .bind(norm).first();
+  if (hit && hit.device_id !== myDeviceId) return true;
+  const hold = await env.DB.prepare('SELECT device_id, until FROM username_holds WHERE username_norm = ?1')
+    .bind(norm).first();
+  if (hold && hold.until > now && hold.device_id !== myDeviceId) return true;
+  return false;
+}
+
+const cleanAvatar = (v, fallback) =>
+  (typeof v === 'string' && /^a([0-9]|1[0-4])$/.test(v)) ? v : fallback;
+
+/* ------------------------------ المسارات ------------------------------ */
+/*  في fetch() الرئيسي:
+      if (url.pathname.startsWith('/account/'))
+        return handleAccount(request, env, url, ctx);
+*/
+async function handleAccount(request, env, url, ctx) {
+  if (request.method !== 'POST')
+    return fail(request, 'method', 'الطريقة غير مدعومة', 405);
+  if (!env.DB) return fail(request, 'binding-missing');
+  if (!env.ACCOUNT_SECRET || !env.ACCOUNT_CODE_KEY) return fail(request, 'binding-missing');
+
+  const path = url.pathname.slice('/account/'.length).replace(/\/+$/, '');
+  const ip = clientKey(request);
+  const now = Date.now();
+  await maybeCleanup(env, ctx);
+
+  const body = await readBody(request);
+  if (!body) return fail(request, 'db', 'طلب غير صالح');
+
+  /* ---------- فحص توفر اليوزر أثناء الكتابة ---------- */
+  if (path === 'check') {
+    if (!await rateLimit(env, 'chk:' + ip, 90, 60 * 1000))
+      return J(request, { ok: false, error: 'rate', available: false, reason: 'محاولات كثيرة، انتظر شوي' });
+    const v = validateUsername(body.username);
+    if (!v.ok) return J(request, { ok: true, available: false, reason: v.ar });
+    if (await isUsernameTaken(env, v.norm, null, now))
+      return J(request, { ok: true, available: false, reason: 'الاسم محجوز، اختر غيره' });
+    return J(request, { ok: true, available: true });
+  }
+
+  /* ---------- إنشاء حساب: هوية + يوزر + رمز استرجاع في خطوة واحدة ---------- */
+  if (path === 'register') {
+    if (!await rateLimit(env, 'reg:' + ip, 6, 60 * 60 * 1000))
+      return fail(request, 'rate');
+
+    const v = validateUsername(body.username);
+    if (!v.ok) return fail(request, 'taken', v.ar);
+    if (await isUsernameTaken(env, v.norm, null, now))
+      return fail(request, 'taken');
+
+    const deviceId = makeDeviceId();
+    const displayName = sanitizeDisplayName(body.display_name) || v.username;
+    const avatar = cleanAvatar(body.avatar, 'a0');
+
+    /* الرمز يُشفَّر لا يُهَش: زر "أظهر رمزي" يحتاج قراءته لاحقاً.
+       code_lookup فهرس أعمى (HMAC) حتى نجد الصف بدون فك تشفير كل الصفوف. */
+    let code = null, saved = false;
+    for (let attempt = 0; attempt < 5 && !saved; attempt++) {
+      code = makeCode();
+      const flat = code.replace('-', '');
+      try {
+        await env.DB.prepare(
+          `INSERT INTO players
+             (device_id, username, username_norm, display_name, avatar,
+              code_cipher, code_lookup, username_set_at, created_at, last_seen,
+              visit_streak, best_visit_streak, last_visit_day)
+           VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?8,1,1,?9)`
+        ).bind(
+          deviceId, v.username, v.norm, displayName, avatar,
+          await encryptText(env.ACCOUNT_CODE_KEY, flat),
+          await blindIndex(env.ACCOUNT_CODE_KEY, flat),
+          now, riyadhDay(now)
+        ).run();
+        saved = true;
+      } catch (e) {
+        const msg = String((e && e.message) || '').toUpperCase();
+        if (!msg.includes('UNIQUE') && !msg.includes('CONSTRAINT'))
+          return fail(request, 'db');
+        // تصادم على اليوزر (سباق) أو على الرمز (نادر جداً)
+        if (await isUsernameTaken(env, v.norm, null, now)) return fail(request, 'taken');
+      }
+    }
+    if (!saved) return fail(request, 'db');
+
+    const row = await env.DB.prepare('SELECT * FROM players WHERE device_id = ?1')
+      .bind(deviceId).first();
+    return J(request, {
+      ok: true,
+      token: await issueToken(env, deviceId, row.token_ver),
+      player: playerOf(row),
+      recovery_code: code,
+    });
+  }
+
+  /* ---------- استرجاع الحساب من أي جهاز (وجسر التطبيق لاحقاً) ---------- */
+  if (path === 'recover') {
+    if (!await rateLimit(env, 'rec:' + ip, 8, 60 * 60 * 1000, true))
+      return fail(request, 'rate');
+    // سقف عالمي: حدّ الـIP وحده تتجاوزه شبكة بوتات بآلاف العناوين
+    if (!await rateLimit(env, 'rec:global', 500, 60 * 60 * 1000, true))
+      return fail(request, 'rate');
+
+    const raw = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (raw.length !== ACC.CODE_LEN) return fail(request, 'bad-code');
+
+    const lookup = await blindIndex(env.ACCOUNT_CODE_KEY, raw);
+    const row = await env.DB.prepare('SELECT * FROM players WHERE code_lookup = ?1')
+      .bind(lookup).first();
+    if (!row || row.banned) return fail(request, 'bad-code');
+
+    // تأكيد إضافي بفك التشفير: الفهرس الأعمى وحده لا يثبت مطابقة الرمز
+    const plain = await decryptText(env.ACCOUNT_CODE_KEY, row.code_cipher || '');
+    if (!plain || !timingSafeEqual(plain, raw)) return fail(request, 'bad-code');
+
+    await env.DB.prepare('UPDATE players SET last_seen = ?2 WHERE device_id = ?1')
+      .bind(row.device_id, now).run();
+    return J(request, {
+      ok: true,
+      token: await issueToken(env, row.device_id, row.token_ver),
+      player: playerOf(row),
+    });
+  }
+
+  /* ---------- قراءة الحساب ---------- */
+  if (path === 'me') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+
+    const v = await touchVisit(env, me, now);
+    me.visit_streak = v.streak;
+    me.best_visit_streak = v.best;
+
+    if (!v.isNewDay && now - (me.last_seen || 0) > ACC.SEEN_THROTTLE_MS) {
+      const job = env.DB.prepare('UPDATE players SET last_seen = ?2 WHERE device_id = ?1')
+        .bind(me.device_id, now).run().catch(() => {});
+      if (ctx && ctx.waitUntil) ctx.waitUntil(job);
+    }
+    return J(request, { ok: true, player: playerOf(me), streak_up: v.isNewDay });
+  }
+
+  /* ---------- تعديل الاسم/الأفاتار (واليوزر اختيارياً) ---------- */
+  if (path === 'profile') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'prof:' + me.device_id, 40, 60 * 60 * 1000))
+      return fail(request, 'rate');
+
+    const name = body.display_name !== undefined
+      ? (sanitizeDisplayName(body.display_name) || me.display_name) : me.display_name;
+    const avatar = cleanAvatar(body.avatar, me.avatar);
+
+    await env.DB.prepare(
+      'UPDATE players SET display_name = ?2, avatar = ?3, last_seen = ?4 WHERE device_id = ?1'
+    ).bind(me.device_id, name, avatar, now).run();
+
+    // تغيير اليوزر: مسموح مرة كل ٣٠ يوماً
+    if (typeof body.username === 'string' && body.username.trim() &&
+        normUsername(body.username.trim()) !== me.username_norm) {
+      const v = validateUsername(body.username);
+      if (!v.ok) return fail(request, 'taken', v.ar);
+      if (await isUsernameTaken(env, v.norm, me.device_id, now)) return fail(request, 'taken');
+
+      /* شرط التهدئة داخل WHERE نفسها: فحصه ثم الكتابة في خطوتين كان يسمح
+         لطلبين متزامنين بالمرور معاً وتجاوز قيد الـ٣٠ يوماً. */
+      let changed = -1;
+      try {
+        const r = await env.DB.prepare(
+          `UPDATE players SET username = ?2, username_norm = ?3, username_set_at = ?4
+             WHERE device_id = ?1
+               AND (username_norm IS NULL OR ?4 - COALESCE(username_set_at,0) >= ?5)`
+        ).bind(me.device_id, v.username, v.norm, now, ACC.CHANGE_COOLDOWN_MS).run();
+        changed = (r && r.meta && typeof r.meta.changes === 'number') ? r.meta.changes : -1;
+      } catch (e) {
+        const msg = String((e && e.message) || '').toUpperCase();
+        if (msg.includes('UNIQUE') || msg.includes('CONSTRAINT')) return fail(request, 'taken');
+        return fail(request, 'db');
+      }
+      if (changed === 0) {
+        const nextAt = (me.username_set_at || 0) + ACC.CHANGE_COOLDOWN_MS;
+        const days = Math.max(1, Math.ceil((nextAt - now) / 86400000));
+        return fail(request, 'cooldown', 'تقدر تغيّر يوزرك بعد ' + days + ' يوم');
+      }
+      // اليوزر القديم يُحجز ٣٠ يوماً حتى لا يخطفه منتحل فور تحرّره
+      if (me.username_norm) {
+        try {
+          await env.DB.prepare(
+            `INSERT INTO username_holds (username_norm, device_id, until) VALUES (?1,?2,?3)
+             ON CONFLICT(username_norm) DO UPDATE SET device_id = ?2, until = ?3`
+          ).bind(me.username_norm, me.device_id, now + ACC.HOLD_MS).run();
+        } catch {}
+      }
+    }
+
+    const row = await env.DB.prepare('SELECT * FROM players WHERE device_id = ?1')
+      .bind(me.device_id).first();
+    return J(request, { ok: true, player: playerOf(row) });
+  }
+
+  /* ---------- عرض رمز الاسترجاع مرة أخرى ---------- */
+  if (path === 'code') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'code:' + me.device_id, 20, 60 * 60 * 1000))
+      return fail(request, 'rate');
+
+    const plain = await decryptText(env.ACCOUNT_CODE_KEY, me.code_cipher || '');
+    if (!plain) return fail(request, 'db');
+    return J(request, {
+      ok: true,
+      recovery_code: plain.slice(0, 5) + '-' + plain.slice(5),
+    });
+  }
+
+  /* ---------- وسيلة تواصل اختيارية (مشفّرة) ---------- */
+  if (path === 'contact') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'cont:' + me.device_id, 10, 60 * 60 * 1000))
+      return fail(request, 'rate');
+
+    const c = String(body.contact || '').trim().slice(0, 120);
+    if (!c) {
+      await env.DB.prepare('UPDATE players SET contact_cipher = NULL WHERE device_id = ?1')
+        .bind(me.device_id).run();
+      return J(request, { ok: true });
+    }
+    const isEmail = /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(c);
+    const isPhone = /^\+?[0-9]{8,15}$/.test(c.replace(/[\s-]/g, ''));
+    if (!isEmail && !isPhone) return fail(request, 'bad-contact', 'أدخل إيميل أو رقم صحيح');
+
+    await env.DB.prepare('UPDATE players SET contact_cipher = ?2, last_seen = ?3 WHERE device_id = ?1')
+      .bind(me.device_id, await encryptText(env.ACCOUNT_CODE_KEY, c), now).run();
+    return J(request, { ok: true });
+  }
+
+  /* ---------- تسجيل الخروج: يبطل كل التوكنات لهذا الحساب ---------- */
+  if (path === 'logout') {
+    const me = await authFromBody(env, body);
+    if (!me) return J(request, { ok: true });   // خروج من جلسة ميتة = نجاح
+    await env.DB.prepare(
+      'UPDATE players SET token_ver = token_ver + 1, last_seen = ?2 WHERE device_id = ?1'
+    ).bind(me.device_id, now).run();
+    return J(request, { ok: true });
+  }
+
+  return fail(request, 'db', 'مسار غير معروف', 404);
+}
+
+/* --------- تسجيل نتيجة لعبة — يُنادى من داخل غرفة الـ DO فقط --------- */
+/*  لا تعرّضه كمسار HTTP أبداً: أي لاعب سيرفع فوزه بنفسه وتفقد الإحصائيات
+    كل معناها. الفوز يقرره السيرفر من مجريات اللعبة، لا ادّعاء العميل.      */
+async function recordResult(env, deviceId, won) {
+  if (!env.DB || !deviceId) return;
+  try {
+    await env.DB.prepare(
+      `UPDATE players SET
+         games_played = games_played + 1,
+         wins   = wins   + ?2,
+         losses = losses + ?3,
+         cur_streak  = CASE WHEN ?2 = 1 THEN cur_streak + 1 ELSE 0 END,
+         best_streak = CASE WHEN ?2 = 1 AND cur_streak + 1 > best_streak
+                            THEN cur_streak + 1 ELSE best_streak END,
+         last_seen = ?4
+       WHERE device_id = ?1`
+    ).bind(deviceId, won ? 1 : 0, won ? 0 : 1, Date.now()).run();
+  } catch {}
+}
