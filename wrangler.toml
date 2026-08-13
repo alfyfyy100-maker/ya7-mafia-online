@@ -37,3 +37,8 @@ class_name = "LudoRoom"
 [[migrations]]
 tag = "v8"
 new_sqlite_classes = ["WalimaRoom", "LudoRoom"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sukoon-db"
+database_id = "2cf6a580-99e0-41e2-9490-52e30d18fc4e"
