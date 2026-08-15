@@ -1,1 +1,68 @@
+name = "ya7-mafia-online"
+main = "worker.js"
+compatibility_date = "2025-01-01"
 
+# ══════════════════ روابط غرف الألعاب (Durable Objects) ══════════════════
+
+[[durable_objects.bindings]]
+name = "MAFIA_ROOM"
+class_name = "MafiaRoom"
+
+[[durable_objects.bindings]]
+name = "GOT_ROOM"
+class_name = "GotRoom"
+
+[[durable_objects.bindings]]
+name = "MAWWIH_ROOM"
+class_name = "MawwihRoom"
+
+[[durable_objects.bindings]]
+name = "FATIN_ROOM"
+class_name = "FatinRoom"
+
+[[durable_objects.bindings]]
+name = "DAQASH_ROOM"
+class_name = "DaqashRoom"
+
+[[durable_objects.bindings]]
+name = "DAKHIL_ROOM"
+class_name = "DakhilRoom"
+
+[[durable_objects.bindings]]
+name = "WALIMA_ROOM"
+class_name = "WalimaRoom"
+
+[[durable_objects.bindings]]
+name = "LUDO_ROOM"
+class_name = "LudoRoom"
+
+[[durable_objects.bindings]]
+name = "BTAQATI_ROOM"
+class_name = "BtaqatiRoom"
+
+# ══════════════════════════ الترحيلات (migrations) ══════════════════════════
+# لا تعدّل ولا تحذف وسمًا قديمًا أبدًا — أي مساس بـ v8 يعطي خطأ 10074
+# ويُسقط النشر كاملًا. الجديد يُضاف بوسم جديد فقط.
+
+[[migrations]]
+tag = "v8"
+new_sqlite_classes = ["WalimaRoom", "LudoRoom"]
+
+[[migrations]]
+tag = "v9"
+new_sqlite_classes = ["BtaqatiRoom"]
+
+# ════════════════════════════ قاعدة بيانات D1 ════════════════════════════
+# تبقى في آخر الملف: أي كتلة تبتلع كل الأسطر تحتها حتى الكتلة التالية،
+# فوضعُ ربطٍ بعدها يجعله جزءًا منها ويضيع.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sukoon-db"
+database_id = "2cf6a580-99e0-41e2-9490-52e30d18fc4e"
+
+# ══════════════════════════════════════════════════════════════════════════
+# السرّان لا يُكتبان هنا ولا في المستودع:
+#   npx wrangler secret put ACCOUNT_SECRET
+#   npx wrangler secret put ACCOUNT_CODE_KEY
+# ══════════════════════════════════════════════════════════════════════════
