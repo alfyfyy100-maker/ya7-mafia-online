@@ -7172,7 +7172,7 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v33',
+        version: 'v35',
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
@@ -7704,8 +7704,12 @@ async function handleAccount(request, env, url, ctx) {
 
   /* ---------- فحص توفر اليوزر أثناء الكتابة ---------- */
   if (path === 'check') {
-    if (!await rateLimit(env, 'chk:' + ip, 90, 60 * 1000))
+    /* لا يمكن أن يتطلب توكنًا (يُنادى قبل التسجيل)، فهو عدّاد مفتوح يكشف
+       اليوزرات المسجّلة. حدّ أضيق لكل IP + سقف عالمي يمنع المسح الموزّع. */
+    if (!await rateLimit(env, 'chk:' + ip, 30, 60 * 1000))
       return J(request, { ok: false, error: 'rate', available: false, reason: 'محاولات كثيرة، انتظر شوي' });
+    if (!await rateLimit(env, 'chk:global', 3000, 60 * 1000))
+      return J(request, { ok: false, error: 'rate', available: false, reason: 'ضغط عالي، جرّب بعد شوي' });
     const v = validateUsername(body.username);
     if (!v.ok) return J(request, { ok: true, available: false, reason: v.ar });
     if (await isUsernameTaken(env, v.norm, null, now))
@@ -7912,6 +7916,10 @@ async function handleAccount(request, env, url, ctx) {
   if (path === 'logout') {
     const me = await authFromBody(env, body);
     if (!me) return J(request, { ok: true });   // خروج من جلسة ميتة = نجاح
+    /* بلا حدّ، كان بإمكان من يملك توكنًا صالحًا أن يزيد token_ver آلاف المرات
+       (كتابة D1 لكل نداء). الحدّ يكفي للاستعمال الطبيعي بمراحل. */
+    if (!await rateLimit(env, 'out:' + me.device_id, 20, 60 * 60 * 1000))
+      return fail(request, 'rate');
     await env.DB.prepare(
       'UPDATE players SET token_ver = token_ver + 1, last_seen = ?2 WHERE device_id = ?1'
     ).bind(me.device_id, now).run();
