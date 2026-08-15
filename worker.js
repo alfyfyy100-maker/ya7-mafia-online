@@ -7172,7 +7172,7 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v35',
+        version: 'v37',
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
@@ -7384,6 +7384,19 @@ const RESERVED_USERNAMES = [
   'liar', 'juraa', 'island', 'throne', 'westeros', 'darbah', 'guest13',
 ];
 
+/* ── محجوزة للمالك: تُمنح يدويًا عبر D1 ──
+   تُطبَّق عليها نفس مقارنة التشابه البصري، فـ r1n مثلاً محجوب مع rin. */
+const RESERVED_OWNER = [
+  // لأشخاص محدّدين
+  'zu9x', '5cz', 'yzn', 'd7m', 'b79', 'b52', 'f16', 'rin', 'wsn',
+  // أرقام مميّزة محجوزة للمنح لاحقًا
+  '101', '107', '111', '205', '305', '311', '404', '405', '411',
+  '501', '502', '503', '504', '505', '506', '507', '509', '511',
+  '514', '515', '516', '518', '523', '525', '555', '606', '607',
+  '612', '701', '702', '707', '708', '711', '717', '818',
+  '901', '902', '905', '906', '907', '909', '911', '912', '4444',
+];
+
 /* القصيرة تُطابق ككلمة كاملة فقط — الفحص بالتضمين كان يحظر Nikos و Essex */
 const BANNED_EXACT = ['kos', 'sex', 'kkk', 'ass'];
 const BANNED_SUBSTRINGS = [
@@ -7518,10 +7531,14 @@ function validateUsername(raw) {
   if (u.length < ACC.USER_MIN) return { ok: false, ar: 'اليوزر لازم ٣ خانات فأكثر' };
   if (u.length > ACC.USER_MAX) return { ok: false, ar: 'اليوزر أطول من ' + ACC.USER_MAX + ' خانة' };
   if (!/^[A-Za-z0-9]+$/.test(u)) return { ok: false, ar: 'إنجليزي وأرقام فقط، بدون رموز' };
-  if (!/[A-Za-z]/.test(u)) return { ok: false, ar: 'لازم يحتوي حرفاً واحداً على الأقل' };
+
+  /* الثلاثي المكرر فقط: aaa · 111 · zzz. الأطول (zzzz, 4444) مسموح شكلاً —
+     وما يُراد حجزه منه يُدرج في RESERVED_OWNER بدل قاعدة عامة. */
+  if (/^(.)\1\1$/.test(u))
+    return { ok: false, ar: 'الثلاثي المكرر محجوز' };
 
   const norm = normUsername(u), vis = visualNorm(u);
-  for (const r of RESERVED_USERNAMES)
+  for (const r of RESERVED_USERNAMES.concat(RESERVED_OWNER))
     if (norm === r || vis === visualNorm(r)) return { ok: false, ar: 'هذا اليوزر محجوز' };
   for (const b of BANNED_EXACT)
     if (norm === b || vis === visualNorm(b)) return { ok: false, ar: 'اليوزر غير مسموح' };
