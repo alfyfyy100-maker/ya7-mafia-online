@@ -7172,13 +7172,13 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v38',
+        version: 'v45',
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
           DAQASH_ROOM: !!env.DAQASH_ROOM, WALIMA_ROOM: !!env.WALIMA_ROOM,
           LUDO_ROOM: !!env.LUDO_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
-          BTAQATI_ROOM: !!env.BTAQATI_ROOM,
+          BTAQATI_ROOM: !!env.BTAQATI_ROOM, PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
           DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET,
           ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
         },
@@ -7190,6 +7190,33 @@ export default {
     // "Failed to fetch" بدل السبب الحقيقي.
     if (!isAllowedOrigin(origin)) {
       return withCors(new Response('origin-not-allowed: ' + (origin || 'بلا مصدر'), { status: 403 }), origin);
+    }
+
+    // ── اللوبي العام: قائمة الغرف المعلَنة ──
+    if (url.pathname.startsWith('/lobby/')) {
+      if (!env.PUBLIC_LOBBY) {
+        return withCors(new Response(
+          'binding-missing: أضف ربط PUBLIC_LOBBY في wrangler.toml ثم أعد النشر',
+          { status: 501 }), origin);
+      }
+      const sub = url.pathname.slice('/lobby'.length);
+      // add داخلي فقط: يُستدعى من مسار الإنشاء، لا من المتصفح
+      if (sub === '/add') return withCors(new Response('غير مسموح', { status: 403 }), origin);
+      if (sub !== '/list' && request.method !== 'POST') {
+        return withCors(new Response('method', { status: 405 }), origin);
+      }
+      if (sub === '/ping' || sub === '/remove') {
+        if (!allowSocket(request.headers.get('CF-Connecting-IP') || '')) {
+          return withCors(new Response('too-many-requests', { status: 429 }), origin);
+        }
+      }
+      const stub = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
+      const resp = await stub.fetch(new Request(url.origin + '/lobby' + sub, {
+        method: request.method,
+        headers: { 'Content-Type': 'application/json' },
+        body: request.method === 'POST' ? await request.text() : undefined,
+      }));
+      return withCors(resp, origin);
     }
 
     // ── الحسابات: يوزر + رمز استرجاع (D1) ──
@@ -7218,7 +7245,20 @@ export default {
           const resp = await stub.fetch(new Request(url.origin + '/create', {
             method: 'POST', body: JSON.stringify({ ...body, roomCode: code }),
           }));
-          if (resp.status !== 409) return withCors(resp, origin);
+          if (resp.status !== 409) {
+            if (resp.ok && body && body.public === true && env.PUBLIC_LOBBY) {
+              ctx.waitUntil((async () => {
+                try {
+                  const lob = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
+                  await lob.fetch(new Request(url.origin + '/lobby/add', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ game: 'ludo', code, host: body.name, players: 1 }),
+                  }));
+                } catch {}
+              })());
+            }
+            return withCors(resp, origin);
+          }
         }
         return withCors(new Response('تعذّر إنشاء غرفة، حاول مرة ثانية', { status: 503 }), origin);
       }
@@ -7263,7 +7303,29 @@ export default {
           method: 'POST',
           body: JSON.stringify({ ...body, roomCode: code }),
         }));
-        if (resp.status !== 409) return withCors(resp, origin);
+        if (resp.status !== 409) {
+          // الإدراج في اللوبي اختياري وصريح: بلا public:true تبقى الغرفة خاصة
+          if (resp.ok && body && body.public === true && env.PUBLIC_LOBBY) {
+            const g = url.pathname.startsWith('/btaqati/') ? 'btaqati'
+                    : url.pathname.startsWith('/got/') ? 'khawana'
+                    : url.pathname.startsWith('/mawwih/') ? 'mawwih'
+                    : url.pathname.startsWith('/fatin/') ? 'fatin'
+                    : url.pathname.startsWith('/daqash/') ? 'daqash'
+                    : url.pathname.startsWith('/walima/') ? 'walima'
+                    : url.pathname.startsWith('/dakhil/') ? 'dakhil'
+                    : 'mafia';
+            ctx.waitUntil((async () => {
+              try {
+                const lob = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
+                await lob.fetch(new Request(url.origin + '/lobby/add', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ game: g, code, host: body.name, players: 1, note: body.note }),
+                }));
+              } catch {}
+            })());
+          }
+          return withCors(resp, origin);
+        }
       }
       return withCors(new Response('تعذّر إنشاء غرفة، حاول مرة ثانية', { status: 503 }), origin);
     }
@@ -7300,6 +7362,121 @@ export default {
       { status: 200 }), origin);
   },
 };
+
+/* ══════════════════════ اللوبي العام (PublicLobby) ══════════════════════
+   سجلّ واحد لكل الغرف المعلنة. الغرفة لا تُدرج إلا إذا اختار منشئها
+   «عامة» صراحةً — الافتراضي خاص، فغرف الأصدقاء لا تظهر لأحد أبدًا.
+   لا يحتفظ بأي شيء عن اللعب نفسه: رمز الغرفة واسم المضيف والعدد فقط.   */
+
+const LOBBY_TTL_MS = 20 * 60 * 1000;   // مدخل بلا نبض يسقط بعدها
+const LOBBY_MAX = 120;                 // سقف المعروض
+const LOBBY_GAMES = {
+  mafia:   { name: 'مافيا',        path: '/mafia/' },
+  khawana: { name: 'لمن العرش؟',   path: '/khawana/' },
+  mawwih:  { name: 'مَوِّه',        path: '/mawwih/' },
+  daqash:  { name: 'داقش',         path: '/daqash/' },
+  dakhil:  { name: 'مين الدخيل',   path: '/dakhil/' },
+  walima:  { name: 'وَليمة',        path: '/walima/' },
+  ludo:    { name: 'لودو الكذب',   path: '/ludo/' },
+  btaqati: { name: 'خمّن من؟',      path: '/btaqati/' },
+  fatin:   { name: 'فاتن',          path: '/fatin/' },
+};
+
+export class PublicLobby {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.state.blockConcurrencyWhile(async () => {
+      this.rooms = (await this.state.storage.get('rooms')) || {};
+    });
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/.*\/lobby/, '');
+
+    if (path === '/list') return this.list();
+    if (path === '/add') return this.add(request);
+    if (path === '/ping') return this.ping(request);
+    if (path === '/remove') return this.remove(request);
+    return new Response('غير موجود', { status: 404 });
+  }
+
+  prune() {
+    const now = Date.now();
+    let changed = false;
+    for (const [k, v] of Object.entries(this.rooms)) {
+      if (!v || now - (v.seen || 0) > LOBBY_TTL_MS) { delete this.rooms[k]; changed = true; }
+    }
+    return changed;
+  }
+
+  async persist() { await this.state.storage.put('rooms', this.rooms); }
+
+  async list() {
+    if (this.prune()) await this.persist();
+    const now = Date.now();
+    const out = Object.values(this.rooms)
+      .filter(r => LOBBY_GAMES[r.game])
+      .sort((a, b) => (b.seen || 0) - (a.seen || 0))
+      .slice(0, LOBBY_MAX)
+      .map(r => ({
+        game: r.game,
+        gameName: LOBBY_GAMES[r.game].name,
+        path: LOBBY_GAMES[r.game].path,
+        code: r.code,
+        host: r.host,
+        players: r.players || 1,
+        max: r.max || 0,
+        note: r.note || '',
+        ageSec: Math.round((now - (r.seen || now)) / 1000),
+      }));
+    return Response.json({ ok: true, rooms: out, games: LOBBY_GAMES });
+  }
+
+  async add(request) {
+    let b; try { b = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
+    const game = String(b.game || '');
+    const code = String(b.code || '').toUpperCase();
+    if (!LOBBY_GAMES[game] || !/^[A-Z0-9]{6}$/.test(code)) {
+      return new Response('bad-room', { status: 400 });
+    }
+    this.prune();
+    if (Object.keys(this.rooms).length >= LOBBY_MAX * 2) {
+      return new Response('lobby-full', { status: 503 });
+    }
+    this.rooms[game + ':' + code] = {
+      game, code,
+      host: cleanName(b.host || 'لاعب'),
+      players: Math.max(1, Math.min(30, Number(b.players) || 1)),
+      max: Math.max(0, Math.min(30, Number(b.max) || 0)),
+      note: cleanName(b.note || '').slice(0, 40),
+      seen: Date.now(),
+    };
+    await this.persist();
+    return Response.json({ ok: true });
+  }
+
+  /* نبضة من صفحة المضيف: تُبقي المدخل حيًّا وتحدّث العدد.
+     بلا نبض يسقط المدخل من نفسه، فلا تتراكم غرف ميتة. */
+  async ping(request) {
+    let b; try { b = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
+    const key = String(b.game || '') + ':' + String(b.code || '').toUpperCase();
+    const r = this.rooms[key];
+    if (!r) return Response.json({ ok: false, error: 'not-listed' });
+    r.seen = Date.now();
+    if (b.players != null) r.players = Math.max(1, Math.min(30, Number(b.players) || 1));
+    await this.persist();
+    return Response.json({ ok: true });
+  }
+
+  async remove(request) {
+    let b; try { b = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
+    const key = String(b.game || '') + ':' + String(b.code || '').toUpperCase();
+    if (this.rooms[key]) { delete this.rooms[key]; await this.persist(); }
+    return Response.json({ ok: true });
+  }
+}
 
 /* ══════════════════════ خمّن من؟ أونلاين (BtaqatiRoom) ══════════════════════
    الخادم هو مصدر الحقيقة لكل ما لا يجوز أن يعرفه اللاعب عن غيره:
@@ -7830,6 +8007,12 @@ const RESERVED_OWNER = [
   '901', '902', '905', '906', '907', '909', '911', '912', '4444',
 ];
 
+/* رد خاص لاسم بعينه. المفتاح بالاسم الحرفي (بحروف صغيرة) لا بالتطبيع
+   البصري: y47 يبقى محجوبًا كشبيه لـ ya7، لكنه يأخذ الرسالة العادية. */
+const FUNNY_RESERVED = {
+  'ya7': 'تمون؟ هههههههه',
+};
+
 /* القصيرة تُطابق ككلمة كاملة فقط — الفحص بالتضمين كان يحظر Nikos و Essex */
 const BANNED_EXACT = ['kos', 'sex', 'kkk', 'ass'];
 const BANNED_SUBSTRINGS = [
@@ -7972,7 +8155,8 @@ function validateUsername(raw) {
 
   const norm = normUsername(u), vis = visualNorm(u);
   for (const r of RESERVED_USERNAMES.concat(RESERVED_OWNER))
-    if (norm === r || vis === visualNorm(r)) return { ok: false, ar: 'هذا اليوزر محجوز' };
+    if (norm === r || vis === visualNorm(r))
+      return { ok: false, ar: FUNNY_RESERVED[norm] || 'محجوز لصاحب الحلال' };
   for (const b of BANNED_EXACT)
     if (norm === b || vis === visualNorm(b)) return { ok: false, ar: 'اليوزر غير مسموح' };
   for (const b of BANNED_SUBSTRINGS)
@@ -8131,7 +8315,7 @@ async function isUsernameTaken(env, norm, myDeviceId, now) {
 }
 
 const cleanAvatar = (v, fallback) =>
-  (typeof v === 'string' && /^a([0-9]|1[0-4])$/.test(v)) ? v : fallback;
+  (typeof v === 'string' && /^a([0-9]|1[0-9]|2[0-3])$/.test(v)) ? v : fallback;
 
 /* ------------------------------ المسارات ------------------------------ */
 /*  في fetch() الرئيسي:
