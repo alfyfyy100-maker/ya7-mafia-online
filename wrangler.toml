@@ -1,13 +1,14 @@
 ## ════════════════════════════════════════════════════════════════
-##  ya7-mafia-online — wrangler.toml  (نسخة v44 كاملة)
-##  ⚠️ لا تحذف ولا تعدّل وسم الترحيل v8 — الحذف = خطأ 10074
+##  ya7-mafia-online — wrangler.toml  (نسخة v56 كاملة)
+##  ⚠️ لا تحذف ولا تعدّل وسوم الترحيل v8 / v9 / v10 — الحذف = خطأ 10074
+##  الجديد في v56: ربط CHAT_ROOM + وسم الترحيل v11 (دردشة الغرف)
 ## ════════════════════════════════════════════════════════════════
 
 name = "ya7-mafia-online"
 main = "worker.js"
-compatibility_date = "2025-05-01"   # ← إن كان في ملفك تاريخ أقدم، خلّه على حاله
+compatibility_date = "2025-05-01"
 
-## ── Durable Objects: عشر ربطات ──
+## ── Durable Objects: إحدى عشرة ربطة ──
 [[durable_objects.bindings]]
 name = "MAFIA_ROOM"
 class_name = "MafiaRoom"
@@ -50,13 +51,18 @@ class_name = "BtaqatiRoom"
 name = "PUBLIC_LOBBY"
 class_name = "PublicLobby"
 
+# ── جديد في v56: دردشة الغرف ──
+[[durable_objects.bindings]]
+name = "CHAT_ROOM"
+class_name = "ChatRoom"
+
 ## ── قاعدة D1 ──
 [[d1_databases]]
 binding = "DB"
 database_name = "sukoon-db"
 database_id = "2cf6a580-99e0-41e2-9490-52e30d18fc4e"
 
-## ── الترحيلات: v8 كما هي بالضبط، وبعدها الجديدتان ──
+## ── الترحيلات: القديمة كما هي بالضبط، والجديد يُضاف في آخرها فقط ──
 [[migrations]]
 tag = "v8"
 new_sqlite_classes = ["WalimaRoom", "LudoRoom"]
@@ -69,8 +75,14 @@ new_sqlite_classes = ["BtaqatiRoom"]
 tag = "v10"
 new_sqlite_classes = ["PublicLobby"]
 
+# ── جديد في v56 ──
+[[migrations]]
+tag = "v11"
+new_sqlite_classes = ["ChatRoom"]
+
 ## ════════════════════════════════════════════════════════════════
-##  السرّان لا يُكتبان هنا أبدًا — من لوحة Cloudflare أو:
+##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:
 ##    npx wrangler secret put ACCOUNT_SECRET
 ##    npx wrangler secret put ACCOUNT_CODE_KEY
+##    npx wrangler secret put ADMIN_TOKEN          # لوحة البلاغات (v55)
 ## ════════════════════════════════════════════════════════════════
