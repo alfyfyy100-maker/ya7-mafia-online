@@ -116,7 +116,39 @@ const MSG_PER_SEC = 12;
 const ROOM_TTL_MS = 6 * 60 * 60 * 1000;
 
 // خليط مشترك لكل الغرف: خنق + تنظيف تلقائي + استعادة المقعد بتوكن
+/* أصحاب أعلى قيمة — التعادل يُحسب فوزًا للطرفين لا لأحدهما */
+function topBy(players, valueOf) {
+  const list = (players || []).filter(p => p && !p.isBot);
+  if (!list.length) return [];
+  let best = -Infinity;
+  for (const p of list) { const v = Number(valueOf(p)) || 0; if (v > best) best = v; }
+  return list.filter(p => (Number(valueOf(p)) || 0) === best).map(p => p.id);
+}
+
 const RoomCommon = {
+  /* ── الحساب صاحب المقعد ──
+     الراوتر تحقّق من التوكن وحوّله did، فما يصل هنا إلا موثوقًا. */
+  noteAccount(url, player) {
+    try {
+      const did = url && url.searchParams ? url.searchParams.get('did') : null;
+      if (did && player) player.did = String(did).slice(0, 64);
+    } catch {}
+  },
+
+  /* ── تسجيل نتيجة الجولة ──
+     الفوز يقرره الخادم من مجريات اللعب، لا ادّعاء العميل. البوتات ومن
+     يلعب بلا حساب يُتجاوزون، وكل حساب يُحسب مرة واحدة ولو جلس مقعدين. */
+  async recordResults(winnerIds) {
+    if (!this.env || !this.env.DB) return;
+    const win = new Set(winnerIds || []);
+    const done = new Set();
+    for (const p of (this.room && this.room.players) || []) {
+      if (!p || !p.did || p.isBot || done.has(p.did)) continue;
+      done.add(p.did);
+      try { await recordResult(this.env, p.did, win.has(p.id)); } catch {}
+    }
+  },
+
   // ── خنق الرسائل ──
   allowMsg(playerId) {
     if (!this._rate) this._rate = new Map();
@@ -678,6 +710,7 @@ export class MafiaRoom {
     }
     if (!player.seatToken) player.seatToken = newSeatToken();
 
+    this.noteAccount(url, player);
     this.sockets.set(player.id, server);
     server.addEventListener('message', (evt) => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
@@ -1319,6 +1352,8 @@ export class MafiaRoom {
   async endGame(winner) {
     this.room.phase = 'over';
     await this.persist();
+    await this.recordResults(this.room.players
+      .filter(p => ROLES[p.role] && ROLES[p.role].team === winner).map(p => p.id));
     this.broadcastPublic({
       type: 'gameOver',
       winner, // 'good' | 'evil'
@@ -2315,6 +2350,7 @@ export class GotRoom {
     }
     if (!player.seatToken) player.seatToken = newSeatToken();
 
+    this.noteAccount(url, player);
     this.sockets.set(player.id, server);
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
@@ -2922,6 +2958,8 @@ export class GotRoom {
   async endGame(winner){
     this.room.phase = 'over';
     await this.persist();
+    await this.recordResults(this.room.players
+      .filter(p => GOT_ROLES[p.role] && GOT_ROLES[p.role].team === winner).map(p => p.id));
     this.broadcastPublic({
       type:'gameOver', winner,
       players: this.room.players.map(p=>({ id:p.id, name:p.name, role:p.role, roleName:GOT_ROLES[p.role].name, alive:p.alive })),
@@ -3474,6 +3512,7 @@ export class MawwihRoom {
       player.connected = true;
     }
 
+    this.noteAccount(url, player);
     this.sockets.set(player.id, server);
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
@@ -3824,6 +3863,7 @@ export class MawwihRoom {
   async endGame() {
     this.room.phase = 'over';
     await this.persist();
+    await this.recordResults(topBy(this.room.players, p => p.score));
     const titles = this.titlesFor();
     const teams = this.teamsOn() ? this.teamTotals() : null;
     if (teams) teams.forEach(t => { t.members.forEach(m => { const ti = titles[m.id]; m.title = ti ? ti.label : null; m.titleDesc = ti ? ti.desc : null; }); });
@@ -4150,6 +4190,7 @@ export class FatinRoom {
     // غرفة أنشأها التلفزيون: أول لاعب يدخل يصير المضيف
     if (!this.room.hostId || !this.findPlayer(this.room.hostId)) this.room.hostId = player.id;
 
+    this.noteAccount(url, player);
     this.sockets.set(player.id, server);
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
@@ -4434,6 +4475,7 @@ export class FatinRoom {
     this.clearPhaseTimer();
     this.room.phase = 'over';
     this.room.endsAt = 0;
+    await this.recordResults(topBy(this.room.players, p => p.score));
     await this.persist();
     this.broadcastState();
   }
@@ -4775,6 +4817,7 @@ export class WalimaRoom {
     }
     if (!player.seatToken) player.seatToken = newSeatToken();
 
+    this.noteAccount(url, player);
     this.sockets.set(player.id, server);
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
@@ -5062,6 +5105,7 @@ export class WalimaRoom {
       }));
       this.room.verdict = { accused, reason: out.reason, says: out.says, culprit: culprit ? culprit.name : null, results };
       this.room.phase = 'over';
+      await this.recordResults(results.filter(x => x.won).map(x => x.id));
       await this.persist();
       this.broadcastState();
     }
@@ -5396,6 +5440,7 @@ export class DaqashRoom {
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     }
 
+    this.noteAccount(url, player);
     this.sockets.set(player.id, server);
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
@@ -5714,6 +5759,7 @@ export class DaqashRoom {
       if (champ && champ.chips >= r.cfg.target) {
         r.phase = 'over';
         r.hand = null;
+        await this.recordResults([champ.id]);
         await this.persist();
         this.broadcastState();
         return;
@@ -5725,6 +5771,7 @@ export class DaqashRoom {
     if (seats.length < 2) {
       r.phase = 'over';
       r.hand = null;
+      await this.recordResults(topBy(r.players, p => p.chips));
       await this.persist();
       this.broadcastState();
       return;
@@ -6682,6 +6729,7 @@ export class DakhilRoom {
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     }
 
+    this.noteAccount(url, player);
     this.sockets.set(player.id, server);
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
@@ -7175,6 +7223,7 @@ export class DakhilRoom {
     });
     rd.gains = gains;
     r.phase = 'results';
+    await this.recordResults(topBy(r.players, x => x.score));
     await this.persist();
     this.broadcastState();
   }
@@ -7260,6 +7309,34 @@ export default {
     const url = new URL(request.url);
     const origin = request.headers.get('Origin');
 
+    /* توكن الحساب يُتحقّق منه هنا مرة واحدة، ثم يُستبدل بـ did موثوق قبل
+       تمرير الطلب للغرفة. الغرفة لا ترى التوكن أبدًا ولا تصدّق أي did
+       يرسله العميل — لأن acc تُحذف دائمًا حتى لو كانت فاسدة. */
+    if (url.searchParams.has('acc') || url.searchParams.has('did')) {
+      const accTok = url.searchParams.get('acc');
+      url.searchParams.delete('acc');
+      url.searchParams.delete('did');
+      if (accTok) {
+        const who = await verifyToken(env, accTok);
+        if (who) {
+          url.searchParams.set('did', who.deviceId);
+          /* نبضة حضور عند دخول الغرفة فقط — لا على كل طلب: لودو تستطلع
+             كل ١.٢ ثانية، فوضعها هنا بلا شرط = عاصفة كتابات في D1 */
+          if (env.DB && (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket' && ctx && ctx.waitUntil) {
+            ctx.waitUntil(touchSeen(env, who.deviceId, Date.now()));
+          }
+        }
+      }
+      request = new Request(url.toString(), request);
+    }
+
+    /* مسارات البلاغات الإدارية قبل حارس المصدر: اللوحة ملف HTML محلي
+       على الجوال، ومصدرها null فيردّه الحارس. الحماية هنا بالتوكن السري
+       ومقارنة ثابتة الزمن، لا بالمصدر. */
+    if (url.pathname.startsWith('/admin/reports')) {
+      return withAnyCors(await handleReports(request, env, url));
+    }
+
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsFor(origin) });
     }
@@ -7270,14 +7347,14 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v51',
+        version: 'v55',
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
           DAQASH_ROOM: !!env.DAQASH_ROOM, WALIMA_ROOM: !!env.WALIMA_ROOM,
           LUDO_ROOM: !!env.LUDO_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
           BTAQATI_ROOM: !!env.BTAQATI_ROOM, PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
-          DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET,
+          DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
           ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
         },
       }), origin);
@@ -7752,6 +7829,7 @@ export class BtaqatiRoom {
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     }
 
+    this.noteAccount(url, player);
     this.sockets.set(player.id, server);
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
@@ -7929,7 +8007,7 @@ export class BtaqatiRoom {
         if (t === me || r.players[t].dead) return;
         const pick = Number(msg.card);
         if (!Number.isInteger(pick) || pick < 0 || pick >= r.board.length) return;
-        this.resolveAccuse(me, t, pick);
+        await this.resolveAccuse(me, t, pick);
         break;
       }
 
@@ -7995,7 +8073,7 @@ export class BtaqatiRoom {
     r.pending = null;
   }
 
-  resolveAccuse(me, t, pick) {
+  async resolveAccuse(me, t, pick) {
     const r = this.room;
     const asker = r.players[me];
     const opp = r.players[t];
@@ -8003,7 +8081,7 @@ export class BtaqatiRoom {
     if (pick === opp.real) {
       const f = asker.stats.fastest;
       asker.stats.fastest = f === null ? asker.qCount : Math.min(f, asker.qCount);
-      this.endRound(me, asker.qCount, { kind: 'correct', by: me, of: t });
+      await this.endRound(me, asker.qCount, { kind: 'correct', by: me, of: t });
       return;
     }
 
@@ -8015,14 +8093,14 @@ export class BtaqatiRoom {
 
     const alive = this.alive();
     if (alive.length === 1) {
-      this.endRound(r.players.indexOf(alive[0]), null, { kind: 'lastStanding', by: me });
+      await this.endRound(r.players.indexOf(alive[0]), null, { kind: 'lastStanding', by: me });
       return;
     }
     r.pending = null;
     this.nextTurn();
   }
 
-  endRound(winnerIdx, usedQ, event) {
+  async endRound(winnerIdx, usedQ, event) {
     const r = this.room;
     const w = r.players[winnerIdx];
     const speed = usedQ !== null ? Math.max(0, ((r.cfg.qLimit || 15) - usedQ)) * 10 : 0;
@@ -8035,6 +8113,7 @@ export class BtaqatiRoom {
       r.players.forEach((p, i) => { if (p.points > r.players[best].points) best = i; });
       r.winner = best;
       r.phase = 'over';
+      await this.recordResults([r.players[best].id]);
     } else {
       r.phase = 'round';
     }
@@ -8119,6 +8198,10 @@ CREATE INDEX IF NOT EXISTS idx_rate_reset ON rate_limits(reset_at);
 `;
 
 const ACC = {
+  ONLINE_MS: 5 * 60 * 1000,   // «متصل الآن» = نشاط خلال آخر ٥ دقائق
+  INVITE_TTL_MS: 20 * 60 * 1000,
+  MAX_FRIENDS: 150,        // سقف الأصدقاء لكل حساب
+  MAX_PENDING: 30,         // سقف الطلبات المعلّقة الصادرة — يمنع إغراق الناس بالطلبات
   USER_MIN: 3,
   USER_MAX: 16,
   NAME_MAX: 24,
@@ -8360,6 +8443,7 @@ async function maybeCleanup(env, ctx) {
     try {
       await env.DB.prepare('DELETE FROM rate_limits WHERE reset_at < ?1').bind(now).run();
       await env.DB.prepare('DELETE FROM username_holds WHERE until < ?1').bind(now).run();
+      await env.DB.prepare('DELETE FROM invites WHERE expires_at < ?1').bind(now).run();
     } catch {}
   })();
   if (ctx && ctx.waitUntil) ctx.waitUntil(job); else await job;
@@ -8452,6 +8536,7 @@ function playerOf(row) {
     visit_streak: row.visit_streak || 0,
     best_visit_streak: row.best_visit_streak || 0,
     has_contact: !!row.contact_cipher,
+    show_online: row.show_online === null || row.show_online === undefined ? true : !!row.show_online,
     can_change_username_at: row.username_set_at
       ? row.username_set_at + ACC.CHANGE_COOLDOWN_MS : null,
   };
@@ -8614,10 +8699,14 @@ async function handleAccount(request, env, url, ctx) {
     const name = body.display_name !== undefined
       ? (sanitizeDisplayName(body.display_name) || me.display_name) : me.display_name;
     const avatar = cleanAvatar(body.avatar, me.avatar);
+    /* ظهور «متصل الآن» اختياري: من يطفئه لا تُحسب حالته لأحد */
+    const showOnline = body.show_online === undefined
+      ? (me.show_online === null || me.show_online === undefined ? 1 : (me.show_online ? 1 : 0))
+      : (body.show_online ? 1 : 0);
 
     await env.DB.prepare(
-      'UPDATE players SET display_name = ?2, avatar = ?3, last_seen = ?4 WHERE device_id = ?1'
-    ).bind(me.device_id, name, avatar, now).run();
+      'UPDATE players SET display_name = ?2, avatar = ?3, last_seen = ?4, show_online = ?5 WHERE device_id = ?1'
+    ).bind(me.device_id, name, avatar, now, showOnline).run();
 
     // تغيير اليوزر: مسموح مرة كل ٣٠ يوماً
     if (typeof body.username === 'string' && body.username.trim() &&
@@ -8699,6 +8788,237 @@ async function handleAccount(request, env, url, ctx) {
     return J(request, { ok: true });
   }
 
+
+  /* ═══════════════════════ الأصدقاء ═══════════════════════
+     الصف الواحد يمثّل العلاقة بين الطرفين مرة واحدة: نرتّب المعرّفين
+     أبجديًا (a أصغر من b) ونجعلهما مفتاحًا أساسيًا. بدون هذا الترتيب
+     يصير لكل صداقة صفّان متعاكسان يتناقضان مع الوقت.
+     status: 'pending' حتى يقبل الطرف الآخر، ثم 'accepted'.            */
+
+  if (path === 'friends/list') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'frl:' + me.device_id, 60, 60 * 1000))
+      return fail(request, 'rate');
+    await touchSeen(env, me.device_id, now);
+    return J(request, Object.assign({ ok: true }, await friendsOf(env, me.device_id)));
+  }
+
+  if (path === 'friends/add') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'fra:' + me.device_id, 20, 60 * 60 * 1000))
+      return fail(request, 'rate', 'طلبات كثيرة، جرّب بعد شوي');
+
+    const v = validateUsername(body.username);
+    if (!v.ok) return fail(request, 'not-found', 'ما فيه حساب بهذا الاسم');
+    const other = await env.DB.prepare(
+      'SELECT device_id, username FROM players WHERE username_norm = ?1'
+    ).bind(v.norm).first();
+    if (!other || other.device_id === me.device_id)
+      return fail(request, 'not-found', other ? 'ما تقدر تضيف نفسك' : 'ما فيه حساب بهذا الاسم');
+
+    const [a, b] = pairKey(me.device_id, other.device_id);
+    const row = await env.DB.prepare(
+      'SELECT status, requested_by FROM friends WHERE a = ?1 AND b = ?2'
+    ).bind(a, b).first();
+
+    /* المحظور لا يُبلَّغ أنه محظور — رسالة محايدة، وإلا صار الحظر إشعارًا */
+    if (row && row.status === 'blocked')
+      return fail(request, 'blocked', 'ما نقدر نرسل الطلب لهذا الحساب');
+    if (row && row.status === 'accepted')
+      return J(request, { ok: true, state: 'friends' });
+    if (row && row.requested_by === me.device_id)
+      return J(request, { ok: true, state: 'sent' });
+    if (row) {
+      /* هو أرسل لي أولًا وأنا أضفته الآن — نية متبادلة، فالقبول فوري */
+      await env.DB.prepare(
+        "UPDATE friends SET status='accepted', updated_at=?3 WHERE a=?1 AND b=?2"
+      ).bind(a, b, now).run();
+      return J(request, { ok: true, state: 'friends' });
+    }
+
+    /* سقفان: عدد الأصدقاء، وعدد الطلبات المعلّقة الصادرة —
+       بدون الثاني يقدر حساب واحد يغرق كل المستخدمين بطلبات */
+    const mine = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM friends WHERE (a=?1 OR b=?1) AND status='accepted'"
+    ).bind(me.device_id).first();
+    if ((mine && mine.n || 0) >= ACC.MAX_FRIENDS)
+      return fail(request, 'limit', 'وصلت الحد الأقصى للأصدقاء');
+    const out = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM friends WHERE requested_by=?1 AND status='pending'"
+    ).bind(me.device_id).first();
+    if ((out && out.n || 0) >= ACC.MAX_PENDING)
+      return fail(request, 'limit', 'عندك طلبات معلّقة كثيرة');
+
+    await env.DB.prepare(
+      "INSERT OR IGNORE INTO friends (a,b,status,requested_by,created_at,updated_at) VALUES (?1,?2,'pending',?3,?4,?4)"
+    ).bind(a, b, me.device_id, now).run();
+    return J(request, { ok: true, state: 'sent' });
+  }
+
+  if (path === 'friends/block') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'frb:' + me.device_id, 40, 60 * 60 * 1000))
+      return fail(request, 'rate');
+    const other = await deviceByUsername(env, body.username);
+    if (!other || other === me.device_id) return fail(request, 'not-found', 'ما فيه حساب بهذا الاسم');
+    const [a, b] = pairKey(me.device_id, other);
+    /* نفس الصف: الحظر يمحو الصداقة أو الطلب ويحلّ محلّهما.
+       requested_by هنا = الحاظر، وبه نعرف من يقدر يرفع الحظر. */
+    await env.DB.prepare(
+      `INSERT INTO friends (a,b,status,requested_by,created_at,updated_at)
+       VALUES (?1,?2,'blocked',?3,?4,?4)
+       ON CONFLICT(a,b) DO UPDATE SET status='blocked', requested_by=?3, updated_at=?4`
+    ).bind(a, b, me.device_id, now).run();
+    return J(request, { ok: true, state: 'blocked' });
+  }
+
+  if (path === 'friends/unblock') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'fru:' + me.device_id, 40, 60 * 60 * 1000))
+      return fail(request, 'rate');
+    const other = await deviceByUsername(env, body.username);
+    if (!other) return J(request, { ok: true });
+    const [a, b] = pairKey(me.device_id, other);
+    /* الحاظر وحده يرفع حظره — وإلا رفع المحظورُ الحظرَ عن نفسه */
+    await env.DB.prepare(
+      "DELETE FROM friends WHERE a=?1 AND b=?2 AND status='blocked' AND requested_by=?3"
+    ).bind(a, b, me.device_id).run();
+    return J(request, { ok: true });
+  }
+
+  if (path === 'friends/accept') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'frc:' + me.device_id, 60, 60 * 60 * 1000))
+      return fail(request, 'rate');
+    const other = await deviceByUsername(env, body.username);
+    if (!other) return fail(request, 'not-found', 'ما فيه حساب بهذا الاسم');
+    const [a, b] = pairKey(me.device_id, other);
+    /* الشرط requested_by <> me يمنع أن يقبل أحد طلبه بنفسه */
+    const r = await env.DB.prepare(
+      "UPDATE friends SET status='accepted', updated_at=?3 WHERE a=?1 AND b=?2 AND status='pending' AND requested_by <> ?4"
+    ).bind(a, b, now, me.device_id).run();
+    const changed = r && r.meta ? r.meta.changes : 1;
+    if (!changed) return fail(request, 'not-found', 'ما فيه طلب من هذا الحساب');
+    return J(request, { ok: true, state: 'friends' });
+  }
+
+  /* حذف صديق، ورفض طلب وارد، وسحب طلب صادر — كلها إزالة للصف نفسه */
+  if (path === 'friends/remove') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'frd:' + me.device_id, 60, 60 * 60 * 1000))
+      return fail(request, 'rate');
+    const other = await deviceByUsername(env, body.username);
+    if (!other) return J(request, { ok: true });
+    const [a, b] = pairKey(me.device_id, other);
+    await env.DB.prepare('DELETE FROM friends WHERE a = ?1 AND b = ?2').bind(a, b).run();
+    return J(request, { ok: true });
+  }
+
+  /* ═══════════════════════ دعوة صديق لغرفتك ═══════════════════════
+     الدعوة صفّ قصير العمر: من، إلى، أي لعبة، أي رمز. تنتهي بنفسها بعد
+     ٢٠ دقيقة فما تتراكم، والمستقبل يمسحها بمجرد ما يشوفها.            */
+
+  if (path === 'invites/send') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'invs:' + me.device_id, 40, 60 * 60 * 1000))
+      return fail(request, 'rate', 'دعوات كثيرة، جرّب بعد شوي');
+
+    const game = String(body.game || '').toLowerCase();
+    if (!LOBBY_GAMES[game]) return fail(request, 'bad-game', 'لعبة غير معروفة');
+    const code = String(body.code || '').toUpperCase();
+    if (!/^[A-Z0-9]{4,8}$/.test(code)) return fail(request, 'bad-code', 'رمز غير صالح');
+
+    const other = await deviceByUsername(env, body.username);
+    if (!other || other === me.device_id) return fail(request, 'not-found', 'ما فيه حساب بهذا الاسم');
+
+    /* الدعوة للأصدقاء فقط — وإلا صارت بريدًا مزعجًا لأي أحد يعرف يوزرك */
+    const [a, b] = pairKey(me.device_id, other);
+    const rel = await env.DB.prepare(
+      'SELECT status FROM friends WHERE a=?1 AND b=?2'
+    ).bind(a, b).first();
+    if (!rel || rel.status !== 'accepted')
+      return fail(request, 'not-friend', 'تقدر تدعو أصدقاءك فقط');
+
+    await env.DB.prepare(
+      `INSERT INTO invites (from_did, to_did, game, code, created_at, expires_at)
+       VALUES (?1,?2,?3,?4,?5,?6)`
+    ).bind(me.device_id, other, game, code, now, now + ACC.INVITE_TTL_MS).run();
+    return J(request, { ok: true });
+  }
+
+  if (path === 'invites/list') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'invl:' + me.device_id, 120, 60 * 1000))
+      return fail(request, 'rate');
+    await touchSeen(env, me.device_id, now);
+    const rows = await env.DB.prepare(
+      `SELECT i.id, i.game, i.code, i.created_at, p.username, p.display_name, p.avatar
+         FROM invites i JOIN players p ON p.device_id = i.from_did
+        WHERE i.to_did = ?1 AND i.expires_at > ?2
+        ORDER BY i.created_at DESC LIMIT 10`
+    ).bind(me.device_id, now).all();
+    const list = ((rows && rows.results) || []).map(r => ({
+      id: r.id, game: r.game, code: r.code,
+      path: (LOBBY_GAMES[r.game] || {}).path || '/',
+      gameName: (LOBBY_GAMES[r.game] || {}).name || r.game,
+      username: r.username || '', display_name: r.display_name || '', avatar: r.avatar || '',
+    }));
+    return J(request, { ok: true, invites: list });
+  }
+
+  if (path === 'invites/clear') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (body.id === undefined)
+      await env.DB.prepare('DELETE FROM invites WHERE to_did = ?1').bind(me.device_id).run();
+    else
+      await env.DB.prepare('DELETE FROM invites WHERE to_did = ?1 AND id = ?2')
+        .bind(me.device_id, Number(body.id) || 0).run();
+    return J(request, { ok: true });
+  }
+
+  /* ═══════════════════════ الإبلاغ عن لاعب ═══════════════════════ */
+
+  if (path === 'report') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    /* سقف يومي: البلاغ سلاح، وبلا حدّ يصير أداة مضايقة بنفسه */
+    if (!await rateLimit(env, 'rep:' + me.device_id, 10, 24 * 60 * 60 * 1000))
+      return fail(request, 'rate', 'بلاغات كثيرة اليوم، جرّب بكرة');
+
+    const reason = String(body.reason || '');
+    if (!REPORT_REASONS[reason]) return fail(request, 'bad-reason', 'اختر سبب البلاغ');
+
+    const other = await deviceByUsername(env, body.username);
+    if (!other || other === me.device_id)
+      return fail(request, 'not-found', other ? 'ما تقدر تبلّغ عن نفسك' : 'ما فيه حساب بهذا الاسم');
+
+    /* بلاغ واحد لكل زوج كل ٦ ساعات — يمنع إغراق اللوحة بنفس الشكوى */
+    const recent = await env.DB.prepare(
+      'SELECT id FROM reports WHERE from_did=?1 AND about_did=?2 AND created_at > ?3'
+    ).bind(me.device_id, other, now - 6 * 60 * 60 * 1000).first();
+    if (recent) return J(request, { ok: true, duplicate: true });
+
+    const note = cleanText(body.note, 300);
+    const game = LOBBY_GAMES[String(body.game || '').toLowerCase()] ? String(body.game).toLowerCase() : '';
+    const code = /^[A-Z0-9]{4,8}$/.test(String(body.code || '').toUpperCase())
+      ? String(body.code).toUpperCase() : '';
+
+    await env.DB.prepare(
+      `INSERT INTO reports (from_did, about_did, reason, note, game, code, status, created_at)
+       VALUES (?1,?2,?3,?4,?5,?6,'open',?7)`
+    ).bind(me.device_id, other, reason, note, game, code, now).run();
+    return J(request, { ok: true });
+  }
+
   /* ---------- تسجيل الخروج: يبطل كل التوكنات لهذا الحساب ---------- */
   if (path === 'logout') {
     const me = await authFromBody(env, body);
@@ -8714,6 +9034,164 @@ async function handleAccount(request, env, url, ctx) {
   }
 
   return fail(request, 'db', 'مسار غير معروف', 404);
+}
+
+
+/* أسباب البلاغ قائمة مغلقة: العميل يرسل المفتاح فقط، والنص من هنا —
+   فلا يصل للوحة نصّ حرّ من الشبكة في حقل السبب. */
+const REPORT_REASONS = {
+  abuse:   'ألفاظ أو إساءة',
+  cheat:   'غش أو تلاعب',
+  impersonate: 'انتحال شخصية',
+  spam:    'إزعاج أو تكرار',
+  nsfw:    'محتوى غير لائق',
+  other:   'سبب آخر',
+};
+
+/* ─────────────────────────── الأصدقاء: أدوات ─────────────────────────── */
+
+/* مفتاح ثابت للعلاقة مهما كان من بدأها — صفّ واحد لكل زوج لا صفّان */
+function pairKey(x, y) { return x < y ? [x, y] : [y, x]; }
+
+async function deviceByUsername(env, raw) {
+  const v = validateUsername(raw);
+  if (!v.ok) return null;
+  const row = await env.DB.prepare(
+    'SELECT device_id FROM players WHERE username_norm = ?1'
+  ).bind(v.norm).first();
+  return row ? row.device_id : null;
+}
+
+/* القوائم الثلاث في استعلامين: الصداقات، ثم بيانات أصحابها.
+   لا نعيد device_id للعميل أبدًا — الاسم يكفي لكل العمليات. */
+/* نبضة حضور خفيفة: كتابة واحدة، تُنادى عند دخول غرفة أو فتح القوائم */
+async function touchSeen(env, deviceId, now) {
+  try {
+    await env.DB.prepare('UPDATE players SET last_seen = ?2 WHERE device_id = ?1')
+      .bind(deviceId, now || Date.now()).run();
+  } catch {}
+}
+
+async function friendsOf(env, deviceId) {
+  const rows = await env.DB.prepare(
+    `SELECT a, b, status, requested_by FROM friends
+      WHERE (a = ?1 OR b = ?1)
+      ORDER BY updated_at DESC LIMIT 300`
+  ).bind(deviceId).all();
+  const list = (rows && rows.results) || [];
+  if (!list.length) return { friends: [], incoming: [], outgoing: [] };
+
+  const others = list.map(r => (r.a === deviceId ? r.b : r.a));
+  const marks = others.map((_, i) => '?' + (i + 1)).join(',');
+  const people = await env.DB.prepare(
+    `SELECT device_id, username, display_name, avatar, games_played, wins, last_seen, show_online
+       FROM players WHERE device_id IN (${marks})`
+  ).bind(...others).all();
+  const byId = new Map(((people && people.results) || []).map(p => [p.device_id, p]));
+
+  const out = { friends: [], incoming: [], outgoing: [], blocked: [] };
+  const fresh = Date.now() - ACC.ONLINE_MS;
+  for (const r of list) {
+    const otherId = r.a === deviceId ? r.b : r.a;
+    const p = byId.get(otherId);
+    if (!p) continue;                       // حساب محذوف — نتجاهله بلا ضجيج
+    const card = {
+      username: p.username || '',
+      display_name: p.display_name || '',
+      avatar: p.avatar || '',
+      games: p.games_played || 0,
+      wins: p.wins || 0,
+    };
+    if (r.status === 'blocked') {
+      /* المحظور لا يظهر إلا لمن حظره، وبلا أي حالة اتصال */
+      if (r.requested_by === deviceId) out.blocked.push(card);
+      continue;
+    }
+    /* الحالة تُحسب هنا لا في العميل: من أطفأ الظهور تخرج حالته null
+       فلا يقدر أحد يستنتجها من الرد. */
+    const shows = p.show_online === null || p.show_online === undefined ? true : !!p.show_online;
+    card.online = shows ? ((p.last_seen || 0) > fresh) : null;
+    if (r.status === 'accepted') out.friends.push(card);
+    else if (r.requested_by === deviceId) out.outgoing.push(card);
+    else out.incoming.push(card);
+  }
+  return out;
+}
+
+/* ═══════════════════ لوحة البلاغات (إدارية) ═══════════════════
+   منفصلة عن مسارات الحساب: مصدرها ملف محلي لا الموقع، وحمايتها
+   ADMIN_TOKEN. كل رد يحمل CORS مفتوحًا لأن الملف بلا مصدر.        */
+function withAnyCors(res) {
+  const h = new Headers(res.headers);
+  h.set('Access-Control-Allow-Origin', '*');
+  h.set('Access-Control-Allow-Headers', 'Content-Type');
+  h.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  h.set('Cache-Control', 'no-store');
+  return new Response(res.body, { status: res.status, headers: h });
+}
+
+async function handleReports(request, env, url) {
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
+  if (request.method !== 'POST') return new Response('method', { status: 405 });
+  if (!env.DB || !env.ADMIN_TOKEN) return Response.json({ ok: false, error: 'binding-missing' });
+
+  const body = await readBody(request);
+  if (!body) return Response.json({ ok: false, error: 'bad-body' });
+
+  /* تخمين التوكن مكلف: حدّ على العنوان قبل أي مقارنة */
+  const ip = clientKey(request);
+  if (!await rateLimit(env, 'adm:' + ip, 30, 10 * 60 * 1000))
+    return Response.json({ ok: false, error: 'rate' }, { status: 429 });
+  if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN)))
+    return Response.json({ ok: false, error: 'auth' }, { status: 401 });
+
+  const now = Date.now();
+
+  if (url.pathname === '/admin/reports') {
+    const status = body.status === 'closed' ? 'closed' : body.status === 'all' ? null : 'open';
+    const rows = await env.DB.prepare(
+      `SELECT r.id, r.reason, r.note, r.game, r.code, r.status, r.created_at, r.action,
+              f.username AS from_user, f.display_name AS from_name,
+              t.username AS about_user, t.display_name AS about_name,
+              t.games_played, t.wins, t.banned
+         FROM reports r
+         LEFT JOIN players f ON f.device_id = r.from_did
+         LEFT JOIN players t ON t.device_id = r.about_did
+        WHERE (?1 IS NULL OR r.status = ?1)
+        ORDER BY r.created_at DESC LIMIT 200`
+    ).bind(status).all();
+    const list = ((rows && rows.results) || []).map(r => Object.assign({}, r, {
+      reasonText: REPORT_REASONS[r.reason] || r.reason,
+      gameName: (LOBBY_GAMES[r.game] || {}).name || '',
+    }));
+    return Response.json({ ok: true, reports: list, reasons: REPORT_REASONS });
+  }
+
+  /* إجراء على بلاغ: إغلاق، أو إغلاق مع حظر الحساب المُبلَّغ عنه.
+     الحظر يرفع token_ver كذلك فتسقط كل جلساته فورًا. */
+  if (url.pathname === '/admin/reports/act') {
+    const id = Number(body.id) || 0;
+    const action = ['close', 'ban', 'unban'].includes(body.action) ? body.action : null;
+    if (!id || !action) return Response.json({ ok: false, error: 'bad-action' });
+
+    const row = await env.DB.prepare('SELECT about_did FROM reports WHERE id = ?1').bind(id).first();
+    if (!row) return Response.json({ ok: false, error: 'not-found' });
+
+    if (action === 'ban') {
+      await env.DB.prepare(
+        'UPDATE players SET banned = 1, token_ver = token_ver + 1 WHERE device_id = ?1'
+      ).bind(row.about_did).run();
+    } else if (action === 'unban') {
+      await env.DB.prepare('UPDATE players SET banned = 0 WHERE device_id = ?1')
+        .bind(row.about_did).run();
+    }
+    await env.DB.prepare(
+      "UPDATE reports SET status='closed', action=?2, closed_at=?3 WHERE id=?1"
+    ).bind(id, action, now).run();
+    return Response.json({ ok: true });
+  }
+
+  return Response.json({ ok: false, error: 'not-found' }, { status: 404 });
 }
 
 /* --------- تسجيل نتيجة لعبة — يُنادى من داخل غرفة الـ DO فقط --------- */
