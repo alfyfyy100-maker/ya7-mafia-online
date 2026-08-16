@@ -7172,12 +7172,13 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v37',
+        version: 'v38',
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
           DAQASH_ROOM: !!env.DAQASH_ROOM, WALIMA_ROOM: !!env.WALIMA_ROOM,
           LUDO_ROOM: !!env.LUDO_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
+          BTAQATI_ROOM: !!env.BTAQATI_ROOM,
           DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET,
           ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
         },
@@ -7230,8 +7231,9 @@ export default {
       return withCors(resp, origin);
     }
 
-    if (url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
-      const gameNS = url.pathname.startsWith('/got/') ? env.GOT_ROOM
+    if (url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
+      const gameNS = url.pathname.startsWith('/btaqati/') ? env.BTAQATI_ROOM
+                    : url.pathname.startsWith('/got/') ? env.GOT_ROOM
                     : url.pathname.startsWith('/mawwih/') ? env.MAWWIH_ROOM
                     : url.pathname.startsWith('/fatin/') ? env.FATIN_ROOM
                     : url.pathname.startsWith('/daqash/') ? env.DAQASH_ROOM
@@ -7267,10 +7269,10 @@ export default {
     }
 
     // الانضمام لغرفة موجودة بالكود، أو فتح اتصال WebSocket لغرفة قائمة
-    const match = url.pathname.match(/^\/(got|mawwih|fatin|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(btaqati|got|mawwih|fatin|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
       if (!gameNS) {
         return withCors(new Response(
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
@@ -7298,6 +7300,437 @@ export default {
       { status: 200 }), origin);
   },
 };
+
+/* ══════════════════════ خمّن من؟ أونلاين (BtaqatiRoom) ══════════════════════
+   الخادم هو مصدر الحقيقة لكل ما لا يجوز أن يعرفه اللاعب عن غيره:
+   بطاقة كل لاعب، بطاقة الشبح/السوداء، وحالة "الخداع المُجهَّز".
+   العميل يرسم من الحالة العامة فقط، ويستلم بطاقته في رسالة خاصة.
+   شطب البطاقات على اللوح محليّ بحت — لا يمر بالخادم أصلًا.            */
+
+const BT_MAX_PLAYERS = 6;
+const BT_MIN_PLAYERS = 2;
+
+function btSanitizeConfig(c) {
+  c = (c && typeof c === 'object') ? c : {};
+  const sizes = [12, 16, 20, 24];
+  const modes = ['off', 'double', 'hidden'];
+  return {
+    size: sizes.includes(c.size) ? c.size : 24,
+    rounds: Math.min(9, Math.max(1, Number(c.rounds) || 3)),
+    qLimit: Math.min(30, Math.max(4, Number(c.qLimit) || 12)),
+    ruleYes: c.ruleYes !== false,
+    deceit: c.deceit !== false,
+    ghostMode: modes.includes(c.ghostMode) ? c.ghostMode : 'off',
+    deckKey: typeof c.deckKey === 'string' ? c.deckKey.slice(0, 40) : 'got',
+    deckName: cleanName(c.deckName || 'لوحة'),
+  };
+}
+
+/* بطاقات اللوحة تصل من المضيف (لتعمل اللوحات المخصّصة أيضًا)، فتُنظَّف هنا
+   قبل بثّها لبقية اللاعبين — لا نثق بما يرسله أي عميل. */
+function btSanitizeCards(arr) {
+  if (!Array.isArray(arr)) return [];
+  const out = [];
+  for (const c of arr.slice(0, 60)) {
+    if (!c || typeof c !== 'object') continue;
+    const n = cleanName(String(c.n || '')).slice(0, 40);
+    if (!n) continue;
+    const e = c.e == null ? null : cleanName(String(c.e)).slice(0, 8);
+    out.push({ n, e });
+    if (out.length >= 60) break;
+  }
+  return out;
+}
+
+export class BtaqatiRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.sockets = new Map();
+    this.state.blockConcurrencyWhile(async () => {
+      this.room = (await this.state.storage.get('room')) || {
+        code: null, hostId: null, phase: 'lobby',
+        players: [],   // {id,name,connected,seatToken,points,roundsWon,dead,armed,deceitLeft,qCount,real,ghostIdx,blackIdx}
+        cfg: btSanitizeConfig({}),
+        board: [], roundNo: 1,
+        turn: 0, target: 1, pending: null,  // pending = {asker,target} بانتظار جواب
+        note: '', lastEvent: null, winner: null,
+      };
+    });
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith('/ws')) return this.handleWebSocket(request);
+    if (url.pathname.endsWith('/create')) return this.handleCreate(request);
+    return new Response('غير موجود', { status: 404 });
+  }
+
+  async handleCreate(request) {
+    let body;
+    try { body = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
+    const { name, roomCode } = body || {};
+    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
+      return new Response('room-exists', { status: 409 });
+    }
+    this.room.code = roomCode;
+    const hostId = crypto.randomUUID();
+    const hostToken = newSeatToken();
+    this.room.hostId = hostId;
+    this.room.players = [this.newPlayer(hostId, name, hostToken)];
+    this.room.phase = 'lobby';
+    await this.persist();
+    return Response.json({ roomCode: this.room.code, playerId: hostId, seatToken: hostToken });
+  }
+
+  newPlayer(id, name, token) {
+    return {
+      id, name: cleanName(name), connected: false, seatToken: token || newSeatToken(),
+      points: 0, roundsWon: 0, dead: false, armed: false, deceitLeft: 1,
+      qCount: 0, real: -1, ghostIdx: -1, blackIdx: -1,
+      stats: { q: 0, cw: 0, cl: 0, caught: 0, wrong: 0, black: 0, fastest: null },
+    };
+  }
+
+  async handleWebSocket(request) {
+    const url = new URL(request.url);
+    if (request.headers.get('Upgrade') !== 'websocket') return new Response('يتطلب WebSocket', { status: 426 });
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    const playerId = url.searchParams.get('playerId');
+    const name = url.searchParams.get('name');
+    const token = url.searchParams.get('token');
+    let player = token ? this.room.players.find(p => p.seatToken === token) : null;
+
+    if (player) {
+      const oldId = player.id;
+      const newId = (validPlayerId(playerId) && !this.room.players.some(p => p.id === playerId)) ? playerId : oldId;
+      if (newId !== oldId) {
+        player.id = newId;
+        if (this.room.hostId === oldId) this.room.hostId = newId;
+        const stale = this.sockets.get(oldId);
+        if (stale) { try { stale.close(); } catch {} }
+        this.sockets.delete(oldId);
+      } else {
+        const stale = this.sockets.get(oldId);
+        if (stale && stale !== server) { try { stale.close(); } catch {} }
+      }
+      player.connected = true;
+    } else {
+      // رمز بلا غرفة: لا نُنشئ غرفة من اتصال WebSocket (تجاوز لحدّ الإنشاء)
+      if (!this.room.code) {
+        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.phase !== 'lobby') {
+        server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت، ما تقدر تنضم الآن' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.players.length >= BT_MAX_PLAYERS) {
+        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      player = this.newPlayer(crypto.randomUUID(), name, null);
+      player.connected = true;
+      this.room.players.push(player);
+    }
+
+    this.sockets.set(player.id, server);
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id));
+
+    await this.persist();
+    this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code, seatToken: player.seatToken });
+    this.broadcastState();
+    if (this.room.phase !== 'lobby') this.sendCard(player.id);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
+  idx(id) { return this.room.players.findIndex(p => p.id === id); }
+  async persist() { await this.state.storage.put('room', this.room); }
+
+  sendPrivate(id, payload) {
+    const ws = this.sockets.get(id);
+    if (ws) { try { ws.send(JSON.stringify(payload)); } catch {} }
+  }
+  broadcastPublic(payload) {
+    for (const ws of this.sockets.values()) { try { ws.send(JSON.stringify(payload)); } catch {} }
+  }
+
+  /* بطاقة اللاعب تُرسل خاصة فقط — لا تدخل الحالة العامة أبدًا */
+  sendCard(id) {
+    const p = this.findPlayer(id);
+    if (!p || p.real < 0) return;
+    this.sendPrivate(id, {
+      type: 'yourCard', real: p.real,
+      ghostIdx: this.room.cfg.ghostMode === 'double' ? p.ghostIdx : -1,
+      blackIdx: this.room.cfg.ghostMode === 'hidden' ? p.blackIdx : -1,
+    });
+  }
+
+  broadcastState() {
+    const r = this.room;
+    this.broadcastPublic({
+      type: 'state',
+      phase: r.phase, code: r.code, hostId: r.hostId,
+      cfg: r.cfg, board: r.board, roundNo: r.roundNo,
+      turn: r.turn, target: r.target, pending: r.pending,
+      note: r.note, lastEvent: r.lastEvent, winner: r.winner,
+      players: r.players.map(p => ({
+        id: p.id, name: p.name, connected: p.connected,
+        points: p.points, roundsWon: p.roundsWon, dead: p.dead,
+        deceitLeft: p.deceitLeft, qCount: p.qCount,
+        // armed لا يُبَث أبدًا: لو عرفه الخصم انهار الخداع والتحدي معًا
+      })),
+    });
+  }
+
+  alive() { return this.room.players.filter(p => !p.dead); }
+
+  async onMessage(playerId, evt) {
+    let msg;
+    try { msg = JSON.parse(evt.data); } catch { return; }
+    const p = this.findPlayer(playerId);
+    if (!p || !msg || typeof msg.type !== 'string') return;
+    const r = this.room;
+    const isHost = playerId === r.hostId;
+    const me = this.idx(playerId);
+
+    switch (msg.type) {
+      case 'config':
+        if (!isHost || r.phase !== 'lobby') return;
+        r.cfg = btSanitizeConfig(msg.cfg);
+        break;
+
+      case 'start': {
+        if (!isHost || r.phase !== 'lobby') return;
+        if (r.players.length < BT_MIN_PLAYERS) {
+          this.sendPrivate(playerId, { type: 'error', message: 'تحتاج لاعبين على الأقل' });
+          return;
+        }
+        const cards = btSanitizeCards(msg.cards);
+        if (cards.length < 8) {
+          this.sendPrivate(playerId, { type: 'error', message: 'اللوحة صغيرة' });
+          return;
+        }
+        r.board = cards.slice(0, r.cfg.size);
+        this.startRound(true);
+        break;
+      }
+
+      case 'target': {
+        // اختيار الخصم المستهدف — لصاحب الدور فقط
+        if (r.phase !== 'play' || me !== r.turn || r.pending) return;
+        const t = Number(msg.target);
+        if (!Number.isInteger(t) || t < 0 || t >= r.players.length) return;
+        if (t === me || r.players[t].dead) return;
+        r.target = t;
+        break;
+      }
+
+      case 'ask': {
+        // صاحب الدور أرسل سؤاله شفهيًا، والخصم صار مطالبًا بالجواب
+        if (r.phase !== 'play' || me !== r.turn || r.pending) return;
+        if (r.target === me || r.players[r.target].dead) return;
+        if (this.qLeft(r.players[me]) <= 0) {
+          this.sendPrivate(playerId, { type: 'error', message: 'خلصت أسئلتك — لازم تخمّن' });
+          return;
+        }
+        r.pending = { asker: me, target: r.target };
+        r.note = '';
+        break;
+      }
+
+      case 'answer': {
+        // الخصم فقط يجاوب، ولا يجاوب إلا على سؤال معلّق موجّه له
+        if (r.phase !== 'play' || !r.pending || r.pending.target !== me) return;
+        const yes = !!msg.yes;
+        const asker = r.players[r.pending.asker];
+        const target = r.players[me];
+        asker.qCount++; asker.stats.q++;
+        r.lastEvent = { kind: 'answer', asker: r.pending.asker, target: me, yes };
+        r.pending = null;
+        // الخداع يُستهلك بمجرد الجواب سواء شكّ الخصم أو لا
+        target.armed = false;
+        if (yes && r.cfg.ruleYes) {
+          r.note = 'الجواب نعم — الدور باقي للسائل';
+        } else {
+          this.nextTurn();
+        }
+        break;
+      }
+
+      case 'deceit': {
+        // كل لاعب يجهّز خدعته على نفسه، ولا أحد يرى ذلك
+        if (r.phase !== 'play' || !r.cfg.deceit) return;
+        if (p.dead || p.armed || p.deceitLeft <= 0) return;
+        p.deceitLeft--; p.armed = true;
+        this.sendPrivate(playerId, { type: 'deceitArmed' });
+        break;
+      }
+
+      case 'challenge': {
+        // السائل يشك أن الخصم خادع — يُحسم من armed قبل استهلاكه
+        if (r.phase !== 'play' || me !== r.turn || !r.pending) return;
+        const t = r.pending.target;
+        const opp = r.players[t];
+        const asker = r.players[me];
+        asker.qCount++; asker.stats.q++;
+        if (opp.armed) {
+          opp.armed = false;
+          asker.points += 20; asker.stats.cw++; opp.stats.caught++;
+          r.lastEvent = { kind: 'challengeWin', asker: me, target: t };
+          r.note = 'كشفته! كان يخادع — والدور باقي له';
+          r.pending = null;
+        } else {
+          opp.points += 20; asker.stats.cl++;
+          r.lastEvent = { kind: 'challengeLose', asker: me, target: t };
+          r.pending = null;
+          this.nextTurn();
+        }
+        break;
+      }
+
+      case 'accuse': {
+        if (r.phase !== 'play' || me !== r.turn) return;
+        const t = r.target;
+        if (t === me || r.players[t].dead) return;
+        const pick = Number(msg.card);
+        if (!Number.isInteger(pick) || pick < 0 || pick >= r.board.length) return;
+        this.resolveAccuse(me, t, pick);
+        break;
+      }
+
+      case 'nextRound':
+        if (!isHost || r.phase !== 'round') return;
+        this.startRound(false);
+        break;
+
+      case 'rematch':
+        if (!isHost || r.phase !== 'over') return;
+        for (const q of r.players) { q.points = 0; q.roundsWon = 0; }
+        r.roundNo = 1;
+        r.phase = 'lobby'; r.winner = null; r.note = ''; r.lastEvent = null;
+        break;
+
+      default: return;
+    }
+
+    await this.persist();
+    this.broadcastState();
+  }
+
+  qLeft(p) { return Math.max(0, this.room.cfg.qLimit - p.qCount); }
+
+  startRound(first) {
+    const r = this.room;
+    if (!first) r.roundNo++;
+    const n = r.board.length;
+    const used = new Set();
+    for (const p of r.players) {
+      p.dead = false; p.armed = false; p.qCount = 0; p.deceitLeft = 1;
+      p.real = randInt(n);
+      // الشبح/السوداء لا تساوي بطاقة اللاعب نفسه
+      let g = randInt(n); let guard = 0;
+      while (g === p.real && guard++ < 20) g = randInt(n);
+      p.ghostIdx = r.cfg.ghostMode === 'double' ? g : -1;
+      p.blackIdx = r.cfg.ghostMode === 'hidden' ? g : -1;
+      used.add(p.real);
+    }
+    r.turn = 0;
+    r.target = r.players.length > 1 ? 1 : 0;
+    r.pending = null;
+    r.note = '';
+    r.lastEvent = { kind: 'roundStart', roundNo: r.roundNo };
+    r.phase = 'play';
+    for (const p of r.players) this.sendCard(p.id);
+  }
+
+  nextTurn() {
+    const r = this.room;
+    const n = r.players.length;
+    for (let k = 1; k <= n; k++) {
+      const i = (r.turn + k) % n;
+      if (!r.players[i].dead) { r.turn = i; break; }
+    }
+    // الهدف الافتراضي: أول حيّ غير صاحب الدور
+    if (r.players[r.target].dead || r.target === r.turn) {
+      for (let k = 1; k <= n; k++) {
+        const i = (r.turn + k) % n;
+        if (!r.players[i].dead) { r.target = i; break; }
+      }
+    }
+    r.pending = null;
+  }
+
+  resolveAccuse(me, t, pick) {
+    const r = this.room;
+    const asker = r.players[me];
+    const opp = r.players[t];
+
+    if (pick === opp.real) {
+      const f = asker.stats.fastest;
+      asker.stats.fastest = f === null ? asker.qCount : Math.min(f, asker.qCount);
+      this.endRound(me, asker.qCount, { kind: 'correct', by: me, of: t });
+      return;
+    }
+
+    asker.dead = true; asker.stats.wrong++;
+    const wasGhost = r.cfg.ghostMode === 'double' && pick === opp.ghostIdx;
+    const wasBlack = r.cfg.ghostMode === 'hidden' && pick === opp.blackIdx;
+    if (wasBlack) { asker.points = Math.max(0, asker.points - 50); asker.stats.black++; }
+    r.lastEvent = { kind: 'wrong', by: me, of: t, ghost: wasGhost, black: wasBlack };
+
+    const alive = this.alive();
+    if (alive.length === 1) {
+      this.endRound(r.players.indexOf(alive[0]), null, { kind: 'lastStanding', by: me });
+      return;
+    }
+    r.pending = null;
+    this.nextTurn();
+  }
+
+  endRound(winnerIdx, usedQ, event) {
+    const r = this.room;
+    const w = r.players[winnerIdx];
+    const speed = usedQ !== null ? Math.max(0, (r.cfg.qLimit - usedQ)) * 10 : 0;
+    w.points += 100 + speed;
+    w.roundsWon++;
+    r.lastEvent = Object.assign({ winner: winnerIdx, gained: 100 + speed }, event || {});
+    r.pending = null;
+    if (r.roundNo >= r.cfg.rounds) {
+      let best = 0;
+      r.players.forEach((p, i) => { if (p.points > r.players[best].points) best = i; });
+      r.winner = best;
+      r.phase = 'over';
+    } else {
+      r.phase = 'round';
+    }
+  }
+
+  onClose(playerId) {
+    const p = this.findPlayer(playerId);
+    this.sockets.delete(playerId);
+    if (p) p.connected = false;
+    this.state.blockConcurrencyWhile(async () => {
+      // في اللوبي فقط نزيل المنقطع؛ أثناء اللعب نبقيه ليعود بمقعده
+      if (this.room.phase === 'lobby') {
+        this.room.players = this.room.players.filter(x => x.id !== playerId);
+        if (this.room.hostId === playerId && this.room.players.length) {
+          this.room.hostId = this.room.players[0].id;
+        }
+      }
+      await this.persist();
+      this.broadcastState();
+    });
+  }
+}
 
 /* ============================================================================
    YA7 ACCOUNTS v3  —  يطابق عقد صفحة /account/index.html الموجودة
