@@ -42,6 +42,8 @@ function cleanName(raw) {
   const s = String(raw == null ? '' : raw)
     .replace(/[<>&"'`\\]/g, '')
     .replace(/[\u0000-\u001F\u007F]/g, '')
+    // محارف الاتجاه والعرض الصفري: تقلب ترتيب الاسم المعروض وتزوّر شكله
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 14);
@@ -70,6 +72,7 @@ function cleanText(raw, max = 60) {
   return String(raw == null ? '' : raw)
     .replace(/[<>&"'`\\]/g, '')
     .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, max);
@@ -194,7 +197,7 @@ function pickRandom(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = randInt(i + 1);   // الأدوار سرّ اللعبة — crypto لا Math.random
     [arr[i], arr[j]] = [arr[j], arr[i]];
   }
   return arr;
@@ -213,7 +216,7 @@ function buildRoleList(config, playerCount) {
   if (config.trap) roles.push('trap');
   let hasTwins = false;
   if (config.twins) {
-    const evilTwin = Math.random() < 0.3; // ٣٠٪ أن أحد التوأمين شرير
+    const evilTwin = randInt(10) < 3; // ٣٠٪ أن أحد التوأمين شرير
     roles.push(evilTwin ? 'twin_evil' : 'twin_good');
     roles.push('twin_good');
     hasTwins = true;
@@ -667,7 +670,9 @@ export class MafiaRoom {
         alive: true, role: null, twinId: null, connected: true,
         seatToken: newSeatToken(),
       };
-      this.room.players.push(player);
+      const back = reclaimSeat(this.room, this.sockets, name);
+      if (back) { player = back; }
+      else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     } else {
       player.connected = true;
     }
@@ -2302,7 +2307,9 @@ export class GotRoom {
         return new Response(null, { status: 101, webSocket: client });
       }
       player = { id: crypto.randomUUID(), name: cleanName(name), gender, alive: true, role: null, partnerId: null, connected: true, usedRevive: false, seatToken: newSeatToken() };
-      this.room.players.push(player);
+      const back = reclaimSeat(this.room, this.sockets, name);
+      if (back) { player = back; }
+      else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     } else {
       player.connected = true;
     }
@@ -2358,6 +2365,21 @@ export class GotRoom {
     if (msg.type === 'addBot' && playerId === this.room.hostId && this.room.phase === 'lobby') await this.addBot(msg.gender, msg.dialect);
     if (msg.type === 'removeBot' && playerId === this.room.hostId && this.room.phase === 'lobby') await this.removeBot(msg.targetId);
     if (msg.type === 'setAdultMode' && playerId === this.room.hostId) { this.room.adultMode = !!msg.on; await this.persist(); this.broadcastLobby(); }
+    if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') {
+      const tid = msg.targetId;
+      if (typeof tid === 'string' && tid !== this.room.hostId) {
+        const target = this.room.players.find(x => x.id === tid);
+        if (target) {
+          this.sendPrivate(tid, { type: 'kicked' });
+          const sock = this.sockets.get(tid);
+          if (sock) { try { sock.close(); } catch {} this.sockets.delete(tid); }
+          this.room.players = this.room.players.filter(x => x.id !== tid);
+          await this.persist();
+          this.broadcastState();
+        }
+      }
+      return;
+    }
     if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
     if (msg.type === 'nightAction' && this.room.phase === 'night') await this.handleNightAction(playerId, msg);
     if (msg.type === 'baelishAlign') await this.handleBaelishAlign(playerId, msg.side);
@@ -2545,7 +2567,7 @@ export class GotRoom {
     const n = this.room.players.length;
     if (n < 4) { this.sendPrivate(this.room.hostId, { type:'error', message:'أقل عدد للبدء ٤ لاعبين' }); return; }
     const roles = gotBuildRoles(n, this.room.config);
-    for (let i=roles.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [roles[i],roles[j]]=[roles[j],roles[i]]; }
+    for (let i=roles.length-1;i>0;i--){ const j=randInt(i+1); [roles[i],roles[j]]=[roles[j],roles[i]]; }
     // تصفير حالة الجولة السابقة — وإلا ورث «متعدد الوجوه» من لعبة سابقة أو بقيت كشوف فاريس القديمة
     this.room.firstDeathDone = false;
     this.room.ravenUsed = {}; this.room.ravenPending = []; this.room.ravenLog = {}; this.room.varysKnown = [];
@@ -3445,7 +3467,9 @@ export class MawwihRoom {
         return new Response(null, { status: 101, webSocket: client });
       }
       player = { id: crypto.randomUUID(), name: cleanName(name), gender, connected: true, score: 0, av: null, team: null, seatToken: newSeatToken() };
-      this.room.players.push(player);
+      const back = reclaimSeat(this.room, this.sockets, name);
+      if (back) { player = back; }
+      else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     } else {
       player.connected = true;
     }
@@ -3506,6 +3530,21 @@ export class MawwihRoom {
       }
     }
     if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') await this.kickPlayer(msg.targetId);
+    if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') {
+      const tid = msg.targetId;
+      if (typeof tid === 'string' && tid !== this.room.hostId) {
+        const target = this.room.players.find(x => x.id === tid);
+        if (target) {
+          this.sendPrivate(tid, { type: 'kicked' });
+          const sock = this.sockets.get(tid);
+          if (sock) { try { sock.close(); } catch {} this.sockets.delete(tid); }
+          this.room.players = this.room.players.filter(x => x.id !== tid);
+          await this.persist();
+          this.broadcastState();
+        }
+      }
+      return;
+    }
     if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
     if (msg.type === 'pickCategory' && this.room.phase === 'picking' && playerId === this.chooser().id) await this.pickCategory(msg.catIndex);
     if (msg.type === 'submitAnswer' && this.room.phase === 'writing') await this.submitAnswer(playerId, msg.text);
@@ -3832,7 +3871,7 @@ export class MawwihRoom {
   async persist() { await this.touchRoom(); await this.state.storage.put('room', this.room); }
 }
 
-function shuffleArr(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; }
+function shuffleArr(a) { for (let i = a.length - 1; i > 0; i--) { const j = randInt(i + 1);[a[i], a[j]] = [a[j], a[i]]; } return a; }
 function norm(s) {
   return (s || '')
     .trim()
@@ -3964,7 +4003,7 @@ const FATIN_BANK = {
  ]
 };
 const FATIN_CATS = Object.keys(FATIN_BANK);
-function fatinShuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+function fatinShuffle(a){for(let i=a.length-1;i>0;i--){const j=randInt(i+1);[a[i],a[j]]=[a[j],a[i]]}return a}
 function fatinPickCats(n){return fatinShuffle(FATIN_CATS.slice()).slice(0,n)}
 
 const FATIN_TOP = 24, FATIN_ROUNDS = 7;
@@ -4102,7 +4141,9 @@ export class FatinRoom {
         color: FATIN_COLORS[this.room.players.length % FATIN_COLORS.length],
         connected: true, steps: 0, pts: 0, ammo: 2, special: true, seatToken: newSeatToken(),
       };
-      this.room.players.push(player);
+      const back = reclaimSeat(this.room, this.sockets, name);
+      if (back) { player = back; }
+      else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     } else {
       player.connected = true;
     }
@@ -4627,7 +4668,7 @@ const WL_AI_MODEL = 'deepseek/deepseek-v4-flash';
 const WL_MAX_STATEMENT = 400;
 
 function wlPick(a){ return a[Math.floor(Math.random()*a.length)]; }
-function wlShuffle(a){ const c=a.slice(); for(let i=c.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [c[i],c[j]]=[c[j],c[i]]; } return c; }
+function wlShuffle(a){ const c=a.slice(); for(let i=c.length-1;i>0;i--){ const j=randInt(i+1); [c[i],c[j]]=[c[j],c[i]]; } return c; }
 function wlGrab(text, tag){
   const m = String(text||'').match(new RegExp('<'+tag+'>([\\s\\S]*?)</'+tag+'>'));
   return m ? m[1].trim() : '';
@@ -4726,7 +4767,9 @@ export class WalimaRoom {
         return new Response(null, { status: 101, webSocket: client });
       }
       player = { id: crypto.randomUUID(), name: cleanName(name), connected: true, seatToken: newSeatToken(), role: null, sus: 0 };
-      this.room.players.push(player);
+      const back = reclaimSeat(this.room, this.sockets, name);
+      if (back) { player = back; }
+      else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     } else {
       player.connected = true;
     }
@@ -4793,6 +4836,21 @@ export class WalimaRoom {
     try { msg = JSON.parse(evt.data); } catch { return; }
     if (!msg || typeof msg !== 'object') return;
 
+    if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') {
+      const tid = msg.targetId;
+      if (typeof tid === 'string' && tid !== this.room.hostId) {
+        const target = this.room.players.find(x => x.id === tid);
+        if (target) {
+          this.sendPrivate(tid, { type: 'kicked' });
+          const sock = this.sockets.get(tid);
+          if (sock) { try { sock.close(); } catch {} this.sockets.delete(tid); }
+          this.room.players = this.room.players.filter(x => x.id !== tid);
+          await this.persist();
+          this.broadcastState();
+        }
+      }
+      return;
+    }
     if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
     if (msg.type === 'statement' && this.room.phase === 'writing') await this.handleStatement(playerId, msg.text);
     if (msg.type === 'nextRound' && playerId === this.room.hostId && this.room.phase === 'beat') await this.nextRound();
@@ -5079,13 +5137,36 @@ function allowSocket(ip) {
 }
 
 
-function allowCreate(ip) {
-  if (!ip) return true;
+/* لودو تعمل بالاستطلاع لا بالسوكِت، فمساراتها كانت بلا أي خنق: تُمسح
+   رموز الغرف بالتخمين مجانًا وكل محاولة توقظ Durable Object. الحدّ واسع
+   لأن اللاعب الواحد يستطلع كل ١.٢ ثانية (≈٥٠ طلبًا/دقيقة). */
+const LUDO_HTTP_LIMIT = 400;
+const ludoHits = new Map();
+function allowLudoOp(ip) {
+  const key = ipKey(ip);
+  if (!key) return true;
   const now = Date.now();
-  const r = createHits.get(ip) || { n: 0, t: now };
+  const r = ludoHits.get(key) || { n: 0, t: now };
+  if (now - r.t > WS_WINDOW_MS) { r.n = 0; r.t = now; }
+  r.n++;
+  ludoHits.set(key, r);
+  if (ludoHits.size > 5000) {
+    for (const [k, v] of ludoHits) if (now - v.t > WS_WINDOW_MS) ludoHits.delete(k);
+    while (ludoHits.size > 5000) ludoHits.delete(ludoHits.keys().next().value);
+  }
+  return r.n <= LUDO_HTTP_LIMIT;
+}
+
+function allowCreate(ip) {
+  // allowSocket يحدّ على بادئة /64، وهذا كان يحدّ على العنوان الكامل —
+  // فصاحب IPv6 يبدّل العنوان داخل شبكته ويفتح غرفًا بلا سقف
+  const key = ipKey(ip);
+  if (!key) return true;
+  const now = Date.now();
+  const r = createHits.get(key) || { n: 0, t: now };
   if (now - r.t > CREATE_WINDOW_MS) { r.n = 0; r.t = now; }
   r.n++;
-  createHits.set(ip, r);
+  createHits.set(key, r);
   if (createHits.size > 5000) createHits.clear();   // سقف ذاكرة
   return r.n <= CREATE_LIMIT;
 }
@@ -5310,7 +5391,9 @@ export class DaqashRoom {
       }
       player = this.newSeat(crypto.randomUUID(), name, newSeatToken());
       player.connected = true;
-      this.room.players.push(player);
+      const back = reclaimSeat(this.room, this.sockets, name);
+      if (back) { player = back; }
+      else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     }
 
     this.sockets.set(player.id, server);
@@ -6316,21 +6399,34 @@ export class LudoRoom {
     if (path === '/join') {
       if (d.started) return J({ error: 'اللعبة بدأت' }, 400);
       if (!d.names.length) return J({ error: 'غرفة غير موجودة' }, 404);
-      if (d.names.length >= LUDO_MAX_PLAYERS) return J({ error: 'الغرفة ممتلئة' }, 400);
-      d.names.push(cleanName(body.name));
       d.tokens = d.tokens || [];
+      const want = cleanName(body.name);
+      /* رجوع اللاعب نفسه بعد تحديث الصفحة: التوكن وحده يثبت المقعد.
+         كان الاسم يكفي — ورمز الغرفة واسم المضيف معروضان في اللوبي العام،
+         فأي أحد يطلب مقعد المضيف باسمه فيستلم توكنه ويصير هو المضيف. */
+      const t = body.token ? String(body.token) : '';
+      const mine = t ? d.tokens.findIndex(x => x && tokenEquals(x, t)) : -1;
+      if (mine !== -1) {
+        if (want && d.names[mine] !== want && !d.names.includes(want)) d.names[mine] = want;
+        await this.save();
+        return J({ seat: mine, names: d.names, token: d.tokens[mine] });
+      }
+      if (d.names.length >= LUDO_MAX_PLAYERS) return J({ error: 'الغرفة ممتلئة' }, 400);
+      // الاسم المكرر يُميَّز برقم بدل ما يلتبس لاعبان على اللوح
+      let nm = want;
+      for (const suffix of ['٢','٣','٤']) { if (!d.names.includes(nm)) break; nm = (want + ' ' + suffix).slice(0, 14); }
+      d.names.push(nm);
       d.tokens[d.names.length - 1] = newSeatToken();
       await this.save();
       return J({ seat: d.names.length - 1, names: d.names, token: d.tokens[d.names.length - 1] });
     }
     // المقعد يُشتقّ من التوكن السرّي، لا من جسم الطلب — وإلا لعب أيُّ أحدٍ بمقعد غيره
-    const hasTokens = Array.isArray(d.tokens) && d.tokens.length > 0;
+    // المقعد من التوكن وحده. مسار «الغرف القديمة» كان يقبل seat من جسم
+    // الطلب، وعمر الغرفة ٦ ساعات فما بقي منها شيء — وبقاؤه يعني انتحال مقعد
     const seatOf = () => {
-      if (!hasTokens) return typeof body.seat === 'number' ? body.seat : -1;  // غرف قديمة قبل التحديث
-      const t = body.token;
-      if (!t) return -1;
-      const i = d.tokens.indexOf(t);
-      return i;
+      const tk = body.token ? String(body.token) : '';
+      if (!tk || !Array.isArray(d.tokens)) return -1;
+      return d.tokens.findIndex(x => x && tokenEquals(x, tk));
     };
     const mySeat = seatOf();
     const needSeat = () => mySeat >= 0;
@@ -6359,7 +6455,7 @@ export class LudoRoom {
       }
       d.rollAt = Date.now();
       d.declared = false;
-      d.secret = 1 + Math.floor(Math.random() * 6);
+      d.secret = 1 + randInt(6);   // الرقم سرّ حتى الكشف — لا Math.random
       d.seat = mySeat;
       d.revealed = false;
       await this.save();
@@ -6581,7 +6677,9 @@ export class DakhilRoom {
       }
       player = this.newSeat(crypto.randomUUID(), name, newSeatToken());
       player.connected = true;
-      this.room.players.push(player);
+      const back = reclaimSeat(this.room, this.sockets, name);
+      if (back) { player = back; }
+      else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     }
 
     this.sockets.set(player.id, server);
@@ -7172,7 +7270,7 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v46',
+        version: 'v50',
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
@@ -7261,6 +7359,9 @@ export default {
           }
         }
         return withCors(new Response('تعذّر إنشاء غرفة، حاول مرة ثانية', { status: 503 }), origin);
+      }
+      if (!allowLudoOp(request.headers.get('CF-Connecting-IP') || '')) {
+        return withCors(new Response('too-many-requests', { status: 429 }), origin);
       }
       const code = ludoOp[1].toUpperCase();
       const stub = env.LUDO_ROOM.get(env.LUDO_ROOM.idFromName(code));
@@ -7487,6 +7588,37 @@ export class PublicLobby {
 const BT_MAX_PLAYERS = 6;
 const BT_MIN_PLAYERS = 2;
 
+/* ── عودة اللاعب نفسه بعد تحديث الصفحة أو انقطاع مؤقّت ──
+   العميل في أكثر الألعاب لا يحتفظ بـ seatToken، فكل اتصال جديد كان
+   يُنشئ مقعدًا جديدًا ويظهر الاسم مرتين (وثلاثًا) في نفس الغرفة.
+   نستعيد المقعد القديم بشرط: ما زلنا في اللوبي، والاسم مطابق، ومقبس
+   ذلك المقعد ميت أو غير موجود. لو كان المقبس حيًّا فهو شخص آخر يحمل
+   نفس الاسم — فلا نسرق مقعده، بل نميّز الاسم الجديد برقم. */
+function reclaimSeat(room, sockets, rawName) {
+  if (!room || room.phase !== 'lobby' || !Array.isArray(room.players)) return null;
+  const n = cleanName(rawName);
+  if (!n) return null;
+  const seat = room.players.find(p => cleanName(p.name) === n);
+  if (!seat) return null;
+  const stale = sockets.get(seat.id);
+  const live = stale && stale.readyState === 1;   // 1 = OPEN
+  if (live) return null;
+  if (stale) { try { stale.close(); } catch {} sockets.delete(seat.id); }
+  seat.connected = true;
+  return seat;
+}
+
+/* اسم فريد داخل الغرفة: «سعود» ثم «سعود ٢» ثم «سعود ٣» */
+function uniqueName(room, rawName) {
+  const base = cleanName(rawName) || 'لاعب';
+  if (!room || !Array.isArray(room.players)) return base;
+  const taken = new Set(room.players.map(p => cleanName(p.name)));
+  if (!taken.has(base)) return base;
+  const ar = ['٢','٣','٤','٥','٦','٧','٨','٩','١٠'];
+  for (const d of ar) { const c = base + ' ' + d; if (!taken.has(c)) return c; }
+  return base + ' ' + Math.floor(Math.random() * 900 + 100);
+}
+
 function btSanitizeConfig(c) {
   c = (c && typeof c === 'object') ? c : {};
   const sizes = [12, 16, 20, 24];
@@ -7494,7 +7626,8 @@ function btSanitizeConfig(c) {
   return {
     size: sizes.includes(c.size) ? c.size : 24,
     rounds: Math.min(9, Math.max(1, Number(c.rounds) || 3)),
-    qLimit: Math.min(30, Math.max(4, Number(c.qLimit) || 12)),
+    // 0 = بلا حد، تمامًا كوضع الجهاز الواحد
+    qLimit: Number(c.qLimit) === 0 ? 0 : Math.min(30, Math.max(4, Number(c.qLimit) || 12)),
     ruleYes: c.ruleYes !== false,
     deceit: c.deceit !== false,
     ghostMode: modes.includes(c.ghostMode) ? c.ghostMode : 'off',
@@ -7579,7 +7712,7 @@ export class BtaqatiRoom {
     const playerId = url.searchParams.get('playerId');
     const name = url.searchParams.get('name');
     const token = url.searchParams.get('token');
-    let player = token ? this.room.players.find(p => p.seatToken === token) : null;
+    let player = token ? this.room.players.find(p => tokenEquals(p.seatToken, token)) : null;
 
     if (player) {
       const oldId = player.id;
@@ -7614,7 +7747,9 @@ export class BtaqatiRoom {
       }
       player = this.newPlayer(crypto.randomUUID(), name, null);
       player.connected = true;
-      this.room.players.push(player);
+      const back = reclaimSeat(this.room, this.sockets, name);
+      if (back) { player = back; }
+      else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
     }
 
     this.sockets.set(player.id, server);
@@ -7630,7 +7765,7 @@ export class BtaqatiRoom {
 
   findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
   idx(id) { return this.room.players.findIndex(p => p.id === id); }
-  async persist() { await this.state.storage.put('room', this.room); }
+  async persist() { await this.touchRoom(); await this.state.storage.put('room', this.room); }
 
   sendPrivate(id, payload) {
     const ws = this.sockets.get(id);
@@ -7671,6 +7806,7 @@ export class BtaqatiRoom {
   alive() { return this.room.players.filter(p => !p.dead); }
 
   async onMessage(playerId, evt) {
+    if (!this.allowMsg(playerId)) return;   // خنق: ١٢ رسالة/ثانية مثل باقي الغرف
     let msg;
     try { msg = JSON.parse(evt.data); } catch { return; }
     const p = this.findPlayer(playerId);
@@ -7684,6 +7820,19 @@ export class BtaqatiRoom {
         if (!isHost || r.phase !== 'lobby') return;
         r.cfg = btSanitizeConfig(msg.cfg);
         break;
+
+      case 'kickPlayer': {
+        if (!isHost || r.phase !== 'lobby') return;
+        const tid = msg.targetId;
+        if (typeof tid !== 'string' || tid === r.hostId) return;  // المضيف ما يطرد نفسه
+        const target = r.players.find(x => x.id === tid);
+        if (!target) return;
+        this.sendPrivate(tid, { type: 'kicked' });
+        const sock = this.sockets.get(tid);
+        if (sock) { try { sock.close(); } catch {} this.sockets.delete(tid); }
+        r.players = r.players.filter(x => x.id !== tid);
+        break;
+      }
 
       case 'start': {
         if (!isHost || r.phase !== 'lobby') return;
@@ -7803,7 +7952,7 @@ export class BtaqatiRoom {
     this.broadcastState();
   }
 
-  qLeft(p) { return Math.max(0, this.room.cfg.qLimit - p.qCount); }
+  qLeft(p) { return this.room.cfg.qLimit ? Math.max(0, this.room.cfg.qLimit - p.qCount) : 99; }
 
   startRound(first) {
     const r = this.room;
@@ -7876,7 +8025,7 @@ export class BtaqatiRoom {
   endRound(winnerIdx, usedQ, event) {
     const r = this.room;
     const w = r.players[winnerIdx];
-    const speed = usedQ !== null ? Math.max(0, (r.cfg.qLimit - usedQ)) * 10 : 0;
+    const speed = usedQ !== null ? Math.max(0, ((r.cfg.qLimit || 15) - usedQ)) * 10 : 0;
     w.points += 100 + speed;
     w.roundsWon++;
     r.lastEvent = Object.assign({ winner: winnerIdx, gained: 100 + speed }, event || {});
@@ -7908,6 +8057,10 @@ export class BtaqatiRoom {
     });
   }
 }
+
+/* كانت الغرفة الوحيدة بلا هذا السطر: بلا خنق للرسائل وبلا منبّه حذف،
+   فكل غرفة «مين بطاقتي؟» تُنشأ تبقى مخزّنة للأبد */
+applyRoomCommon(BtaqatiRoom);
 
 /* ============================================================================
    YA7 ACCOUNTS v3  —  يطابق عقد صفحة /account/index.html الموجودة
