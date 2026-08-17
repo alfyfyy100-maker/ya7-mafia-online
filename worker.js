@@ -8969,6 +8969,40 @@ async function handleAccountInner(request, env, url, ctx) {
      يصير لكل صداقة صفّان متعاكسان يتناقضان مع الوقت.
      status: 'pending' حتى يقبل الطرف الآخر، ثم 'accepted'.            */
 
+  /* ── إشعار خفيف: كم طلب صداقة ينتظرني ومن آخر مرسل ──
+     منفصل عن friends/list عمدًا: تلك تجلب ٣٠٠ صفّ وتضمّها بجدول
+     اللاعبين، وهذا يُنادى كل ٤٥ ثانية من كل صفحة مفتوحة. الفرق في
+     الصفوف الممسوحة هو الفاتورة نفسها في D1. */
+  if (path === 'notify') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    if (!await rateLimit(env, 'ntf:' + me.device_id, 90, 60 * 1000))
+      return fail(request, 'rate');
+    await touchSeen(env, me.device_id, now);
+
+    const cnt = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM friends
+        WHERE status = 'pending' AND requested_by <> ?1 AND (a = ?1 OR b = ?1)`
+    ).bind(me.device_id).first();
+    const n = (cnt && cnt.n) || 0;
+    if (!n) return J(request, { ok: true, requests: 0 });
+
+    const last = await env.DB.prepare(
+      `SELECT p.username AS username, p.display_name AS display_name
+         FROM friends f JOIN players p ON p.device_id = f.requested_by
+        WHERE f.status = 'pending' AND f.requested_by <> ?1
+          AND (f.a = ?1 OR f.b = ?1)
+        ORDER BY f.updated_at DESC LIMIT 1`
+    ).bind(me.device_id).first();
+
+    return J(request, {
+      ok: true,
+      requests: n,
+      from: (last && last.username) || '',
+      fromName: (last && last.display_name) || '',
+    });
+  }
+
   if (path === 'friends/list') {
     const me = await authFromBody(env, body);
     if (!me) return fail(request, 'auth');
