@@ -7736,6 +7736,12 @@ export default {
       return withAnyCors(await handleReports(request, env, url));
     }
 
+    /* لوحة التحكم الشاملة — نفس منطق البلاغات: ملف محلي مصدره null،
+       والحماية بالتوكن لا بالمصدر. */
+    if (url.pathname.startsWith('/admin/panel')) {
+      return withAnyCors(await handlePanel(request, env, url));
+    }
+
     if (request.method === 'OPTIONS') {
       return new Response(null, { headers: corsFor(origin) });
     }
@@ -7746,7 +7752,7 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v61',
+        version: 'v62',
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
@@ -9280,19 +9286,17 @@ async function handleAccountInner(request, env, url, ctx) {
     return J(request, { ok: true, player: playerOf(row) });
   }
 
-  /* ---------- عرض رمز الاسترجاع مرة أخرى ---------- */
+  /* ---------- رمز الاسترجاع: يُعرض مرة واحدة عند التسجيل فقط ----------
+     كان هذا المسار يعيد عرض الرمز لأي جلسة مفتوحة، فمن يمسك الجوال وهو
+     مفتوح ينسخ الرمز ويملك الحساب للأبد حتى بعد تسجيل الخروج. أُغلق:
+     التشفير باقٍ كما هو (يلزم لاسترجاعه عبر البريد الاحتياطي)، لكن ما
+     عاد يخرج للعميل. المسار يبقى موجودًا ليردّ ردًّا مفهومًا على أي
+     صفحة قديمة محفوظة في كاش المتصفح. */
   if (path === 'code') {
     const me = await authFromBody(env, body);
     if (!me) return fail(request, 'auth');
-    if (!await rateLimit(env, 'code:' + me.device_id, 20, 60 * 60 * 1000))
-      return fail(request, 'rate');
-
-    const plain = await decryptText(env.ACCOUNT_CODE_KEY, me.code_cipher || '');
-    if (!plain) return fail(request, 'db');
-    return J(request, {
-      ok: true,
-      recovery_code: plain.slice(0, 5) + '-' + plain.slice(5),
-    });
+    return fail(request, 'gone',
+      'كود الاسترجاع يُعرض مرة واحدة وقت إنشاء الحساب فقط.');
   }
 
   /* ---------- وسيلة تواصل اختيارية (مشفّرة) ---------- */
@@ -9752,6 +9756,290 @@ async function handleReports(request, env, url) {
       "UPDATE reports SET status='closed', action=?2, closed_at=?3 WHERE id=?1"
     ).bind(id, action, now).run();
     return Response.json({ ok: true });
+  }
+
+  return Response.json({ ok: false, error: 'not-found' }, { status: 404 });
+}
+
+/* ═══════════════════ لوحة التحكم الشاملة (إدارية) ═══════════════════
+   ملف `ya7-panel.html` محلي على الجوال، يلصق فيه التوكن كل مرة ولا يُحفظ.
+   كل شيء هنا للقراءة إلا `act`. قواعد ثابتة:
+     • لا يخرج `device_id` ولا `code_cipher` ولا `contact_cipher` أبدًا —
+       معرّف الجهاز مفتاح الحساب، وتسريبه للوحة يعني تسريبه لأي أحد
+       يلتقط الرد. الإجراءات كلها باليوزر.
+     • كل استعلام بسقف صريح: قراءات D1 تُحاسب بعدد الصفوف الممسوحة.
+     • البحث بـ LIKE على عمودين فقط ومقيّد بـ ٥٠ صفًّا للصفحة.          */
+
+const PANEL_PAGE = 50;
+const PANEL_SORTS = {
+  last_seen:  'last_seen DESC',
+  created_at: 'created_at DESC',
+  games:      'games_played DESC',
+  wins:       'wins DESC',
+};
+
+function panelPlayer(r) {
+  return {
+    username: r.username || '',
+    display_name: r.display_name || '',
+    avatar: r.avatar || '',
+    games: r.games_played || 0,
+    wins: r.wins || 0,
+    losses: r.losses || 0,
+    best_streak: r.best_streak || 0,
+    visit_streak: r.visit_streak || 0,
+    best_visit_streak: r.best_visit_streak || 0,
+    created_at: r.created_at || 0,
+    last_seen: r.last_seen || 0,
+    banned: !!r.banned,
+    has_contact: !!r.contact_cipher,        // وجوده فقط، لا قيمته
+    show_online: r.show_online === null || r.show_online === undefined ? 1 : (r.show_online ? 1 : 0),
+  };
+}
+
+async function handlePanel(request, env, url) {
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
+  if (request.method !== 'POST') return new Response('method', { status: 405 });
+  if (!env.DB || !env.ADMIN_TOKEN) return Response.json({ ok: false, error: 'binding-missing' });
+
+  const body = await readBody(request);
+  if (!body) return Response.json({ ok: false, error: 'bad-body' });
+
+  const ip = clientKey(request);
+  if (!await rateLimit(env, 'adm:' + ip, 30, 10 * 60 * 1000))
+    return Response.json({ ok: false, error: 'rate' }, { status: 429 });
+  if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN)))
+    return Response.json({ ok: false, error: 'auth' }, { status: 401 });
+
+  const now = Date.now();
+  const path = url.pathname.slice('/admin/panel'.length) || '/';
+
+  /* ---------- نظرة عامة ---------- */
+  if (path === '/overview') {
+    const day = 24 * 60 * 60 * 1000;
+    const p = await env.DB.prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN created_at >= ?1 THEN 1 ELSE 0 END) AS new24,
+              SUM(CASE WHEN created_at >= ?2 THEN 1 ELSE 0 END) AS new7,
+              SUM(CASE WHEN last_seen  >= ?1 THEN 1 ELSE 0 END) AS act24,
+              SUM(CASE WHEN last_seen  >= ?2 THEN 1 ELSE 0 END) AS act7,
+              SUM(CASE WHEN banned = 1 THEN 1 ELSE 0 END) AS banned,
+              SUM(CASE WHEN contact_cipher IS NOT NULL THEN 1 ELSE 0 END) AS withmail,
+              SUM(games_played) AS games, SUM(wins) AS wins
+         FROM players`
+    ).bind(now - day, now - 7 * day).first();
+
+    let reports = { open: 0, total: 0 };
+    try {
+      reports = await env.DB.prepare(
+        `SELECT COUNT(*) AS total, SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) AS open FROM reports`
+      ).first() || reports;
+    } catch {}
+
+    let friends = { accepted: 0, pending: 0, blocked: 0 };
+    try {
+      friends = await env.DB.prepare(
+        `SELECT SUM(CASE WHEN status='accepted' THEN 1 ELSE 0 END) AS accepted,
+                SUM(CASE WHEN status='pending'  THEN 1 ELSE 0 END) AS pending,
+                SUM(CASE WHEN status='blocked'  THEN 1 ELSE 0 END) AS blocked
+           FROM friends`
+      ).first() || friends;
+    } catch {}
+
+    const top = await env.DB.prepare(
+      `SELECT username, display_name, avatar, games_played, wins, losses,
+              best_streak, visit_streak, best_visit_streak, created_at, last_seen,
+              banned, contact_cipher, show_online
+         FROM players WHERE games_played > 0 ORDER BY wins DESC, games_played ASC LIMIT 5`
+    ).all();
+
+    const recent = await env.DB.prepare(
+      `SELECT username, display_name, avatar, games_played, wins, losses,
+              best_streak, visit_streak, best_visit_streak, created_at, last_seen,
+              banned, contact_cipher, show_online
+         FROM players ORDER BY created_at DESC LIMIT 5`
+    ).all();
+
+    /* المتصلون الآن من وركر العدّاد — يُجلب من الخادم لا من اللوحة،
+       لأن CORS هناك مقصور على نطاق الموقع فينحجب من ملف محلي. */
+    let onlineNow = null;
+    try {
+      const r = await fetch('https://ya7-online-count.alfyfyy100.workers.dev/count');
+      if (r.ok) { const j = await r.json(); onlineNow = Number(j.n) || 0; }
+    } catch {}
+
+    let rooms = null;
+    if (env.PUBLIC_LOBBY) {
+      try {
+        const stub = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
+        const resp = await stub.fetch(new Request(url.origin + '/lobby/list', {
+          headers: { 'X-Ya7-Internal': '1' },
+        }));
+        const j = await resp.json();
+        rooms = Array.isArray(j.rooms) ? j.rooms.length : null;
+      } catch {}
+    }
+
+    return Response.json({
+      ok: true, now,
+      players: {
+        total: p.total || 0, new24: p.new24 || 0, new7: p.new7 || 0,
+        act24: p.act24 || 0, act7: p.act7 || 0, banned: p.banned || 0,
+        withmail: p.withmail || 0, games: p.games || 0, wins: p.wins || 0,
+      },
+      reports: { open: reports.open || 0, total: reports.total || 0 },
+      friends: {
+        accepted: friends.accepted || 0, pending: friends.pending || 0,
+        blocked: friends.blocked || 0,
+      },
+      onlineNow, rooms,
+      top: ((top && top.results) || []).map(panelPlayer),
+      recent: ((recent && recent.results) || []).map(panelPlayer),
+    });
+  }
+
+  /* ---------- كل اللاعبين: بحث وترتيب وصفحات ---------- */
+  if (path === '/players') {
+    const q = String(body.q || '').trim().slice(0, 32);
+    const order = PANEL_SORTS[body.sort] || PANEL_SORTS.last_seen;
+    const page = Math.max(0, Math.min(200, Number(body.page) || 0));
+    const like = '%' + q.replace(/[%_\\]/g, '\\$&') + '%';
+    const cols = `username, display_name, avatar, games_played, wins, losses,
+                  best_streak, visit_streak, best_visit_streak, created_at, last_seen,
+                  banned, contact_cipher, show_online`;
+    const rows = q
+      ? await env.DB.prepare(
+          `SELECT ${cols} FROM players
+            WHERE username LIKE ?1 ESCAPE '\\' OR display_name LIKE ?1 ESCAPE '\\'
+            ORDER BY ${order} LIMIT ?2 OFFSET ?3`
+        ).bind(like, PANEL_PAGE, page * PANEL_PAGE).all()
+      : await env.DB.prepare(
+          `SELECT ${cols} FROM players ORDER BY ${order} LIMIT ?1 OFFSET ?2`
+        ).bind(PANEL_PAGE, page * PANEL_PAGE).all();
+
+    const list = ((rows && rows.results) || []).map(panelPlayer);
+    return Response.json({ ok: true, players: list, page, more: list.length === PANEL_PAGE });
+  }
+
+  /* ---------- تفاصيل لاعب واحد ---------- */
+  if (path === '/player') {
+    const u = normUsername(String(body.username || '').trim());
+    if (!u) return Response.json({ ok: false, error: 'bad-user' });
+    const row = await env.DB.prepare(
+      `SELECT device_id, username, display_name, avatar, games_played, wins, losses,
+              best_streak, visit_streak, best_visit_streak, created_at, last_seen,
+              banned, contact_cipher, show_online
+         FROM players WHERE username_norm = ?1`
+    ).bind(u).first();
+    if (!row) return Response.json({ ok: false, error: 'not-found' });
+
+    const did = row.device_id;
+    let friends = { accepted: 0, pending: 0, blocked: 0 };
+    try {
+      friends = await env.DB.prepare(
+        `SELECT SUM(CASE WHEN status='accepted' THEN 1 ELSE 0 END) AS accepted,
+                SUM(CASE WHEN status='pending'  THEN 1 ELSE 0 END) AS pending,
+                SUM(CASE WHEN status='blocked'  THEN 1 ELSE 0 END) AS blocked
+           FROM friends WHERE a = ?1 OR b = ?1`
+      ).bind(did).first() || friends;
+    } catch {}
+
+    let about = [], from = 0;
+    try {
+      const ar = await env.DB.prepare(
+        `SELECT r.id, r.reason, r.note, r.game, r.status, r.created_at, r.action,
+                f.username AS from_user
+           FROM reports r LEFT JOIN players f ON f.device_id = r.from_did
+          WHERE r.about_did = ?1 ORDER BY r.created_at DESC LIMIT 20`
+      ).bind(did).all();
+      about = ((ar && ar.results) || []).map(r => Object.assign({}, r, {
+        reasonText: REPORT_REASONS[r.reason] || r.reason,
+        gameName: (LOBBY_GAMES[r.game] || {}).name || '',
+      }));
+      const fr = await env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM reports WHERE from_did = ?1'
+      ).bind(did).first();
+      from = (fr && fr.n) || 0;
+    } catch {}
+
+    return Response.json({
+      ok: true,
+      player: panelPlayer(row),
+      friends: {
+        accepted: friends.accepted || 0, pending: friends.pending || 0,
+        blocked: friends.blocked || 0,
+      },
+      reports: { about, from },
+    });
+  }
+
+  /* ---------- إجراء: حظر / رفع حظر ---------- */
+  if (path === '/act') {
+    const action = ['ban', 'unban'].includes(body.action) ? body.action : null;
+    const u = normUsername(String(body.username || '').trim());
+    if (!action || !u) return Response.json({ ok: false, error: 'bad-action' });
+    const row = await env.DB.prepare(
+      'SELECT device_id FROM players WHERE username_norm = ?1'
+    ).bind(u).first();
+    if (!row) return Response.json({ ok: false, error: 'not-found' });
+
+    if (action === 'ban') {
+      /* رفع token_ver يسقط كل جلساته فورًا — بلا هذا يبقى داخلًا بتوكنه */
+      await env.DB.prepare(
+        'UPDATE players SET banned = 1, token_ver = token_ver + 1 WHERE device_id = ?1'
+      ).bind(row.device_id).run();
+    } else {
+      await env.DB.prepare('UPDATE players SET banned = 0 WHERE device_id = ?1')
+        .bind(row.device_id).run();
+    }
+    return Response.json({ ok: true });
+  }
+
+  /* ---------- الغرف المفتوحة + المتصلون الآن ---------- */
+  if (path === '/rooms') {
+    let rooms = [], lobbyError = null;
+    if (!env.PUBLIC_LOBBY) lobbyError = 'binding-missing: PUBLIC_LOBBY';
+    else {
+      try {
+        const stub = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
+        const resp = await stub.fetch(new Request(url.origin + '/lobby/list', {
+          headers: { 'X-Ya7-Internal': '1' },
+        }));
+        const j = await resp.json();
+        rooms = Array.isArray(j.rooms) ? j.rooms : [];
+      } catch (e) { lobbyError = 'lobby-failed'; }
+    }
+    let onlineNow = null;
+    try {
+      const r = await fetch('https://ya7-online-count.alfyfyy100.workers.dev/count');
+      if (r.ok) { const j = await r.json(); onlineNow = Number(j.n) || 0; }
+    } catch {}
+    return Response.json({ ok: true, rooms, onlineNow, lobbyError, games: LOBBY_GAMES });
+  }
+
+  /* ---------- النتائج (جدول scores يديره وركر آخر) ----------
+     مخططه غير معروف هنا، فلا نسمّي أعمدة: نسحب الصفوف كما هي وتعرضها
+     اللوحة بأي أعمدة رجعت. الحذف بـ rowid وهو موجود في كل جدول D1. */
+  if (path === '/scores') {
+    try {
+      const rows = await env.DB.prepare(
+        'SELECT rowid AS _rowid, * FROM scores ORDER BY rowid DESC LIMIT 100'
+      ).all();
+      return Response.json({ ok: true, scores: (rows && rows.results) || [] });
+    } catch (e) {
+      return Response.json({ ok: true, scores: [], missing: true });
+    }
+  }
+
+  if (path === '/scores/delete') {
+    const id = Number(body.rowid) || 0;
+    if (!id) return Response.json({ ok: false, error: 'bad-id' });
+    try {
+      await env.DB.prepare('DELETE FROM scores WHERE rowid = ?1').bind(id).run();
+      return Response.json({ ok: true });
+    } catch (e) {
+      return Response.json({ ok: false, error: 'db' });
+    }
   }
 
   return Response.json({ ok: false, error: 'not-found' }, { status: 404 });
