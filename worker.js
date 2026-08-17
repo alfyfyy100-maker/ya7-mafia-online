@@ -6536,7 +6536,7 @@ export class DaqashRoom {
 }
 applyRoomCommon(DaqashRoom);
 
-// ══════════════════════ لودو الكذب (LudoRoom) ══════════════════════
+// ══════════════════════ لودو الخداع (LudoRoom) ══════════════════════
 // نموذج مختلف عن بقية الألعاب: HTTP قصير (استطلاع كل ١.٢ث) بدل WebSocket،
 // لأن المحرك يعمل عند كل لاعب ويتزامن عبر سجل أحداث. الخادم يحتفظ بشيئين فقط
 // لا يجوز أن يعرفهما أحد غيره: قيمة النرد الحقيقية، ورصيد الكذب لكل لاعب.
@@ -8051,7 +8051,7 @@ const LOBBY_GAMES = {
   daqash:  { name: 'داقش',         path: '/daqash/' },
   dakhil:  { name: 'مين الدخيل',   path: '/dakhil/' },
   walima:  { name: 'وَليمة',        path: '/walima/' },
-  ludo:    { name: 'لودو الكذب',   path: '/ludo/' },
+  ludo:    { name: 'لودو الخداع', path: '/ludo/' },
   btaqati: { name: 'خمّن من؟',      path: '/btaqati/' },
 };
 
