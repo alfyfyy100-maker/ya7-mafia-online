@@ -178,6 +178,11 @@ const RoomCommon = {
 
   // ── الهوية: التوكن السري وحده يفتح مقعدًا قائمًا ──
   // المعرّف (playerId) يُبَث للجميع في اللوبي، فلا يصلح إثبات هوية أبدًا.
+  /* الغرف بلا مؤقّت مرحلة لا تحتاج إحياءً — الثلاث الموقوتة (داقش،
+     فَطِن، مين الدخيل) تعرّف نسختها، و`applyRoomCommon` لا يستبدل
+     ما هو معرَّف في الصنف أصلًا. */
+  resumePhase() {},
+
   seatByToken(token) {
     if (!token) return null;
     return this.room.players.find(p => tokenEquals(p.seatToken, token)) || null;
@@ -206,6 +211,79 @@ function applyRoomCommon(cls) {
   for (const [k, v] of Object.entries(RoomCommon)) {
     if (!(k in cls.prototype)) cls.prototype[k] = v;
   }
+
+  /* ── /seat-check: هل يملك حاملُ هذا التوكن مقعدًا في هذي الغرفة؟ ──
+     يُنادى من الراوتر وحده (دردشة الغرفة، ونبضة اللوبي). سبب وجوده:
+     الدردشة ونبضة اللوبي كانتا تصدّقان ما يرسله العميل — فأي أحد يعرف
+     رمز غرفة (والرموز معروضة في «الغرف المفتوحة») كان يدخل دردشتها
+     باسم أي لاعب، أو يشطب غرفة غيره من القائمة.
+
+     لا يكشف شيئًا عن اللعب: اسم صاحب المقعد ومعرّفه المعلن أصلًا في
+     اللوبي، وهل هو المضيف. والتوكن الخاطئ يرجع ok:false بلا تفصيل.
+
+     لُفَّت fetch هنا لا في كل صنف: نقطة واحدة تغطي الغرف الثماني،
+     فما ينسى أحد إضافتها للعبة قادمة.                                */
+  const innerFetch = cls.prototype.fetch;
+  cls.prototype.fetch = async function (request) {
+    let u = null;
+    try { u = new URL(request.url); } catch {}
+    if (u && u.pathname === '/seat-check') {
+      try {
+        const live = !!(this.room && this.room.code);
+        const p = this.seatByToken(u.searchParams.get('token') || '');
+        if (!p) return Response.json({ ok: false, live });
+        /* العدد من سجلّ الغرفة لا من العميل: كان مدخل اللوبي يعرض
+           «١ لاعب» دائمًا لأن النبضة المشتركة لا تعرف عدد اللاعبين،
+           والغرفة تعرفه. البوتات ومن انقطع اتصاله لا يُحسبون — «كم
+           واحدًا داخلها الآن» هو السؤال الذي يسأله من يتصفح الغرف. */
+        let n = 0;
+        for (const q of (this.room && this.room.players) || []) {
+          if (q && !q.isBot && q.connected !== false) n++;
+        }
+        return Response.json({
+          ok: true, live, n,
+          name: String(p.name || ''),
+          id: String(p.id || ''),
+          host: !!(this.room && this.room.hostId === p.id),
+        });
+      } catch { return Response.json({ ok: false, live: false }); }
+    }
+    return innerFetch.call(this, request);
+  };
+}
+
+/* خريطة مفتاح اللعبة ← ربط الـ Durable Object. مفاتيحها هي نفسها مفاتيح
+   LOBBY_GAMES ومقاطع مسار الدردشة، فلا تتفرّع الأسماء مع الوقت. */
+function gameNS(env, key) {
+  switch (key) {
+    case 'mafia':   return env.MAFIA_ROOM;
+    case 'khawana': return env.GOT_ROOM;
+    case 'mawwih':  return env.MAWWIH_ROOM;
+    case 'daqash':  return env.DAQASH_ROOM;
+    case 'walima':  return env.WALIMA_ROOM;
+    case 'dakhil':  return env.DAKHIL_ROOM;
+    case 'btaqati': return env.BTAQATI_ROOM;
+    case 'ludo':    return env.LUDO_ROOM;
+    default:        return null;
+  }
+}
+
+/* توكن المقعد = randomUUID بلا شرطات ⇒ ٣٢ خانة ست عشرية. فحص الشكل قبل
+   نداء الغرفة يمنع إيقاظ Durable Object على كل محاولة تخمين. */
+const SEAT_RE = /^[a-f0-9]{32}$/i;
+
+/* هل التوكن مقعدٌ في هذي الغرفة؟ يرجّع null عند أي فشل. */
+async function checkSeat(env, gameKey, code, token, originUrl) {
+  if (!SEAT_RE.test(String(token || ''))) return null;
+  const ns = gameNS(env, gameKey);
+  if (!ns) return null;
+  try {
+    const stub = ns.get(ns.idFromName(code));
+    const resp = await stub.fetch(new Request(
+      originUrl + '/seat-check?token=' + encodeURIComponent(token)));
+    const info = await resp.json();
+    return (info && info.ok) ? info : null;
+  } catch { return null; }
 }
 
 // ══════════════════════ تعريف الأدوار (نفس منطق اللعبة الأصلي) ══════════════════════
@@ -712,6 +790,9 @@ export class MafiaRoom {
 
     this.noteAccount(url, player);
     this.sockets.set(player.id, server);
+    /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
+       في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
+    this.resumePhase();
     server.addEventListener('message', (evt) => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
 
@@ -2233,6 +2314,18 @@ const GOT_RAVEN = {
     "امنحني ثقتك مرة واحدة، وسيعود إليك الغراب بالأسماء لا بالوعود.",
     "لا أنحاز إلا إلى الجانب الرابح، فاجعله جانبك.",
     "إن سقطتُ غدًا، فتذكّر أنني كنتُ الوحيد الذي بعث إليك.",
+    "من يجلس على العرش لا يهمّني، ومن يوصلني إليه يهمّني كثيرًا.",
+    "سأعطيك اسمًا غدًا، ولن أطلب مقابله إلا صمتك اليوم.",
+    "الحقيقة سيف بيد من يحسن توقيتها، وأنا أحسن التوقيت.",
+    "اتّهم من أقول لك، وستكسب ثقة المجلس وأنت لا تعرف شيئًا.",
+    "كل من في هذا المجلس يكذب، والفرق أنني أعترف لك بذلك.",
+    "لا تُصدّق من يقسم لك؛ الصادق لا يحتاج قسمًا.",
+    "أنا لا أشتري الأصوات، بل أشتري من يملكها.",
+    "لو كشفوني غدًا فسأقول إنك شريكي، فاحرص أن يبقى ظهري سليمًا.",
+    "الصمت في الجلسة أبلغ من دفاعٍ متعثّر، فاصمت حين أنظر إليك.",
+    "أعرف من قتل الليلة، لكن معرفتي بلا صوتك لا تساوي شيئًا.",
+    "من يتّهمك بحرارة يخفي دمًا، وقد رأيتُ الدم.",
+    "ابنِ لنفسك عدوًّا صغيرًا في المجلس؛ من له عدوّ يبدو بريئًا.",
   ],
   varys: [
     "رأتك عصافيري في الظلام، فنمتُ بعدها مطمئنًا.",
@@ -2243,6 +2336,18 @@ const GOT_RAVEN = {
     "ابقَ قريبًا مني في التصويت، ولا تلفت الأنظار إليّ.",
     "همسة واحدة تكفي لهدم بيت، فلا تدفعني إلى الهمس عنك.",
     "صوّت غدًا لمن أصوّت له، وسيصلك غرابٌ آخر.",
+    "عصافيري لا تنام، وقد نامت الليلة على سطح بيتك.",
+    "أنا لا أهدد، بل أُخبر؛ والفرق يظهر غدًا.",
+    "من يصمت عني في المجلس أصمت عنه في الظلام.",
+    "أعرف من أين جاء الاتهام قبل أن يُقال، فلا تفاجأ به.",
+    "ما أعرفه عنك لا يضرّك ما دمتَ في صفّ المملكة.",
+    "لا تسمّني في الجلسة؛ اسمي في فمك خطر عليك قبلي.",
+    "سأخبرك باسمٍ واحد كل ليلة، ما دمتَ تستحق أن تعرف.",
+    "من يتحدث كثيرًا يخفي قليلًا، ومن يصمت كثيرًا يخفي كل شيء.",
+    "رأيت من دخل ولم يخرج، ورأيت من خرج ولم يدخل.",
+    "لا تثق بالبريء الواثق؛ البراءة الحقيقية مرتبكة دائمًا.",
+    "همسي ليس رحمة بك، بل حاجةٌ إليك.",
+    "غدًا سيتّهمك أحدهم بما فعله هو، وأنا أعرف اسمه.",
   ],
 };
 
@@ -2352,6 +2457,9 @@ export class GotRoom {
 
     this.noteAccount(url, player);
     this.sockets.set(player.id, server);
+    /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
+       في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
+    this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
 
@@ -3514,6 +3622,9 @@ export class MawwihRoom {
 
     this.noteAccount(url, player);
     this.sockets.set(player.id, server);
+    /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
+       في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
+    this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
 
@@ -4192,6 +4303,9 @@ export class FatinRoom {
 
     this.noteAccount(url, player);
     this.sockets.set(player.id, server);
+    /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
+       في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
+    this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
 
@@ -4215,6 +4329,7 @@ export class FatinRoom {
 
   async onMessage(playerId, evt) {
     if (!this.allowMsg(playerId)) return;
+    this.resumePhase();          // مؤقّت ضائع بعد إعادة تشغيل؟ أعِده الآن
     let msg; try { msg = JSON.parse(evt.data); } catch { return; }
     if (!msg || typeof msg !== 'object') return;
     const r = this.room;
@@ -4360,6 +4475,38 @@ export class FatinRoom {
     }, ms);
   }
   clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
+
+  /* ── إحياء المرحلة بعد إعادة تشغيل الكائن ──
+     `setTimeout` يعيش في ذاكرة الـ Durable Object وحدها. وكل نشرة
+     جديدة لـ worker.js تُعيد تشغيل كل الكائنات، وكذلك إخلاؤها من
+     الذاكرة — فيضيع المؤقّت بينما تنجو الحالة في التخزين. النتيجة قبل
+     هذا الإصلاح: الجولة تتجمّد على طورها للأبد، وكل حركة تُرفض لأن
+     وقتها «انتهى»، ولا شيء يحرّكها — الغرفة تبقى ميتة ست ساعات.
+     الآن: أي رسالة أو اتصال جديد يعيد تسليح المؤقّت من المهلة
+     المحفوظة (أو يفجّره فورًا لو انقضت). التسليح لا الاستدعاء
+     المباشر: فيمرّ من نفس المسار وتنطبق كل حراسه. */
+  resumePhase() {
+    if (this.timer) return;
+    let due = null;
+    try { due = this.pendingPhase(); } catch { return; }
+    if (!due || typeof due.fn !== 'function') return;
+    this.setPhaseTimer(Math.max(0, Number(due.ms) || 0), due.fn);
+  }
+
+  pendingPhase() {
+    const r = this.room;
+    if (!r || !r.endsAt) return null;
+    const ms = r.endsAt - Date.now();
+    switch (r.phase) {
+      case 'vote':     return { ms: ms + 400,  fn: () => this.endVote() };
+      case 'hila':     return { ms: ms + 400,  fn: () => this.endHila() };
+      case 'question': return { ms: ms + 700,  fn: () => this.endQuestion() };
+      case 'result':   return { ms: ms + 400,  fn: async () => {
+        if (r.round >= FATIN_ROUNDS) await this.finish(); else await this.startVote();
+      } };
+      default: return null;
+    }
+  }
   allVotedIn() { const a = this.activePlayers(); return a.length > 0 && a.every(p => this.room.votes[p.id] || this.room.specials[p.id]); }
   allHilasIn() { const a = this.activePlayers(); return a.length > 0 && a.every(p => this.room.hilas[p.id]); }
   allAnswersIn() { const a = this.activePlayers(); return a.length > 0 && a.every(p => this.room.answers[p.id]); }
@@ -4819,6 +4966,9 @@ export class WalimaRoom {
 
     this.noteAccount(url, player);
     this.sockets.set(player.id, server);
+    /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
+       في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
+    this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
 
@@ -5136,6 +5286,10 @@ export class WalimaRoom {
 applyRoomCommon(MafiaRoom);
 applyRoomCommon(GotRoom);
 applyRoomCommon(MawwihRoom);
+/* فَطِن انتهت — لم تعد لها صفحة ولا مسار ولا مدخل في اللوبي. الصنف
+   يبقى مصدَّرًا لأن ربط FATIN_ROOM ما زال في wrangler.toml؛ حذف صنف
+   Durable Object يحتاج ترحيلًا بـ`deleted_classes` وإلا فشل النشر.
+   وهو الآن غير قابل للوصول من أي مسار، فلا يكلّف شيئًا. */
 applyRoomCommon(FatinRoom);
 applyRoomCommon(WalimaRoom);
 
@@ -5199,6 +5353,26 @@ function allowLudoOp(ip) {
     while (ludoHits.size > 5000) ludoHits.delete(ludoHits.keys().next().value);
   }
   return r.n <= LUDO_HTTP_LIMIT;
+}
+
+/* اللوبي له خانقه: خلطه مع خانق السوكِت كان يخصم من ميزانية اللعب نفسها
+   (صفحة الغرف تستطلع كل ١٥ ثانية). والقائمة نفسها تصير على كائن واحد
+   عالمي، فبلا خنق يقدر واحد يوقفها عن الجميع. */
+const LOBBY_OP_LIMIT = 120;
+const lobbyHits = new Map();
+function allowLobbyOp(ip) {
+  const key = ipKey(ip);
+  if (!key) return true;
+  const now = Date.now();
+  const r = lobbyHits.get(key) || { n: 0, t: now };
+  if (now - r.t > WS_WINDOW_MS) { r.n = 0; r.t = now; }
+  r.n++;
+  lobbyHits.set(key, r);
+  if (lobbyHits.size > 5000) {
+    for (const [k, v] of lobbyHits) if (now - v.t > WS_WINDOW_MS) lobbyHits.delete(k);
+    while (lobbyHits.size > 5000) lobbyHits.delete(lobbyHits.keys().next().value);
+  }
+  return r.n <= LOBBY_OP_LIMIT;
 }
 
 function allowCreate(ip) {
@@ -5442,6 +5616,9 @@ export class DaqashRoom {
 
     this.noteAccount(url, player);
     this.sockets.set(player.id, server);
+    /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
+       في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
+    this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
 
@@ -5579,6 +5756,7 @@ export class DaqashRoom {
   // ═══════════ اللوبي ═══════════
   async onMessage(playerId, evt) {
     if (!this.allowMsg(playerId)) return;
+    this.resumePhase();          // مؤقّت ضائع بعد إعادة تشغيل؟ أعِده الآن
     let msg;
     try { msg = JSON.parse(evt.data); } catch { return; }
     if (!msg || typeof msg !== 'object') return;
@@ -5869,6 +6047,38 @@ export class DaqashRoom {
   }
   clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
 
+  /* ── إحياء المرحلة بعد إعادة تشغيل الكائن ──
+     `setTimeout` يعيش في ذاكرة الـ Durable Object وحدها. وكل نشرة
+     جديدة لـ worker.js تُعيد تشغيل كل الكائنات، وكذلك إخلاؤها من
+     الذاكرة — فيضيع المؤقّت بينما تنجو الحالة في التخزين. النتيجة قبل
+     هذا الإصلاح: الجولة تتجمّد على طورها للأبد، وكل حركة تُرفض لأن
+     وقتها «انتهى»، ولا شيء يحرّكها — الغرفة تبقى ميتة ست ساعات.
+     الآن: أي رسالة أو اتصال جديد يعيد تسليح المؤقّت من المهلة
+     المحفوظة (أو يفجّره فورًا لو انقضت). التسليح لا الاستدعاء
+     المباشر: فيمرّ من نفس المسار وتنطبق كل حراسه. */
+  resumePhase() {
+    if (this.timer) return;
+    let due = null;
+    try { due = this.pendingPhase(); } catch { return; }
+    if (!due || typeof due.fn !== 'function') return;
+    this.setPhaseTimer(Math.max(0, Number(due.ms) || 0), due.fn);
+  }
+
+  pendingPhase() {
+    const h = this.room && this.room.hand;
+    if (!h) return null;
+    if (this.room.phase === 'lobby' || this.room.phase === 'over') return null;
+    const no = h.no, seq = h.seq;
+    /* حالة محفوظة قديمة بلا مهلة: نمنح دورًا كاملًا جديدًا بدل التجمّد.
+       اللاعب فقد اتصاله للتوّ — الكرم هنا في محلّه. */
+    if (!h.endsAt) {
+      const full = (this.room.cfg && this.room.cfg.turnSec ? this.room.cfg.turnSec : 25) * 1000;
+      h.endsAt = Date.now() + full;
+      return { ms: full + 400, fn: () => this.onTimeout(no, seq) };
+    }
+    return { ms: h.endsAt - Date.now() + 400, fn: () => this.onTimeout(no, seq) };
+  }
+
   armTurn() {
     const h = this.room.hand;
     if (!h) return;
@@ -5876,6 +6086,11 @@ export class DaqashRoom {
     h.endsAt = Date.now() + ms;
     const snapNo = h.no, snapSeq = h.seq;
     this.setPhaseTimer(ms + 400, () => this.onTimeout(snapNo, snapSeq));
+    /* المهلة كانت تُضبط بعد `persist()` دائمًا، فما تصل التخزين أبدًا:
+       المحفوظ يبقى endsAt=0. فحتى لو نجت الحالة من إعادة التشغيل، لا
+       يبقى في التخزين ما يُعرف منه متى ينتهي الدور. الحفظ هنا بلا
+       انتظار — الكتابة الفعلية على كل حركة قائمة أصلًا. */
+    try { this.persist(); } catch {}
   }
 
   async onTimeout(handNo, seq) {
@@ -6434,6 +6649,19 @@ export class LudoRoom {
     const d = this.d;
     const path = url.pathname.replace(/^.*\/room\/[A-Z0-9]{4,8}/i, '') || url.pathname;
 
+    /* نفس عقد /seat-check في بقية الغرف — لودو خارج RoomCommon فتكتبه
+       بنفسها. المقعد صفر هو المضيف دائمًا (منشئ الغرفة). */
+    if (url.pathname === '/seat-check') {
+      const t = String(url.searchParams.get('token') || '');
+      const i = (t && Array.isArray(d.tokens))
+        ? d.tokens.findIndex(x => x && tokenEquals(x, t)) : -1;
+      const live = !!(d.names && d.names.length);
+      return i === -1
+        ? J({ ok: false, live })
+        : J({ ok: true, live, n: d.names.length,
+              name: String(d.names[i] || ''), id: 's' + i, host: i === 0 });
+    }
+
     // إنشاء: يأتي من الراوتر ومعه roomCode. 409 = الكود مستعمل فيولّد الراوتر غيره
     if (url.pathname.endsWith('/create')) {
       if (d.started || d.names.length) return new Response('busy', { status: 409 });
@@ -6653,6 +6881,31 @@ export class DakhilRoom {
   }
   clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
 
+  /* ── إحياء المرحلة بعد إعادة تشغيل الكائن ──
+     `setTimeout` يعيش في ذاكرة الـ Durable Object وحدها. وكل نشرة
+     جديدة لـ worker.js تُعيد تشغيل كل الكائنات، وكذلك إخلاؤها من
+     الذاكرة — فيضيع المؤقّت بينما تنجو الحالة في التخزين. النتيجة قبل
+     هذا الإصلاح: الجولة تتجمّد على طورها للأبد، وكل حركة تُرفض لأن
+     وقتها «انتهى»، ولا شيء يحرّكها — الغرفة تبقى ميتة ست ساعات.
+     الآن: أي رسالة أو اتصال جديد يعيد تسليح المؤقّت من المهلة
+     المحفوظة (أو يفجّره فورًا لو انقضت). التسليح لا الاستدعاء
+     المباشر: فيمرّ من نفس المسار وتنطبق كل حراسه. */
+  resumePhase() {
+    if (this.timer) return;
+    let due = null;
+    try { due = this.pendingPhase(); } catch { return; }
+    if (!due || typeof due.fn !== 'function') return;
+    this.setPhaseTimer(Math.max(0, Number(due.ms) || 0), due.fn);
+  }
+
+  pendingPhase() {
+    const rd = this.room && this.room.round;
+    /* الموقوف بيد المضيف ليس ضائعًا — إحياؤه يسرق منه الإيقاف */
+    if (!rd || rd.paused || !rd.endsAt) return null;
+    if (this.room.phase !== 'discuss') return null;
+    return { ms: rd.endsAt - Date.now(), fn: () => this.startVote() };
+  }
+
   async handleCreate(request) {
     let body;
     try { body = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
@@ -6731,6 +6984,9 @@ export class DakhilRoom {
 
     this.noteAccount(url, player);
     this.sockets.set(player.id, server);
+    /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
+       في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
+    this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
 
@@ -6893,6 +7149,7 @@ export class DakhilRoom {
   // ═══════════ الرسائل ═══════════
   async onMessage(playerId, evt) {
     if (!this.allowMsg(playerId)) return;
+    this.resumePhase();          // مؤقّت ضائع بعد إعادة تشغيل؟ أعِده الآن
     let msg;
     try { msg = JSON.parse(evt.data); } catch { return; }
     if (!msg || typeof msg !== 'object') return;
@@ -7322,6 +7579,9 @@ const CHAT_LEN = 180;      // أقصى طول رسالة
 const CHAT_GAP_MS = 1200;  // بين رسالتين لنفس المقعد
 const CHAT_BURST = 12;     // رسالة في الدقيقة لنفس المقعد
 const CHAT_SOCKETS = 40;   // سقف اتصالات الغرفة الواحدة
+/* بلا هذا يبقى سجلّ كل غرفة دُرْدِشَ فيها مخزّنًا للأبد — نفس عيب
+   BtaqatiRoom الذي أُصلح في v50. الغرفة تعيش بعمر غرفة اللعب نفسه. */
+const CHAT_TTL_MS = ROOM_TTL_MS;
 
 export class ChatRoom {
   constructor(state, env) {
@@ -7335,12 +7595,49 @@ export class ChatRoom {
     this.state.blockConcurrencyWhile(async () => {
       this.log = (await this.state.storage.get('log')) || [];
       this.seq = (await this.state.storage.get('seq')) || 0;
+      this.seen = (await this.state.storage.get('seen')) || 0;
     });
+  }
+
+  /* المنبّه يُضبط عند كل نشاط، ولا يحذف إلا لو خمدت الغرفة فعلًا */
+  async touch() {
+    this.seen = Date.now();
+    try {
+      await this.state.storage.put('seen', this.seen);
+      await this.state.storage.setAlarm(this.seen + CHAT_TTL_MS);
+    } catch {}
+  }
+
+  async alarm() {
+    const idle = Date.now() - (this.seen || 0);
+    if (idle >= CHAT_TTL_MS && this.state.getWebSockets().length === 0) {
+      await this.state.storage.deleteAll();
+      this.log = []; this.seq = 0; this.seen = 0;
+    } else {
+      try { await this.state.storage.setAlarm(Date.now() + CHAT_TTL_MS); } catch {}
+    }
   }
 
   async fetch(request) {
     if ((request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') {
       return new Response('expected-websocket', { status: 426 });
+    }
+    /* الاسم واليوزر والمقعد كلها من الووركر بعد تحقّقه، عبر ترويسات لا
+       عبر رابط العميل. serializeAttachment يبقى عبر السبات — بخلاف أي
+       حالة في الذاكرة، فهي تُمسح عند أول نومة. */
+    let name = '', user = '', seat = '';
+    try { name = decodeURIComponent(request.headers.get('X-Ya7-Name') || ''); } catch {}
+    try { user = decodeURIComponent(request.headers.get('X-Ya7-User') || ''); } catch {}
+    try { seat = decodeURIComponent(request.headers.get('X-Ya7-Seat') || ''); } catch {}
+
+    /* سوكِت واحد لكل مقعد: بلا هذا يفتح صاحب مقعد واحد أربعين اتصالًا
+       فيملأ الغرفة ويردّ البقية بـ chat-full. وهو كذلك يقفل الاتصال
+       الشبح بعد تحديث الصفحة بدل ما يتراكم. */
+    if (seat) {
+      for (const old of this.state.getWebSockets()) {
+        const a = old.deserializeAttachment();
+        if (a && a.seat === seat) { try { old.close(1000, 'replaced'); } catch {} }
+      }
     }
     if (this.state.getWebSockets().length >= CHAT_SOCKETS) {
       return new Response('chat-full', { status: 503 });
@@ -7348,19 +7645,14 @@ export class ChatRoom {
     const pair = new WebSocketPair();
     this.state.acceptWebSocket(pair[1]);
 
-    /* الاسم واليوزر يجيان من الووركر بعد تحقّقه عبر ترويسات، لا من
-       رابط العميل. serializeAttachment يبقى عبر السبات — بخلاف أي
-       حالة في الذاكرة، فهي تُمسح عند أول نومة. */
-    let name = '', user = '';
-    try { name = decodeURIComponent(request.headers.get('X-Ya7-Name') || ''); } catch {}
-    try { user = decodeURIComponent(request.headers.get('X-Ya7-User') || ''); } catch {}
-
     pair[1].serializeAttachment({
       name: cleanName(name),
       user: String(user).slice(0, 20),
+      seat: String(seat).slice(0, 64),
       last: 0, win: 0, n: 0,
     });
 
+    await this.touch();
     pair[1].send(JSON.stringify({ t: 'hist', log: this.log }));
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
@@ -7397,7 +7689,9 @@ export class ChatRoom {
 
     /* الحفظ ضروري: الكائن يُطرد من الذاكرة عند السبات، فبلا كتابة
        يفقد الداخلُ لاحقًا كل ما قيل قبل دقيقة. */
-    await this.state.storage.put({ log: this.log, seq: this.seq });
+    this.seen = now;
+    await this.state.storage.put({ log: this.log, seq: this.seq, seen: now });
+    try { await this.state.storage.setAlarm(now + CHAT_TTL_MS); } catch {}
 
     const out = JSON.stringify({ t: 'msg', m: msg });
     for (const s of this.state.getWebSockets()) {
@@ -7452,7 +7746,7 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v56',
+        version: 'v61',
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
@@ -7493,6 +7787,18 @@ export default {
       }
       const code = m[2].toUpperCase();
 
+      /* ── الدخول للدردشة يتطلب مقعدًا فعليًا في نفس الغرفة ──
+         كان الاسم يُؤخذ من ?name= كما جاء، والدخول مفتوحًا لأي أحد يعرف
+         الرمز — ورموز الغرف العامة معروضة في «الغرف المفتوحة». فأي زائر
+         كان يدخل دردشة أي غرفة وينطق باسم أي لاعب. في لعبة استنتاج
+         اجتماعي هذا يكسر اللعبة من أساسها، لا مجرد إزعاج.
+         الآن: التوكن السرّي للمقعد هو التذكرة، والاسم يجي من سجلّ
+         الغرفة في الخادم لا من الرابط. */
+      const seatInfo = await checkSeat(env, game, code, url.searchParams.get('seat'), url.origin);
+      if (!seatInfo) {
+        return withCors(new Response('not-in-room', { status: 403 }), origin);
+      }
+
       /* اليوزر يُشتقّ من did الذي تحقّق منه أعلى الدالة، لا من أي حقل
          يرسله العميل — وإلا انتحل أي أحد أي حساب في الدردشة. */
       let user = '';
@@ -7515,8 +7821,11 @@ export default {
          «انقطع الاتصال». والاسم واليوزر ينتقلان في ترويسات لا في
          الرابط، حتى ما يقدر أحد يزوّرهما بتعديل عنوان السوكِت. */
       const h = new Headers(request.headers);
-      h.set('X-Ya7-Name', encodeURIComponent(url.searchParams.get('name') || ''));
+      h.set('X-Ya7-Name', encodeURIComponent(seatInfo.name || ''));
       h.set('X-Ya7-User', encodeURIComponent(user));
+      /* معرّف المقعد يُستعمل داخل الكائن لمنع أكثر من سوكِت للمقعد نفسه.
+         ليس سرًّا — معرّفات اللاعبين تُبَث في اللوبي أصلًا. */
+      h.set('X-Ya7-Seat', encodeURIComponent(String(seatInfo.id || '')));
       const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(game + ':' + code));
       return stub.fetch(new Request(url.origin + '/ws', { method: 'GET', headers: h }));
     }
@@ -7528,22 +7837,52 @@ export default {
           'binding-missing: أضف ربط PUBLIC_LOBBY في wrangler.toml ثم أعد النشر',
           { status: 501 }), origin);
       }
-      const sub = url.pathname.slice('/lobby'.length);
-      // add داخلي فقط: يُستدعى من مسار الإنشاء، لا من المتصفح
-      if (sub === '/add') return withCors(new Response('غير مسموح', { status: 403 }), origin);
-      if (sub !== '/list' && request.method !== 'POST') {
+      /* ── قائمة عمليات مغلقة، والمسار لا يُمرَّر أبدًا كما جاء ──
+         كان يُمرَّر بعد فحص `sub === '/add'` وحده، وتحليل المسار داخل
+         الكائن كان جشعًا (`replace(/.*\/lobby/,'')`) — فـ
+         /lobby/x/lobby/add يتخطى الفحص ويصل add. النتيجة: حقن غرف
+         وهمية في «الغرف المفتوحة» بلا حدّ. الآن نبني المسار بأنفسنا. */
+      const OPS = { '/list': 'list', '/ping': 'ping', '/remove': 'remove' };
+      const op = OPS[url.pathname.slice('/lobby'.length)];
+      if (!op) return withCors(new Response('غير مسموح', { status: 403 }), origin);
+      if (op !== 'list' && request.method !== 'POST') {
         return withCors(new Response('method', { status: 405 }), origin);
       }
-      if (sub === '/ping' || sub === '/remove') {
-        if (!allowSocket(request.headers.get('CF-Connecting-IP') || '')) {
-          return withCors(new Response('too-many-requests', { status: 429 }), origin);
-        }
+      if (!allowLobbyOp(request.headers.get('CF-Connecting-IP') || '')) {
+        return withCors(new Response('too-many-requests', { status: 429 }), origin);
       }
+
+      let payload;
+      if (op !== 'list') {
+        /* ── الإدراج ملك للمضيف وحده ──
+           كانت ping و remove بلا أي إثبات: الجسم {game, code} فقط،
+           ورموز الغرف العامة معروضة للجميع في /lobby/list. فأي زائر كان
+           يشطب كل الغرف المفتوحة بحلقة واحدة، أو يزوّر عدد لاعبيها،
+           أو يُبقي غرفة ميتة معلّقة للأبد بنبضة دورية. */
+        let b;
+        try { b = JSON.parse(await request.text()); } catch { b = null; }
+        if (!b || typeof b !== 'object') {
+          return withCors(new Response('bad-json', { status: 400 }), origin);
+        }
+        const g = String(b.game || '').toLowerCase();
+        const code = String(b.code || '').toUpperCase();
+        if (!LOBBY_GAMES[g] || !/^[A-Z0-9]{4,8}$/.test(code)) {
+          return withCors(new Response('bad-room', { status: 400 }), origin);
+        }
+        const seat = await checkSeat(env, g, code, b.token, url.origin);
+        if (!seat || !seat.host) {
+          return withCors(new Response('not-host', { status: 403 }), origin);
+        }
+        /* العدّاد من الغرفة نفسها لا من جسم العميل: يصلح عيب «١ لاعب
+           دائمًا»، ويجعله غير قابل للتزوير في الوقت نفسه. */
+        payload = JSON.stringify({ game: g, code, players: seat.n });
+      }
+
       const stub = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
-      const resp = await stub.fetch(new Request(url.origin + '/lobby' + sub, {
-        method: request.method,
-        headers: { 'Content-Type': 'application/json' },
-        body: request.method === 'POST' ? await request.text() : undefined,
+      const resp = await stub.fetch(new Request(url.origin + '/lobby/' + op, {
+        method: op === 'list' ? 'GET' : 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Ya7-Internal': '1' },
+        body: payload,
       }));
       return withCors(resp, origin);
     }
@@ -7580,7 +7919,8 @@ export default {
                 try {
                   const lob = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
                   await lob.fetch(new Request(url.origin + '/lobby/add', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Ya7-Internal': '1' },
                     body: JSON.stringify({ game: 'ludo', code, host: body.name, players: 1 }),
                   }));
                 } catch {}
@@ -7603,11 +7943,10 @@ export default {
       return withCors(resp, origin);
     }
 
-    if (url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/fatin/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
+    if (url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
       const gameNS = url.pathname.startsWith('/btaqati/') ? env.BTAQATI_ROOM
                     : url.pathname.startsWith('/got/') ? env.GOT_ROOM
                     : url.pathname.startsWith('/mawwih/') ? env.MAWWIH_ROOM
-                    : url.pathname.startsWith('/fatin/') ? env.FATIN_ROOM
                     : url.pathname.startsWith('/daqash/') ? env.DAQASH_ROOM
                     : url.pathname.startsWith('/walima/') ? env.WALIMA_ROOM
                     : url.pathname.startsWith('/dakhil/') ? env.DAKHIL_ROOM
@@ -7641,7 +7980,6 @@ export default {
             const g = url.pathname.startsWith('/btaqati/') ? 'btaqati'
                     : url.pathname.startsWith('/got/') ? 'khawana'
                     : url.pathname.startsWith('/mawwih/') ? 'mawwih'
-                    : url.pathname.startsWith('/fatin/') ? 'fatin'
                     : url.pathname.startsWith('/daqash/') ? 'daqash'
                     : url.pathname.startsWith('/walima/') ? 'walima'
                     : url.pathname.startsWith('/dakhil/') ? 'dakhil'
@@ -7650,7 +7988,8 @@ export default {
               try {
                 const lob = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
                 await lob.fetch(new Request(url.origin + '/lobby/add', {
-                  method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'X-Ya7-Internal': '1' },
                   body: JSON.stringify({ game: g, code, host: body.name, players: 1, note: body.note }),
                 }));
               } catch {}
@@ -7663,10 +8002,10 @@ export default {
     }
 
     // الانضمام لغرفة موجودة بالكود، أو فتح اتصال WebSocket لغرفة قائمة
-    const match = url.pathname.match(/^\/(btaqati|got|mawwih|fatin|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='fatin' ? env.FATIN_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
       if (!gameNS) {
         return withCors(new Response(
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
@@ -7714,7 +8053,6 @@ const LOBBY_GAMES = {
   walima:  { name: 'وَليمة',        path: '/walima/' },
   ludo:    { name: 'لودو الكذب',   path: '/ludo/' },
   btaqati: { name: 'خمّن من؟',      path: '/btaqati/' },
-  fatin:   { name: 'فاتن',          path: '/fatin/' },
 };
 
 export class PublicLobby {
@@ -7728,13 +8066,23 @@ export class PublicLobby {
 
   async fetch(request) {
     const url = new URL(request.url);
-    const path = url.pathname.replace(/.*\/lobby/, '');
+    /* كان `replace(/.*\/lobby/, '')` جشعًا: /lobby/x/lobby/add يعطي
+       '/add' فيتخطى حارس الراوتر. المطابقة الصارمة تقفل الباب من
+       الجهتين — الراوتر يبني المسار، والكائن لا يقبل غيره. */
+    const m = url.pathname.match(/^\/lobby\/(list|add|ping|remove)$/);
+    const op = m && m[1];
+    if (!op) return new Response('غير موجود', { status: 404 });
 
-    if (path === '/list') return this.list();
-    if (path === '/add') return this.add(request);
-    if (path === '/ping') return this.ping(request);
-    if (path === '/remove') return this.remove(request);
-    return new Response('غير موجود', { status: 404 });
+    /* الإدراج داخلي بحت: يُستدعى من مسار الإنشاء بعد نجاحه، لا من
+       متصفح. الراوتر لا ينسخ ترويسات العميل أبدًا لهذا الكائن. */
+    if (op === 'add' && request.headers.get('X-Ya7-Internal') !== '1') {
+      return new Response('غير مسموح', { status: 403 });
+    }
+
+    if (op === 'list') return this.list();
+    if (op === 'add') return this.add(request);
+    if (op === 'ping') return this.ping(request);
+    return this.remove(request);
   }
 
   prune() {
@@ -7785,7 +8133,9 @@ export class PublicLobby {
       host: cleanName(b.host || 'لاعب'),
       players: Math.max(1, Math.min(30, Number(b.players) || 1)),
       max: Math.max(0, Math.min(30, Number(b.max) || 0)),
-      note: cleanName(b.note || '').slice(0, 40),
+      /* cleanText لا cleanName: الثانية تقصّ إلى ١٤ حرفًا قبل slice(0,40)
+         فسقف الأربعين كان بلا أثر أصلًا */
+      note: cleanText(b.note || '', 40),
       seen: Date.now(),
     };
     await this.persist();
@@ -7988,6 +8338,9 @@ export class BtaqatiRoom {
 
     this.noteAccount(url, player);
     this.sockets.set(player.id, server);
+    /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
+       في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
+    this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id));
 
@@ -8392,7 +8745,9 @@ const RESERVED_USERNAMES = [
 const RESERVED_OWNER = [
   // لأشخاص محدّدين
   'zu9x', '5cz', 'yzn', 'd7m', 'b79', 'b52', 'f16', 'rin', 'wsn',
+  'red', 'king', 'ksa', 'lyn', 'nor', 'god', 'qdd', 'bzr', 'wwd', 'wdd',
   // أرقام مميّزة محجوزة للمنح لاحقًا
+  '123', '321',
   '101', '107', '111', '205', '305', '311', '404', '405', '411',
   '501', '502', '503', '504', '505', '506', '507', '509', '511',
   '514', '515', '516', '518', '523', '525', '555', '606', '607',
