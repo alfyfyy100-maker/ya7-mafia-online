@@ -7735,11 +7735,8 @@ export default {
     if (url.pathname.startsWith('/admin/reports')) {
       return withAnyCors(await handleReports(request, env, url));
     }
-
-    /* لوحة التحكم الشاملة — نفس منطق البلاغات: ملف محلي مصدره null،
-       والحماية بالتوكن لا بالمصدر. */
     if (url.pathname.startsWith('/admin/panel')) {
-      return withAnyCors(await handlePanel(request, env, url));
+      return withAnyCors(await handleAdminPanel(request, env, url));
     }
 
     if (request.method === 'OPTIONS') {
@@ -7752,7 +7749,7 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v62',
+        version: WORKER_VERSION,
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
@@ -8050,6 +8047,8 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
+const WORKER_VERSION = 'v70';
+
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
   khawana: { name: 'لمن العرش؟',   path: '/khawana/' },
@@ -8895,7 +8894,9 @@ function visualNorm(u) {
     .replace(/b/g, '8').replace(/g/g, '9');
 }
 
-function validateUsername(raw) {
+/* skipOwner: يُستعمل حين يتبيّن أنّ الاسم المحجوز للمالك قد مُنِح فعلاً،
+   فيخرج من الحجز ويصير يوزراً عادياً — انظر checkUsername تحته. */
+function validateUsername(raw, skipOwner) {
   if (typeof raw !== 'string') return { ok: false, ar: 'اليوزر غير صالح' };
   const u = raw.trim();
   if (u.length < ACC.USER_MIN) return { ok: false, ar: 'اليوزر لازم ٣ خانات فأكثر' };
@@ -8908,14 +8909,41 @@ function validateUsername(raw) {
     return { ok: false, ar: 'الثلاثي المكرر محجوز' };
 
   const norm = normUsername(u), vis = visualNorm(u);
-  for (const r of RESERVED_USERNAMES.concat(RESERVED_OWNER))
+  /* المحجوزة دائماً: أسماء المنصّة والأدوار الإدارية. هذي ما تنمنح أبداً،
+     و ya7 يبقى له ردّه الخاص مهما صار. */
+  for (const r of RESERVED_USERNAMES)
     if (norm === r || vis === visualNorm(r))
       return { ok: false, ar: FUNNY_RESERVED[norm] || 'محجوز لصاحب الحلال' };
+  /* المحجوزة للمنح: نُرجع اسمها مع الرفض حتى يقدر checkUsername يسأل
+     القاعدة — إن كانت قد مُنِحت فقد انتهى حجزها. */
+  if (!skipOwner) {
+    for (const r of RESERVED_OWNER)
+      if (norm === r || vis === visualNorm(r))
+        return { ok: false, ar: 'محجوز لصاحب الحلال', ownerHold: r };
+  }
   for (const b of BANNED_EXACT)
     if (norm === b || vis === visualNorm(b)) return { ok: false, ar: 'اليوزر غير مسموح' };
   for (const b of BANNED_SUBSTRINGS)
     if (norm.includes(b) || vis.includes(visualNorm(b))) return { ok: false, ar: 'اليوزر غير مسموح' };
   return { ok: true, username: u, norm };
+}
+
+/* ═══ الحجز يسقط عن الاسم لحظة منحه ═══
+   قبل هذا كان اسم RESERVED_OWNER يردّ «محجوز لصاحب الحلال» للأبد حتى بعد
+   ما تمنحه لأحد — فما كان أحد يقدر حتى يرسل له طلب صداقة أو يبحث عنه،
+   لأن كل مسارات الحساب تمرّ من هنا. الآن: لو الاسم موجود فعلاً في players
+   فقد خرج من الحجز، ويكمل كأي يوزر عادي (فيصله ردّ «مأخوذ» عند التسجيل).
+   وبكذا لو وزّعت القائمة كلها اختفت كلمة «محجوز» من نفسها.            */
+async function checkUsername(env, raw) {
+  const v = validateUsername(raw);
+  if (v.ok || !v.ownerHold || !env.DB) return v;
+  try {
+    const row = await env.DB.prepare(
+      'SELECT 1 AS x FROM players WHERE username_norm = ?1'
+    ).bind(v.ownerHold).first();
+    if (row) return validateUsername(raw, true);
+  } catch {}
+  return v;
 }
 
 /* الاسم حر تماماً، لكن محارف التحكم والاتجاه تُزال (بند م-٣ المؤجل) */
@@ -9117,7 +9145,7 @@ async function handleAccountInner(request, env, url, ctx) {
       return J(request, { ok: false, error: 'rate', available: false, reason: 'محاولات كثيرة، انتظر شوي' });
     if (!await rateLimit(env, 'chk:global', 3000, 60 * 1000))
       return J(request, { ok: false, error: 'rate', available: false, reason: 'ضغط عالي، جرّب بعد شوي' });
-    const v = validateUsername(body.username);
+    const v = await checkUsername(env, body.username);
     if (!v.ok) return J(request, { ok: true, available: false, reason: v.ar });
     if (await isUsernameTaken(env, v.norm, null, now))
       return J(request, { ok: true, available: false, reason: 'الاسم محجوز، اختر غيره' });
@@ -9129,7 +9157,7 @@ async function handleAccountInner(request, env, url, ctx) {
     if (!await rateLimit(env, 'reg:' + ip, 6, 60 * 60 * 1000))
       return fail(request, 'rate');
 
-    const v = validateUsername(body.username);
+    const v = await checkUsername(env, body.username);
     if (!v.ok) return fail(request, 'taken', v.ar);
     if (await isUsernameTaken(env, v.norm, null, now))
       return fail(request, 'taken');
@@ -9246,7 +9274,7 @@ async function handleAccountInner(request, env, url, ctx) {
     // تغيير اليوزر: مسموح مرة كل ٣٠ يوماً
     if (typeof body.username === 'string' && body.username.trim() &&
         normUsername(body.username.trim()) !== me.username_norm) {
-      const v = validateUsername(body.username);
+      const v = await checkUsername(env, body.username);
       if (!v.ok) return fail(request, 'taken', v.ar);
       if (await isUsernameTaken(env, v.norm, me.device_id, now)) return fail(request, 'taken');
 
@@ -9377,7 +9405,7 @@ async function handleAccountInner(request, env, url, ctx) {
     if (!await rateLimit(env, 'fra:' + me.device_id, 20, 60 * 60 * 1000))
       return fail(request, 'rate', 'طلبات كثيرة، جرّب بعد شوي');
 
-    const v = validateUsername(body.username);
+    const v = await checkUsername(env, body.username);
     if (!v.ok) return fail(request, 'not-found', 'ما فيه حساب بهذا الاسم');
     const other = await env.DB.prepare(
       'SELECT device_id, username FROM players WHERE username_norm = ?1'
@@ -9621,7 +9649,7 @@ const REPORT_REASONS = {
 function pairKey(x, y) { return x < y ? [x, y] : [y, x]; }
 
 async function deviceByUsername(env, raw) {
-  const v = validateUsername(raw);
+  const v = await checkUsername(env, raw);
   if (!v.ok) return null;
   const row = await env.DB.prepare(
     'SELECT device_id FROM players WHERE username_norm = ?1'
@@ -9707,7 +9735,7 @@ async function handleReports(request, env, url) {
 
   /* تخمين التوكن مكلف: حدّ على العنوان قبل أي مقارنة */
   const ip = clientKey(request);
-  if (!await rateLimit(env, 'adm:' + ip, 30, 10 * 60 * 1000))
+  if (!await rateLimit(env, 'adm:' + ip, 240, 10 * 60 * 1000))
     return Response.json({ ok: false, error: 'rate' }, { status: 429 });
   if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN)))
     return Response.json({ ok: false, error: 'auth' }, { status: 401 });
@@ -9761,43 +9789,13 @@ async function handleReports(request, env, url) {
   return Response.json({ ok: false, error: 'not-found' }, { status: 404 });
 }
 
-/* ═══════════════════ لوحة التحكم الشاملة (إدارية) ═══════════════════
-   ملف `ya7-panel.html` محلي على الجوال، يلصق فيه التوكن كل مرة ولا يُحفظ.
-   كل شيء هنا للقراءة إلا `act`. قواعد ثابتة:
-     • لا يخرج `device_id` ولا `code_cipher` ولا `contact_cipher` أبدًا —
-       معرّف الجهاز مفتاح الحساب، وتسريبه للوحة يعني تسريبه لأي أحد
-       يلتقط الرد. الإجراءات كلها باليوزر.
-     • كل استعلام بسقف صريح: قراءات D1 تُحاسب بعدد الصفوف الممسوحة.
-     • البحث بـ LIKE على عمودين فقط ومقيّد بـ ٥٠ صفًّا للصفحة.          */
-
-const PANEL_PAGE = 50;
-const PANEL_SORTS = {
-  last_seen:  'last_seen DESC',
-  created_at: 'created_at DESC',
-  games:      'games_played DESC',
-  wins:       'wins DESC',
-};
-
-function panelPlayer(r) {
-  return {
-    username: r.username || '',
-    display_name: r.display_name || '',
-    avatar: r.avatar || '',
-    games: r.games_played || 0,
-    wins: r.wins || 0,
-    losses: r.losses || 0,
-    best_streak: r.best_streak || 0,
-    visit_streak: r.visit_streak || 0,
-    best_visit_streak: r.best_visit_streak || 0,
-    created_at: r.created_at || 0,
-    last_seen: r.last_seen || 0,
-    banned: !!r.banned,
-    has_contact: !!r.contact_cipher,        // وجوده فقط، لا قيمته
-    show_online: r.show_online === null || r.show_online === undefined ? 1 : (r.show_online ? 1 : 0),
-  };
-}
-
-async function handlePanel(request, env, url) {
+/* ═════════════════ لوحة الإدارة الكاملة — v68 ═════════════════
+   كل ما كان يحتاج فتح D1 Console صار هنا: اللاعبون، البلاغات، الغرف
+   المفتوحة، النتائج، صحة الربطات والجداول، صيانة القاعدة، وصندوق
+   SQL للقراءة فقط. نفس حماية /admin/reports: ADMIN_TOKEN + مقارنة
+   ثابتة الزمن + حدّ معدّل قبل أي مقارنة، وCORS مفتوح لأن اللوحة ملف
+   محلي بلا مصدر.                                                   */
+async function handleAdminPanel(request, env, url) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
   if (request.method !== 'POST') return new Response('method', { status: 405 });
   if (!env.DB || !env.ADMIN_TOKEN) return Response.json({ ok: false, error: 'binding-missing' });
@@ -9805,241 +9803,362 @@ async function handlePanel(request, env, url) {
   const body = await readBody(request);
   if (!body) return Response.json({ ok: false, error: 'bad-body' });
 
+  /* اللوحة تُطلق نداءً لكل تبويب، فالسقف العام واسع. الخانق الحقيقي
+     على المحاولات الفاشلة وحدها: عشر محاولات كل عشر دقائق، فتخمين
+     التوكن يبقى مكلفًا بلا أن تُقفل اللوحة في وجه صاحبها. */
   const ip = clientKey(request);
-  if (!await rateLimit(env, 'adm:' + ip, 30, 10 * 60 * 1000))
+  if (!await rateLimit(env, 'adm:' + ip, 240, 10 * 60 * 1000))
     return Response.json({ ok: false, error: 'rate' }, { status: 429 });
-  if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN)))
+  if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN))) {
+    if (!await rateLimit(env, 'admf:' + ip, 10, 10 * 60 * 1000))
+      return Response.json({ ok: false, error: 'rate' }, { status: 429 });
     return Response.json({ ok: false, error: 'auth' }, { status: 401 });
+  }
 
+  /* أي خطأ في القاعدة يرجع JSON مفهومًا لا 500 صامتًا: الاسم الحقيقي
+     للجدول أو العمود الناقص يظهر في اللوحة بدل «ما قدرنا نوصل للخادم» */
+  try {
+    return await adminPanelInner(request, env, url, body);
+  } catch (e) {
+    const m = String((e && e.message) || e);
+    return Response.json({ ok: false, error: 'db', ar: 'خطأ في القاعدة: ' + m });
+  }
+}
+
+/* استعلام لا يُسقط اللوحة لو كان جدوله غير موجود بعد */
+async function admFirst(env, sql, binds) {
+  try {
+    const st = env.DB.prepare(sql);
+    return await (binds && binds.length ? st.bind(...binds) : st).first();
+  } catch { return null; }
+}
+async function admAll(env, sql, binds) {
+  try {
+    const st = env.DB.prepare(sql);
+    const r = await (binds && binds.length ? st.bind(...binds) : st).all();
+    return (r && r.results) || [];
+  } catch { return []; }
+}
+
+const ADM_PCOLS =
+  `username, display_name, avatar, games_played AS games, wins, losses,
+   best_streak, cur_streak, visit_streak, best_visit_streak,
+   created_at, last_seen, banned`;
+
+async function admLobbyRooms(env, origin) {
+  if (!env.PUBLIC_LOBBY) return { rooms: [], error: 'ربط PUBLIC_LOBBY غير موجود' };
+  try {
+    const stub = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
+    const resp = await stub.fetch(new Request(origin + '/lobby/list', {
+      method: 'GET', headers: { 'X-Ya7-Internal': '1' },
+    }));
+    const j = await resp.json();
+    return { rooms: (j && j.rooms) || [] };
+  } catch (e) {
+    return { rooms: [], error: String((e && e.message) || e) };
+  }
+}
+
+async function adminPanelInner(request, env, url, body) {
   const now = Date.now();
-  const path = url.pathname.slice('/admin/panel'.length) || '/';
+  const sub = url.pathname.slice('/admin/panel'.length);
+  const D24 = now - 86400000, D7 = now - 7 * 86400000, ON = now - ACC.ONLINE_MS;
 
-  /* ---------- نظرة عامة ---------- */
-  if (path === '/overview') {
-    const day = 24 * 60 * 60 * 1000;
-    const p = await env.DB.prepare(
+  /* ── نظرة عامة ── */
+  if (sub === '/overview') {
+    const p = await admFirst(env,
       `SELECT COUNT(*) AS total,
-              SUM(CASE WHEN created_at >= ?1 THEN 1 ELSE 0 END) AS new24,
-              SUM(CASE WHEN created_at >= ?2 THEN 1 ELSE 0 END) AS new7,
-              SUM(CASE WHEN last_seen  >= ?1 THEN 1 ELSE 0 END) AS act24,
-              SUM(CASE WHEN last_seen  >= ?2 THEN 1 ELSE 0 END) AS act7,
-              SUM(CASE WHEN banned = 1 THEN 1 ELSE 0 END) AS banned,
-              SUM(CASE WHEN contact_cipher IS NOT NULL THEN 1 ELSE 0 END) AS withmail,
-              SUM(games_played) AS games, SUM(wins) AS wins
-         FROM players`
-    ).bind(now - day, now - 7 * day).first();
+              SUM(created_at > ?1) AS new24,  SUM(created_at > ?2) AS new7,
+              SUM(last_seen  > ?1) AS act24,  SUM(last_seen  > ?2) AS act7,
+              SUM(last_seen  > ?3) AS onlineNow,
+              SUM(banned = 1) AS banned,
+              SUM(games_played) AS games, SUM(wins) AS wins,
+              SUM(contact_cipher IS NOT NULL) AS withmail
+         FROM players`, [D24, D7, ON]) || {};
 
-    let reports = { open: 0, total: 0 };
-    try {
-      reports = await env.DB.prepare(
-        `SELECT COUNT(*) AS total, SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) AS open FROM reports`
-      ).first() || reports;
-    } catch {}
-
-    let friends = { accepted: 0, pending: 0, blocked: 0 };
-    try {
-      friends = await env.DB.prepare(
-        `SELECT SUM(CASE WHEN status='accepted' THEN 1 ELSE 0 END) AS accepted,
-                SUM(CASE WHEN status='pending'  THEN 1 ELSE 0 END) AS pending,
-                SUM(CASE WHEN status='blocked'  THEN 1 ELSE 0 END) AS blocked
-           FROM friends`
-      ).first() || friends;
-    } catch {}
-
-    const top = await env.DB.prepare(
-      `SELECT username, display_name, avatar, games_played, wins, losses,
-              best_streak, visit_streak, best_visit_streak, created_at, last_seen,
-              banned, contact_cipher, show_online
-         FROM players WHERE games_played > 0 ORDER BY wins DESC, games_played ASC LIMIT 5`
-    ).all();
-
-    const recent = await env.DB.prepare(
-      `SELECT username, display_name, avatar, games_played, wins, losses,
-              best_streak, visit_streak, best_visit_streak, created_at, last_seen,
-              banned, contact_cipher, show_online
-         FROM players ORDER BY created_at DESC LIMIT 5`
-    ).all();
-
-    /* المتصلون الآن من وركر العدّاد — يُجلب من الخادم لا من اللوحة،
-       لأن CORS هناك مقصور على نطاق الموقع فينحجب من ملف محلي. */
-    let onlineNow = null;
-    try {
-      const r = await fetch('https://ya7-online-count.alfyfyy100.workers.dev/count');
-      if (r.ok) { const j = await r.json(); onlineNow = Number(j.n) || 0; }
-    } catch {}
-
-    let rooms = null;
-    if (env.PUBLIC_LOBBY) {
-      try {
-        const stub = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
-        const resp = await stub.fetch(new Request(url.origin + '/lobby/list', {
-          headers: { 'X-Ya7-Internal': '1' },
-        }));
-        const j = await resp.json();
-        rooms = Array.isArray(j.rooms) ? j.rooms.length : null;
-      } catch {}
+    const fr = { accepted: 0, pending: 0, blocked: 0 };
+    for (const r of await admAll(env, 'SELECT status, COUNT(*) AS n FROM friends GROUP BY status')) {
+      if (r.status in fr) fr[r.status] = r.n;
     }
-
-    return Response.json({
-      ok: true, now,
-      players: {
-        total: p.total || 0, new24: p.new24 || 0, new7: p.new7 || 0,
-        act24: p.act24 || 0, act7: p.act7 || 0, banned: p.banned || 0,
-        withmail: p.withmail || 0, games: p.games || 0, wins: p.wins || 0,
-      },
-      reports: { open: reports.open || 0, total: reports.total || 0 },
-      friends: {
-        accepted: friends.accepted || 0, pending: friends.pending || 0,
-        blocked: friends.blocked || 0,
-      },
-      onlineNow, rooms,
-      top: ((top && top.results) || []).map(panelPlayer),
-      recent: ((recent && recent.results) || []).map(panelPlayer),
-    });
-  }
-
-  /* ---------- كل اللاعبين: بحث وترتيب وصفحات ---------- */
-  if (path === '/players') {
-    const q = String(body.q || '').trim().slice(0, 32);
-    const order = PANEL_SORTS[body.sort] || PANEL_SORTS.last_seen;
-    const page = Math.max(0, Math.min(200, Number(body.page) || 0));
-    const like = '%' + q.replace(/[%_\\]/g, '\\$&') + '%';
-    const cols = `username, display_name, avatar, games_played, wins, losses,
-                  best_streak, visit_streak, best_visit_streak, created_at, last_seen,
-                  banned, contact_cipher, show_online`;
-    const rows = q
-      ? await env.DB.prepare(
-          `SELECT ${cols} FROM players
-            WHERE username LIKE ?1 ESCAPE '\\' OR display_name LIKE ?1 ESCAPE '\\'
-            ORDER BY ${order} LIMIT ?2 OFFSET ?3`
-        ).bind(like, PANEL_PAGE, page * PANEL_PAGE).all()
-      : await env.DB.prepare(
-          `SELECT ${cols} FROM players ORDER BY ${order} LIMIT ?1 OFFSET ?2`
-        ).bind(PANEL_PAGE, page * PANEL_PAGE).all();
-
-    const list = ((rows && rows.results) || []).map(panelPlayer);
-    return Response.json({ ok: true, players: list, page, more: list.length === PANEL_PAGE });
-  }
-
-  /* ---------- تفاصيل لاعب واحد ---------- */
-  if (path === '/player') {
-    const u = normUsername(String(body.username || '').trim());
-    if (!u) return Response.json({ ok: false, error: 'bad-user' });
-    const row = await env.DB.prepare(
-      `SELECT device_id, username, display_name, avatar, games_played, wins, losses,
-              best_streak, visit_streak, best_visit_streak, created_at, last_seen,
-              banned, contact_cipher, show_online
-         FROM players WHERE username_norm = ?1`
-    ).bind(u).first();
-    if (!row) return Response.json({ ok: false, error: 'not-found' });
-
-    const did = row.device_id;
-    let friends = { accepted: 0, pending: 0, blocked: 0 };
-    try {
-      friends = await env.DB.prepare(
-        `SELECT SUM(CASE WHEN status='accepted' THEN 1 ELSE 0 END) AS accepted,
-                SUM(CASE WHEN status='pending'  THEN 1 ELSE 0 END) AS pending,
-                SUM(CASE WHEN status='blocked'  THEN 1 ELSE 0 END) AS blocked
-           FROM friends WHERE a = ?1 OR b = ?1`
-      ).bind(did).first() || friends;
-    } catch {}
-
-    let about = [], from = 0;
-    try {
-      const ar = await env.DB.prepare(
-        `SELECT r.id, r.reason, r.note, r.game, r.status, r.created_at, r.action,
-                f.username AS from_user
-           FROM reports r LEFT JOIN players f ON f.device_id = r.from_did
-          WHERE r.about_did = ?1 ORDER BY r.created_at DESC LIMIT 20`
-      ).bind(did).all();
-      about = ((ar && ar.results) || []).map(r => Object.assign({}, r, {
-        reasonText: REPORT_REASONS[r.reason] || r.reason,
-        gameName: (LOBBY_GAMES[r.game] || {}).name || '',
-      }));
-      const fr = await env.DB.prepare(
-        'SELECT COUNT(*) AS n FROM reports WHERE from_did = ?1'
-      ).bind(did).first();
-      from = (fr && fr.n) || 0;
-    } catch {}
+    const rp = await admFirst(env, "SELECT COUNT(*) AS n FROM reports WHERE status='open'");
+    const lob = await admLobbyRooms(env, url.origin);
 
     return Response.json({
       ok: true,
-      player: panelPlayer(row),
-      friends: {
-        accepted: friends.accepted || 0, pending: friends.pending || 0,
-        blocked: friends.blocked || 0,
-      },
-      reports: { about, from },
+      players: p,
+      onlineNow: p.onlineNow || 0,
+      rooms: lob.rooms.length,
+      lobbyError: lob.error || null,
+      friends: fr,
+      reports: { open: (rp && rp.n) || 0 },
+      top: await admAll(env,
+        `SELECT ${ADM_PCOLS} FROM players WHERE wins > 0 ORDER BY wins DESC, games_played DESC LIMIT 5`),
+      recent: await admAll(env,
+        `SELECT ${ADM_PCOLS} FROM players WHERE username IS NOT NULL ORDER BY created_at DESC LIMIT 5`),
     });
   }
 
-  /* ---------- إجراء: حظر / رفع حظر ---------- */
-  if (path === '/act') {
-    const action = ['ban', 'unban'].includes(body.action) ? body.action : null;
-    const u = normUsername(String(body.username || '').trim());
-    if (!action || !u) return Response.json({ ok: false, error: 'bad-action' });
-    const row = await env.DB.prepare(
-      'SELECT device_id FROM players WHERE username_norm = ?1'
-    ).bind(u).first();
+  /* ── قائمة اللاعبين: بحث + ترتيب + صفحات ── */
+  if (sub === '/players') {
+    const SORTS = {
+      last_seen: 'last_seen DESC', created_at: 'created_at DESC',
+      games: 'games_played DESC', wins: 'wins DESC',
+    };
+    const order = SORTS[body.sort] || SORTS.last_seen;
+    const page = Math.max(0, Math.min(500, Number(body.page) || 0));
+    const q = String(body.q || '').trim().slice(0, 32);
+    const like = '%' + q.toLowerCase().replace(/[%_]/g, '') + '%';
+    const rows = await admAll(env,
+      `SELECT ${ADM_PCOLS} FROM players
+        WHERE username IS NOT NULL
+          AND (?1 = '' OR username_norm LIKE ?2 OR lower(display_name) LIKE ?2)
+        ORDER BY ${order} LIMIT 21 OFFSET ?3`, [q, like, page * 20]);
+    return Response.json({ ok: true, players: rows.slice(0, 20), more: rows.length > 20 });
+  }
+
+  /* ── بطاقة لاعب واحد ── */
+  if (sub === '/player') {
+    const norm = normUsername(String(body.username || '').trim());
+    if (!norm) return Response.json({ ok: false, error: 'bad-user' });
+    const pl = await admFirst(env,
+      `SELECT device_id, ${ADM_PCOLS},
+              contact_cipher IS NOT NULL AS has_contact,
+              username_set_at, token_ver
+         FROM players WHERE username_norm = ?1`, [norm]);
+    if (!pl) return Response.json({ ok: false, error: 'not-found' });
+    const did = pl.device_id;
+    delete pl.device_id;   // لا يخرج معرّف الجهاز إلى اللوحة أبدًا
+
+    const fr = { accepted: 0, pending: 0, blocked: 0 };
+    for (const r of await admAll(env,
+      'SELECT status, COUNT(*) AS n FROM friends WHERE a = ?1 OR b = ?1 GROUP BY status', [did])) {
+      if (r.status in fr) fr[r.status] = r.n;
+    }
+    const from = await admFirst(env, 'SELECT COUNT(*) AS n FROM reports WHERE from_did = ?1', [did]);
+    const about = (await admAll(env,
+      `SELECT r.id, r.reason, r.note, r.game, r.code, r.status, r.created_at,
+              f.username AS from_user
+         FROM reports r LEFT JOIN players f ON f.device_id = r.from_did
+        WHERE r.about_did = ?1 ORDER BY r.created_at DESC LIMIT 20`, [did]))
+      .map(r => Object.assign({}, r, {
+        reasonText: REPORT_REASONS[r.reason] || r.reason,
+        gameName: (LOBBY_GAMES[r.game] || {}).name || '',
+      }));
+
+    return Response.json({
+      ok: true, player: pl, friends: fr,
+      reports: { from: (from && from.n) || 0, about },
+    });
+  }
+
+  /* ── إجراءات على حساب ── */
+  if (sub === '/act') {
+    const action = String(body.action || '');
+    const norm = normUsername(String(body.username || '').trim());
+    if (!norm) return Response.json({ ok: false, error: 'bad-user' });
+    const row = await admFirst(env,
+      'SELECT device_id, username FROM players WHERE username_norm = ?1', [norm]);
     if (!row) return Response.json({ ok: false, error: 'not-found' });
+    const did = row.device_id;
 
     if (action === 'ban') {
-      /* رفع token_ver يسقط كل جلساته فورًا — بلا هذا يبقى داخلًا بتوكنه */
       await env.DB.prepare(
         'UPDATE players SET banned = 1, token_ver = token_ver + 1 WHERE device_id = ?1'
-      ).bind(row.device_id).run();
-    } else {
-      await env.DB.prepare('UPDATE players SET banned = 0 WHERE device_id = ?1')
-        .bind(row.device_id).run();
+      ).bind(did).run();
+      return Response.json({ ok: true });
     }
+    if (action === 'unban') {
+      await env.DB.prepare('UPDATE players SET banned = 0 WHERE device_id = ?1').bind(did).run();
+      return Response.json({ ok: true });
+    }
+    /* منح يوزر — بما فيها المحجوزة للمالك: هذا هو الباب الرسمي الوحيد
+       لمنحها، فالتحقق هنا يتجاوز قائمة الحجز عمدًا لكنه يبقي الشكل
+       والتفرّد ومنع الألفاظ. أي منح يُسقط جلسات الحساب ليعاد تحميلها. */
+    if (action === 'username') {
+      const u = String(body.value || '').trim();
+      if (!/^[A-Za-z0-9]{3,16}$/.test(u))
+        return Response.json({ ok: false, error: 'bad-user', ar: 'إنجليزي وأرقام فقط، ٣ إلى ١٦ خانة' });
+      const n2 = normUsername(u), v2 = visualNorm(u);
+      for (const b of BANNED_EXACT)
+        if (n2 === b || v2 === visualNorm(b)) return Response.json({ ok: false, ar: 'اليوزر غير مسموح' });
+      for (const b of BANNED_SUBSTRINGS)
+        if (n2.includes(b) || v2.includes(visualNorm(b))) return Response.json({ ok: false, ar: 'اليوزر غير مسموح' });
+      const taken = await admFirst(env,
+        'SELECT device_id FROM players WHERE username_norm = ?1', [n2]);
+      if (taken && taken.device_id !== did)
+        return Response.json({ ok: false, ar: 'اليوزر مأخوذ' });
+      await env.DB.prepare(
+        `UPDATE players SET username = ?2, username_norm = ?3,
+                username_set_at = ?4, token_ver = token_ver + 1
+           WHERE device_id = ?1`).bind(did, u, n2, now).run();
+      /* الحجز القديم يُرفع فورًا حتى لا يبقى اسمه السابق معلّقًا شهرًا */
+      try {
+        await env.DB.prepare('DELETE FROM username_holds WHERE device_id = ?1').bind(did).run();
+      } catch {}
+      return Response.json({ ok: true, username: u });
+    }
+    if (action === 'nickname') {
+      const nm = sanitizeDisplayName(String(body.value || ''));
+      await env.DB.prepare('UPDATE players SET display_name = ?2 WHERE device_id = ?1')
+        .bind(did, nm).run();
+      return Response.json({ ok: true });
+    }
+    if (action === 'resetstats') {
+      await env.DB.prepare(
+        `UPDATE players SET games_played = 0, wins = 0, losses = 0,
+                cur_streak = 0, best_streak = 0 WHERE device_id = ?1`).bind(did).run();
+      return Response.json({ ok: true });
+    }
+    if (action === 'unlock') {
+      await env.DB.prepare('UPDATE players SET username_set_at = NULL WHERE device_id = ?1')
+        .bind(did).run();
+      try {
+        await env.DB.prepare('DELETE FROM username_holds WHERE device_id = ?1').bind(did).run();
+      } catch {}
+      return Response.json({ ok: true });
+    }
+    /* حذف نهائي: الحساب وكل ما يتعلّق به. لا استرجاع بعده. */
+    if (action === 'delete') {
+      const stmts = [
+        env.DB.prepare('DELETE FROM players WHERE device_id = ?1').bind(did),
+      ];
+      for (const s of [
+        ['DELETE FROM friends WHERE a = ?1 OR b = ?1'],
+        ['DELETE FROM invites WHERE from_did = ?1 OR to_did = ?1'],
+        ['DELETE FROM reports WHERE from_did = ?1 OR about_did = ?1'],
+        ['DELETE FROM username_holds WHERE device_id = ?1'],
+      ]) {
+        try { stmts.push(env.DB.prepare(s[0]).bind(did)); } catch {}
+      }
+      for (const st of stmts) { try { await st.run(); } catch {} }
+      return Response.json({ ok: true });
+    }
+    return Response.json({ ok: false, error: 'bad-action' });
+  }
+
+  /* ── الغرف المفتوحة ── */
+  if (sub === '/rooms') {
+    const lob = await admLobbyRooms(env, url.origin);
+    const p = await admFirst(env, 'SELECT SUM(last_seen > ?1) AS n FROM players', [ON]);
+    return Response.json({
+      ok: true, rooms: lob.rooms, games: LOBBY_GAMES,
+      onlineNow: (p && p.n) || 0, lobbyError: lob.error || null,
+    });
+  }
+
+  /* شطب غرفة من اللوبي: لا يُنهي اللعبة، يخفيها من «الغرف المفتوحة» */
+  if (sub === '/rooms/close') {
+    if (!env.PUBLIC_LOBBY) return Response.json({ ok: false, error: 'binding-missing' });
+    const g = String(body.game || '').toLowerCase();
+    const code = String(body.code || '').toUpperCase();
+    if (!LOBBY_GAMES[g] || !/^[A-Z0-9]{4,8}$/.test(code))
+      return Response.json({ ok: false, error: 'bad-room' });
+    const stub = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
+    await stub.fetch(new Request(url.origin + '/lobby/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Ya7-Internal': '1' },
+      body: JSON.stringify({ game: g, code }),
+    }));
     return Response.json({ ok: true });
   }
 
-  /* ---------- الغرف المفتوحة + المتصلون الآن ---------- */
-  if (path === '/rooms') {
-    let rooms = [], lobbyError = null;
-    if (!env.PUBLIC_LOBBY) lobbyError = 'binding-missing: PUBLIC_LOBBY';
-    else {
-      try {
-        const stub = env.PUBLIC_LOBBY.get(env.PUBLIC_LOBBY.idFromName('global'));
-        const resp = await stub.fetch(new Request(url.origin + '/lobby/list', {
-          headers: { 'X-Ya7-Internal': '1' },
-        }));
-        const j = await resp.json();
-        rooms = Array.isArray(j.rooms) ? j.rooms : [];
-      } catch (e) { lobbyError = 'lobby-failed'; }
-    }
-    let onlineNow = null;
+  /* ── نتائج لوحة الصدارة (جدول scores المشترك) ── */
+  if (sub === '/scores') {
+    let rows;
     try {
-      const r = await fetch('https://ya7-online-count.alfyfyy100.workers.dev/count');
-      if (r.ok) { const j = await r.json(); onlineNow = Number(j.n) || 0; }
-    } catch {}
-    return Response.json({ ok: true, rooms, onlineNow, lobbyError, games: LOBBY_GAMES });
-  }
-
-  /* ---------- النتائج (جدول scores يديره وركر آخر) ----------
-     مخططه غير معروف هنا، فلا نسمّي أعمدة: نسحب الصفوف كما هي وتعرضها
-     اللوحة بأي أعمدة رجعت. الحذف بـ rowid وهو موجود في كل جدول D1. */
-  if (path === '/scores') {
-    try {
-      const rows = await env.DB.prepare(
-        'SELECT rowid AS _rowid, * FROM scores ORDER BY rowid DESC LIMIT 100'
-      ).all();
-      return Response.json({ ok: true, scores: (rows && rows.results) || [] });
+      const r = await env.DB.prepare(
+        'SELECT rowid AS _rowid, * FROM scores ORDER BY rowid DESC LIMIT 100').all();
+      rows = (r && r.results) || [];
     } catch (e) {
-      return Response.json({ ok: true, scores: [], missing: true });
+      if (/no such table/i.test(String(e && e.message)))
+        return Response.json({ ok: true, missing: true, scores: [] });
+      throw e;
     }
+    return Response.json({ ok: true, scores: rows });
   }
-
-  if (path === '/scores/delete') {
+  if (sub === '/scores/delete') {
     const id = Number(body.rowid) || 0;
-    if (!id) return Response.json({ ok: false, error: 'bad-id' });
-    try {
-      await env.DB.prepare('DELETE FROM scores WHERE rowid = ?1').bind(id).run();
-      return Response.json({ ok: true });
-    } catch (e) {
-      return Response.json({ ok: false, error: 'db' });
+    if (!id) return Response.json({ ok: false, error: 'bad-action' });
+    await env.DB.prepare('DELETE FROM scores WHERE rowid = ?1').bind(id).run();
+    return Response.json({ ok: true });
+  }
+
+  /* ── الأسماء المحجوزة للمالك: أيّها مُنِح ولمن ── */
+  if (sub === '/reserved') {
+    const rows = await admAll(env,
+      'SELECT username, username_norm, display_name FROM players WHERE username IS NOT NULL');
+    const byNorm = {};
+    for (const r of rows) byNorm[r.username_norm] = r;
+    return Response.json({
+      ok: true,
+      names: RESERVED_OWNER.map(n => {
+        const t = byNorm[n];
+        return { name: n, takenBy: t ? t.username : null, takenName: t ? t.display_name : null };
+      }),
+    });
+  }
+
+  /* ── النظام: الربطات + الجداول وأعداد صفوفها ── */
+  if (sub === '/system') {
+    const tables = await admAll(env,
+      `SELECT name FROM sqlite_master WHERE type = 'table'
+         AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\\_cf%' ESCAPE '\\'
+        ORDER BY name`);
+    const out = [];
+    for (const t of tables) {
+      const c = await admFirst(env, 'SELECT COUNT(*) AS n FROM "' + t.name.replace(/"/g, '') + '"');
+      out.push({ name: t.name, rows: (c && c.n) || 0 });
     }
+    const want = ['players', 'friends', 'invites', 'reports', 'username_holds', 'rate_limits'];
+    return Response.json({
+      ok: true,
+      version: WORKER_VERSION,
+      tables: out,
+      missing: want.filter(w => !out.some(t => t.name === w)),
+      bindings: {
+        MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
+        MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
+        DAQASH_ROOM: !!env.DAQASH_ROOM, WALIMA_ROOM: !!env.WALIMA_ROOM,
+        LUDO_ROOM: !!env.LUDO_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
+        BTAQATI_ROOM: !!env.BTAQATI_ROOM, PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
+        CHAT_ROOM: !!env.CHAT_ROOM, DB: !!env.DB,
+        ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
+        ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
+      },
+    });
+  }
+
+  /* ── صيانة: شطب الصفوف المنتهية. كلها آمنة التكرار ── */
+  if (sub === '/maintenance') {
+    const JOBS = {
+      invites: ['DELETE FROM invites WHERE expires_at < ?1', now],
+      holds: ['DELETE FROM username_holds WHERE until < ?1', now],
+      rate: ['DELETE FROM rate_limits WHERE reset_at < ?1', now],
+      reports: ["DELETE FROM reports WHERE status = 'closed' AND closed_at < ?1", now - 30 * 86400000],
+    };
+    const j = JOBS[String(body.job || '')];
+    if (!j) return Response.json({ ok: false, error: 'bad-action' });
+    const r = await env.DB.prepare(j[0]).bind(j[1]).run();
+    return Response.json({ ok: true, changes: (r && r.meta && r.meta.changes) || 0 });
+  }
+
+  /* ── صندوق SQL: قراءة فقط ──
+     يبدأ بـ SELECT أو PRAGMA أو WITH، وبلا أي كلمة كتابة في أي موضع
+     (WITH … DELETE مسموح في SQLite، فالفحص على البداية وحدها لا يكفي)،
+     وبلا فاصلة منقوطة داخلية فلا تُهرَّب جملة ثانية.                 */
+  if (sub === '/sql') {
+    let q = String(body.q || '').trim().replace(/;+\s*$/, '');
+    if (!q) return Response.json({ ok: false, ar: 'اكتب استعلامًا.' });
+    if (q.length > 2000) return Response.json({ ok: false, ar: 'الاستعلام طويل.' });
+    if (q.includes(';')) return Response.json({ ok: false, ar: 'جملة واحدة فقط.' });
+    if (!/^(select|pragma|with)\b/i.test(q))
+      return Response.json({ ok: false, ar: 'قراءة فقط: ابدأ بـ SELECT أو PRAGMA.' });
+    if (/\b(insert|update|delete|drop|alter|create|replace|attach|detach|vacuum|reindex|analyze)\b/i.test(q))
+      return Response.json({ ok: false, ar: 'قراءة فقط: ما فيه تعديل من هنا.' });
+    const r = await env.DB.prepare(q).all();
+    const rows = ((r && r.results) || []).slice(0, 200);
+    const cols = rows.length ? Object.keys(rows[0]) : [];
+    return Response.json({ ok: true, cols, rows, count: rows.length });
   }
 
   return Response.json({ ok: false, error: 'not-found' }, { status: 404 });
