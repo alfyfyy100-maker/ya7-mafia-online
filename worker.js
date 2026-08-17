@@ -7304,6 +7304,111 @@ export class DakhilRoom {
 }
 applyRoomCommon(DakhilRoom);
 
+/* ═══════════════════ دردشة الغرف ═══════════════════
+   كائن مستقل لكل (لعبة + رمز غرفة). لا يلمس منطق أي لعبة ولا سوكِتها.
+
+   لماذا مستقل ولا نركبها على سوكِت اللعبة؟
+   لأن ركوبها يعني تعديل تسع واجهات لعب، بعضها ما زال مشفّرًا. الكائن
+   المستقل يعطينا نفس النتيجة بملف عميل واحد وصفر تعديل في كود الألعاب.
+
+   الكلفة: نستعمل WebSocket Hibernation API (acceptWebSocket) لا accept().
+   الفرق ليس تجميليًا: accept() يحاسبك على المدة طوال بقاء الاتصال
+   مفتوحًا، فغرفة واحدة صاحية شهرًا تلتهم ٨٣٪ من حصة المدة المجانية.
+   مع السبات لا تُحسب المدة إلا وقت المعالجة الفعلي. والنبضة تُردّ من
+   الرَّنتايم عبر setWebSocketAutoResponse فلا توقظ الكائن أصلًا.       */
+
+const CHAT_KEEP = 50;      // آخر كم رسالة نحفظها للداخل متأخرًا
+const CHAT_LEN = 180;      // أقصى طول رسالة
+const CHAT_GAP_MS = 1200;  // بين رسالتين لنفس المقعد
+const CHAT_BURST = 12;     // رسالة في الدقيقة لنفس المقعد
+const CHAT_SOCKETS = 40;   // سقف اتصالات الغرفة الواحدة
+
+export class ChatRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    /* 'p' تُردّ بـ 'P' من الرَّنتايم نفسه: نبضة تبقي الاتصال حيًّا عبر
+       الوسطاء بلا إيقاظ الكائن وبلا فاتورة مدة. */
+    this.state.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair('p', 'P')
+    );
+    this.state.blockConcurrencyWhile(async () => {
+      this.log = (await this.state.storage.get('log')) || [];
+      this.seq = (await this.state.storage.get('seq')) || 0;
+    });
+  }
+
+  async fetch(request) {
+    if ((request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') {
+      return new Response('expected-websocket', { status: 426 });
+    }
+    if (this.state.getWebSockets().length >= CHAT_SOCKETS) {
+      return new Response('chat-full', { status: 503 });
+    }
+    const pair = new WebSocketPair();
+    this.state.acceptWebSocket(pair[1]);
+
+    /* الاسم واليوزر يجيان من الووركر بعد تحقّقه عبر ترويسات، لا من
+       رابط العميل. serializeAttachment يبقى عبر السبات — بخلاف أي
+       حالة في الذاكرة، فهي تُمسح عند أول نومة. */
+    let name = '', user = '';
+    try { name = decodeURIComponent(request.headers.get('X-Ya7-Name') || ''); } catch {}
+    try { user = decodeURIComponent(request.headers.get('X-Ya7-User') || ''); } catch {}
+
+    pair[1].serializeAttachment({
+      name: cleanName(name),
+      user: String(user).slice(0, 20),
+      last: 0, win: 0, n: 0,
+    });
+
+    pair[1].send(JSON.stringify({ t: 'hist', log: this.log }));
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  async webSocketMessage(ws, raw) {
+    if (typeof raw !== 'string' || raw.length > 4 * CHAT_LEN) return;
+    let m;
+    try { m = JSON.parse(raw); } catch { return; }
+    if (!m || m.t !== 'say') return;
+
+    const a = ws.deserializeAttachment() || {};
+    const now = Date.now();
+
+    /* كبح على مستوى المقعد لا الغرفة: لاعب واحد ما يقدر يسكّت البقية */
+    if (now - (a.last || 0) < CHAT_GAP_MS) return;
+    if (now - (a.win || 0) > 60000) { a.win = now; a.n = 0; }
+    if (++a.n > CHAT_BURST) { a.last = now; ws.serializeAttachment(a); return; }
+
+    const text = cleanText(m.x, CHAT_LEN);
+    if (!text) return;
+
+    a.last = now;
+    ws.serializeAttachment(a);
+
+    const msg = {
+      i: ++this.seq,
+      n: a.name || 'لاعب',
+      u: a.user || '',
+      x: text,
+      ts: now,
+    };
+    this.log.push(msg);
+    if (this.log.length > CHAT_KEEP) this.log = this.log.slice(-CHAT_KEEP);
+
+    /* الحفظ ضروري: الكائن يُطرد من الذاكرة عند السبات، فبلا كتابة
+       يفقد الداخلُ لاحقًا كل ما قيل قبل دقيقة. */
+    await this.state.storage.put({ log: this.log, seq: this.seq });
+
+    const out = JSON.stringify({ t: 'msg', m: msg });
+    for (const s of this.state.getWebSockets()) {
+      try { s.send(out); } catch {}
+    }
+  }
+
+  async webSocketClose(ws) { try { ws.close(); } catch {} }
+  async webSocketError(ws) { try { ws.close(); } catch {} }
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -7347,13 +7452,14 @@ export default {
     if (url.pathname === '/health') {
       return withCors(Response.json({
         ok: true,
-        version: 'v55',
+        version: 'v56',
         bindings: {
           MAFIA_ROOM: !!env.MAFIA_ROOM, GOT_ROOM: !!env.GOT_ROOM,
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
           DAQASH_ROOM: !!env.DAQASH_ROOM, WALIMA_ROOM: !!env.WALIMA_ROOM,
           LUDO_ROOM: !!env.LUDO_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
           BTAQATI_ROOM: !!env.BTAQATI_ROOM, PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
+          CHAT_ROOM: !!env.CHAT_ROOM,
           DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
           ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
         },
@@ -7365,6 +7471,54 @@ export default {
     // "Failed to fetch" بدل السبب الحقيقي.
     if (!isAllowedOrigin(origin)) {
       return withCors(new Response('origin-not-allowed: ' + (origin || 'بلا مصدر'), { status: 403 }), origin);
+    }
+
+
+    // ── دردشة الغرف: كائن مستقل لكل (لعبة + رمز) ──
+    if (url.pathname.startsWith('/chat/')) {
+      const m = url.pathname.match(/^\/chat\/([a-z]+)\/([A-Za-z0-9]{4,8})\/ws$/);
+      if (!m) return withCors(new Response('bad-chat-path', { status: 404 }), origin);
+      if (!env.CHAT_ROOM) {
+        return withCors(new Response(
+          'binding-missing: أضف ربط CHAT_ROOM في wrangler.toml ثم أعد النشر',
+          { status: 501 }), origin);
+      }
+      if ((request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') {
+        return withCors(new Response('expected-websocket', { status: 426 }), origin);
+      }
+      const game = m[1].toLowerCase();
+      if (!LOBBY_GAMES[game]) return withCors(new Response('bad-game', { status: 404 }), origin);
+      if (!allowSocket(request.headers.get('CF-Connecting-IP') || '')) {
+        return withCors(new Response('too-many-requests', { status: 429 }), origin);
+      }
+      const code = m[2].toUpperCase();
+
+      /* اليوزر يُشتقّ من did الذي تحقّق منه أعلى الدالة، لا من أي حقل
+         يرسله العميل — وإلا انتحل أي أحد أي حساب في الدردشة. */
+      let user = '';
+      const did = url.searchParams.get('did');
+      if (did && env.DB) {
+        try {
+          const row = await env.DB
+            .prepare('SELECT username, banned FROM players WHERE device_id = ?1')
+            .bind(did).first();
+          if (row && row.banned) {
+            return withCors(new Response('banned', { status: 403 }), origin);
+          }
+          if (row) user = String(row.username || '');
+        } catch {}
+      }
+
+      /* التمرير بترويسات منسوخة لا بـ new Request(url, request):
+         طلب الترقية بلا جسم، وبناء طلب جديد من طلب ترقية يسقط أحيانًا
+         ترويسة Upgrade فيرجع 426 بدل 101 — والعميل ما يشوف إلا
+         «انقطع الاتصال». والاسم واليوزر ينتقلان في ترويسات لا في
+         الرابط، حتى ما يقدر أحد يزوّرهما بتعديل عنوان السوكِت. */
+      const h = new Headers(request.headers);
+      h.set('X-Ya7-Name', encodeURIComponent(url.searchParams.get('name') || ''));
+      h.set('X-Ya7-User', encodeURIComponent(user));
+      const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(game + ':' + code));
+      return stub.fetch(new Request(url.origin + '/ws', { method: 'GET', headers: h }));
     }
 
     // ── اللوبي العام: قائمة الغرف المعلَنة ──
@@ -7546,7 +7700,10 @@ export default {
    «عامة» صراحةً — الافتراضي خاص، فغرف الأصدقاء لا تظهر لأحد أبدًا.
    لا يحتفظ بأي شيء عن اللعب نفسه: رمز الغرفة واسم المضيف والعدد فقط.   */
 
-const LOBBY_TTL_MS = 20 * 60 * 1000;   // مدخل بلا نبض يسقط بعدها
+/* ٢٠ دقيقة كانت تخلي غرفة مهجورة معروضة ربع ساعة بعد ما يمشي مضيفها،
+   فامتلأت «الغرف المفتوحة» بغرف ميتة. النبضة كل ٢٠ ثانية، فثمان دقائق
+   تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
+const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -8560,7 +8717,24 @@ const cleanAvatar = (v, fallback) =>
       if (url.pathname.startsWith('/account/'))
         return handleAccount(request, env, url, ctx);
 */
+/* غلاف: أي استثناء داخل مسارات الحساب كان يخرج 500 بنصّ عادي وبلا
+   ترويسات CORS، فيحجبه المتصفح ويظهر عند اللاعب كـ«ما قدرنا نوصل
+   للخادم» — أي بلاغ كذب يوجّهه لفحص شبكته بدل السبب الحقيقي.
+   أشهر سبب: جدول لم يُنشأ بعد في D1. الآن يُقال له ذلك صراحة. */
 async function handleAccount(request, env, url, ctx) {
+  try {
+    return await handleAccountInner(request, env, url, ctx);
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    if (/no such table|no such column/i.test(msg)) {
+      return fail(request, 'schema',
+        'قاعدة البيانات ناقصة جدولًا — نفّذ آخر accounts-schema.sql في D1', 500);
+    }
+    return fail(request, 'server', 'صار خطأ في الخادم، جرّب بعد شوي', 500);
+  }
+}
+
+async function handleAccountInner(request, env, url, ctx) {
   if (request.method !== 'POST')
     return fail(request, 'method', 'الطريقة غير مدعومة', 405);
   if (!env.DB) return fail(request, 'binding-missing');
