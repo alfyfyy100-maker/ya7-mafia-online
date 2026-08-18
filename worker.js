@@ -24,6 +24,13 @@ function corsFor(origin) {
     'Access-Control-Allow-Origin': isAllowedOrigin(origin) ? origin : ALLOWED_ORIGINS[0],
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
+    /* أي POST بـ Content-Type: application/json ليس طلبًا بسيطًا، فالمتصفح
+       يرسل OPTIONS وينتظر رده قبل الطلب الحقيقي. وبلا Max-Age يخزّن كروم
+       النتيجة خمس ثوانٍ فقط — فكل إنشاء غرفة وكل انضمام وكل نبضة لوبي
+       (٢٠ ثانية) واستطلاع لودو يدفع رحلة ذهاب وإياب زائدة كاملة. على
+       بيانات الجوال هذي نصف ثانية مهدورة قبل ما يبدأ الطلب أصلًا.
+       كروم يسقّفها عمليًا عند ساعتين، والقيمة الأكبر لا تضرّ. */
+    'Access-Control-Max-Age': '86400',
     'Vary': 'Origin',
   };
 }
@@ -250,6 +257,35 @@ function applyRoomCommon(cls) {
     }
     return innerFetch.call(this, request);
   };
+
+  /* ── نبضة إبقاء الاتصال (hb ⇄ pong) ──
+     الغرف الثمان كلها تستعمل accept() العادي بلا سبات وبلا رد آلي، فما
+     كان يمرّ على السوكِت أي بايت في المراحل الصامتة — ومافيا ووليمة ومين
+     الدخيل فيها مراحل نقاش تمتد دقائق. وNAT الجوال والبروكسيات الوسيطة
+     تقطع أي اتصال ساكت بعد ٦٠-١٢٠ ثانية، فيموت السوكِت بصمت ولا يكتشفه
+     اللاعب إلا لما يحاول يتحرك: «ما فيه اتصال الحين» في منتصف الجولة.
+
+     العميل المشترك يرسل {"type":"hb"} كل ٢٥ ثانية ونرد بـ pong. اخترنا
+     نوعًا جديدًا لا 'ping' لأن داقش ومين الدخيل تفهم 'ping' على أنها
+     «أرسل لي الحالة كاملة» — فلو استعملناها لصار كل ٢٥ ثانية بثّ حالة
+     كاملة لكل لاعب بلا داعٍ.
+
+     لُفَّت هنا لا في كل صنف: نقطة واحدة تغطي الثمانية، فما تُنسى للعبة
+     قادمة — نفس منطق /seat-check فوق.                                */
+  const innerOnMessage = cls.prototype.onMessage;
+  if (typeof innerOnMessage === 'function') {
+    cls.prototype.onMessage = function (playerId, evt) {
+      try {
+        const m = JSON.parse(evt.data);
+        if (m && m.type === 'hb') {
+          const ws = this.sockets && this.sockets.get(playerId);
+          if (ws) { try { ws.send('{"type":"pong"}'); } catch {} }
+          return;   // لا تمرّ للعبة: النبضة ما تخصّها ولا تستهلك خانقها
+        }
+      } catch {}
+      return innerOnMessage.call(this, playerId, evt);
+    };
+  }
 }
 
 /* خريطة مفتاح اللعبة ← ربط الـ Durable Object. مفاتيحها هي نفسها مفاتيح
@@ -8063,7 +8099,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v75';
+const WORKER_VERSION = 'v80';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -8962,6 +8998,22 @@ async function checkUsername(env, raw) {
   return v;
 }
 
+/* ═══ البحث عن حساب قائم لا يمرّ بقوائم الحجز ═══
+   الحجز وظيفته منع *التسجيل* باسم، لا إخفاء حساب موجود. وقبل هذا كانت
+   كل مسارات البحث (إضافة صديق، حظر، دعوة، بلاغ) تمرّ بـ checkUsername
+   فيصير الاسم الممنوح مخفيًا: من يكتب `ya7` يوصله «ما فيه حساب بهذا
+   الاسم» — وهو أشهر حساب في الموقع. وحتى بعد ترقيع RESERVED_OWNER
+   بقيت حالتان مكسورتين: أسماء RESERVED_USERNAMES الممنوحة (ya7)،
+   والاسم الممنوح بصيغة تشبه المحجوز بصريًا (r1n مع rin).
+   الحلّ: البحث يتحقّق من الشكل فقط، والوجود في players هو الحكم.     */
+function lookupNorm(raw) {
+  if (typeof raw !== 'string') return null;
+  const u = raw.trim();
+  if (u.length < ACC.USER_MIN || u.length > ACC.USER_MAX) return null;
+  if (!/^[A-Za-z0-9]+$/.test(u)) return null;
+  return normUsername(u);
+}
+
 /* الاسم حر تماماً، لكن محارف التحكم والاتجاه تُزال (بند م-٣ المؤجل) */
 function sanitizeDisplayName(raw) {
   if (typeof raw !== 'string') return '';
@@ -9421,11 +9473,11 @@ async function handleAccountInner(request, env, url, ctx) {
     if (!await rateLimit(env, 'fra:' + me.device_id, 20, 60 * 60 * 1000))
       return fail(request, 'rate', 'طلبات كثيرة، جرّب بعد شوي');
 
-    const v = await checkUsername(env, body.username);
-    if (!v.ok) return fail(request, 'not-found', 'ما فيه حساب بهذا الاسم');
+    const norm = lookupNorm(body.username);
+    if (!norm) return fail(request, 'not-found', 'ما فيه حساب بهذا الاسم');
     const other = await env.DB.prepare(
       'SELECT device_id, username FROM players WHERE username_norm = ?1'
-    ).bind(v.norm).first();
+    ).bind(norm).first();
     if (!other || other.device_id === me.device_id)
       return fail(request, 'not-found', other ? 'ما تقدر تضيف نفسك' : 'ما فيه حساب بهذا الاسم');
 
@@ -9665,11 +9717,11 @@ const REPORT_REASONS = {
 function pairKey(x, y) { return x < y ? [x, y] : [y, x]; }
 
 async function deviceByUsername(env, raw) {
-  const v = await checkUsername(env, raw);
-  if (!v.ok) return null;
+  const norm = lookupNorm(raw);
+  if (!norm) return null;
   const row = await env.DB.prepare(
     'SELECT device_id FROM players WHERE username_norm = ?1'
-  ).bind(v.norm).first();
+  ).bind(norm).first();
   return row ? row.device_id : null;
 }
 
@@ -9737,6 +9789,9 @@ function withAnyCors(res) {
   h.set('Access-Control-Allow-Origin', '*');
   h.set('Access-Control-Allow-Headers', 'Content-Type');
   h.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  /* اللوحة تُطلق نداءً لكل تبويب، وكلها POST بـ JSON — فبلا تخزين
+     للـ preflight يصير لكل نداء رحلتان بدل واحدة */
+  h.set('Access-Control-Max-Age', '86400');
   h.set('Cache-Control', 'no-store');
   return new Response(res.body, { status: res.status, headers: h });
 }
