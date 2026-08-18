@@ -6544,7 +6544,7 @@ const LUDO_MAX_PLAYERS = 4;
 const LUDO_ROLL_LOCK_MS = 90 * 1000;      // بعدها تُعتبر الرمية مهجورة
 const LUDO_CARDS = ['freeze', 'shield', 'push', 'swap'];   // مطابقة CARDS في ludo/index.html
 const LUDO_SKINS = ['classic', 'disc', 'gem', 'hex'];      // مطابقة SKINS في ludo/index.html
-const LUDO_BY_ACTIONS = new Set(['pick', 'reveal', 'veto', 'card', 'skin']);
+const LUDO_BY_ACTIONS = new Set(['pick', 'reveal', 'veto', 'card', 'skin', 'trade', 'undo']);
 
 // عدد صحيح داخل مدى، أو null
 function ludoInt(v, min, max) {
@@ -6587,6 +6587,22 @@ function ludoCleanAction(raw, mySeat) {
       const by = seat(raw.by);
       if (by === null) return null;
       return { t: 'veto', by };
+    }
+    /* مقايضة ٣ كروت بكرت إلغاء. الأسماء الثلاثة من الكروت الأساسية فقط:
+       كرت الإلغاء نفسه لا يُقايَض ولا يُسحَب — طريقه الوحيدة هذي. */
+    case 'trade': {
+      const by = seat(raw.by);
+      if (by === null || !Array.isArray(raw.kinds) || raw.kinds.length !== 3) return null;
+      const kinds = raw.kinds.map(k => (LUDO_CARDS.includes(k) ? k : null));
+      if (kinds.some(k => k === null)) return null;
+      return { t: 'trade', by, kinds };
+    }
+    /* إلغاء آخر حركة مثبَّتة — المحرّك عند كل جهاز يتحقّق من الملكية
+       والتوقيت، والخادم يتحقّق من المقعد عبر LUDO_BY_ACTIONS. */
+    case 'undo': {
+      const by = seat(raw.by);
+      if (by === null) return null;
+      return { t: 'undo', by };
     }
     case 'card': {
       const by = seat(raw.by);
@@ -8047,7 +8063,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v70';
+const WORKER_VERSION = 'v75';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
