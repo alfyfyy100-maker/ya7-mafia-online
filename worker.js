@@ -152,7 +152,7 @@ const RoomCommon = {
     for (const p of (this.room && this.room.players) || []) {
       if (!p || !p.did || p.isBot || done.has(p.did)) continue;
       done.add(p.did);
-      try { await recordResult(this.env, p.did, win.has(p.id)); } catch {}
+      try { await recordResult(this.env, p.did, win.has(p.id), this.GAME || ''); } catch {}
     }
   },
 
@@ -210,11 +210,130 @@ function newRoomCode() {
    بلا هذا: __proto__ يبتلع الأصوات بصمت فتتجمّد المرحلة، ومعرّف ضخم
    يتجاوز سقف قيمة الـ Durable Object فتفشل الكتابة للغرفة كلها. */
 const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/* ═══════════════════ إشعارات الويب (Web Push) ═══════════════════
+   كل الدوال هنا اختُبرت يدويًا ضد أمثلة RFC 8291 الرسمية (القسم ٥
+   والملحق أ) قبل دمجها: نفس المفاتيح ونفس النص أعطت نفس الجسم
+   المشفَّر منشورًا حرفًا بحرف. أي تعديل مستقبلي على هذي الدوال
+   يُعاد اختباره بنفس الطريقة قبل النشر — خطأ صامت هنا يعني إشعارات
+   تختفي بلا أي رسالة خطأ تفسّر السبب. */
+const b64u = buf => btoa(String.fromCharCode(...new Uint8Array(buf)))
+  .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const ub64u = s => {
+  const b = atob(String(s).replace(/-/g, '+').replace(/_/g, '/')
+    .padEnd(Math.ceil(String(s).length / 4) * 4, '='));
+  const u = new Uint8Array(b.length);
+  for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
+  return u;
+};
+
+/* توقيع VAPID: JWT بخوارزمية ES256 موقَّع بمفتاح الخادم الخاص.
+   يثبت لخدمة الدفع (Google/Mozilla) هوية الخادم المرسل. */
+async function vapidJWT(env, audience) {
+  const header = b64u(new TextEncoder().encode(JSON.stringify({ typ: 'JWT', alg: 'ES256' })));
+  const claims = b64u(new TextEncoder().encode(JSON.stringify({
+    aud: audience, exp: Math.floor(Date.now() / 1000) + 12 * 3600,
+    sub: 'mailto:admin@playsmart2030.com',
+  })));
+  const unsigned = header + '.' + claims;
+  const key = await crypto.subtle.importKey('jwk', {
+    kty: 'EC', crv: 'P-256', ext: true, key_ops: ['sign'],
+    d: env.VAPID_PRIVATE_D,
+    x: b64u(ub64u(env.VAPID_PUBLIC_KEY).slice(1, 33)),
+    y: b64u(ub64u(env.VAPID_PUBLIC_KEY).slice(33, 65)),
+  }, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']);
+  /* SubtleCrypto ECDSA يخرج (r||s) خام مباشرة — نفس شكل JWS، بلا DER */
+  const sig = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, key,
+    new TextEncoder().encode(unsigned));
+  return unsigned + '.' + b64u(sig);
+}
+
+/* تشفير حمولة الإشعار حسب RFC 8291 — مطابَق بايتًا بايت لأمثلة المعيار */
+async function encryptPushPayload(plaintext, uaPublicB64, authSecretB64) {
+  const uaPublic = ub64u(uaPublicB64), authSecret = ub64u(authSecretB64);
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+
+  const asKeyPair = await crypto.subtle.generateKey(
+    { name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveBits']);
+  const asPublicRaw = new Uint8Array(
+    await crypto.subtle.exportKey('raw', asKeyPair.publicKey));
+
+  const uaKey = await crypto.subtle.importKey('raw', uaPublic,
+    { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const ecdhSecret = new Uint8Array(
+    await crypto.subtle.deriveBits({ name: 'ECDH', public: uaKey }, asKeyPair.privateKey, 256));
+
+  async function hkdf(salt, ikm, info, len) {
+    const key = await crypto.subtle.importKey('raw', ikm, 'HKDF', false, ['deriveBits']);
+    return new Uint8Array(await crypto.subtle.deriveBits(
+      { name: 'HKDF', hash: 'SHA-256', salt, info }, key, len * 8));
+  }
+  const enc = new TextEncoder();
+  const keyInfo = new Uint8Array([...enc.encode('WebPush: info\0'), ...uaPublic, ...asPublicRaw]);
+  const ikm = await hkdf(authSecret, ecdhSecret, keyInfo, 32);
+  const cek = await hkdf(salt, ikm, enc.encode('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = await hkdf(salt, ikm, enc.encode('Content-Encoding: nonce\0'), 12);
+
+  const padded = new Uint8Array([...enc.encode(plaintext), 0x02]);   // مُحدِّد الحشو
+  const aesKey = await crypto.subtle.importKey('raw', cek, 'AES-GCM', false, ['encrypt']);
+  const cipher = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonce, tagLength: 128 }, aesKey, padded));
+
+  const rs = new Uint8Array(4); new DataView(rs.buffer).setUint32(0, 4096);
+  const header = new Uint8Array([...salt, ...rs, asPublicRaw.length, ...asPublicRaw]);
+  return new Uint8Array([...header, ...cipher]);
+}
+
+/* الإرسال الفعلي. الفشل الدائم (404/410) يعني الاشتراك انتهى عند
+   المتصفح — يُحذف فورًا وإلا تراكمت اشتراكات ميتة تُبطئ كل إرسال لاحقًا.
+   الفشل المؤقت يُترك بصمت؛ إشعار مفقود أهون من تعطيل ميزة أخرى. */
+async function sendPush(env, sub, title, body, url) {
+  if (!env.VAPID_PRIVATE_D || !env.VAPID_PUBLIC_KEY) return;
+  try {
+    const endpoint = new URL(sub.endpoint);
+    const audience = endpoint.origin;
+    const jwt = await vapidJWT(env, audience);
+    const payload = await encryptPushPayload(
+      JSON.stringify({ title, body, url: url || '/' }), sub.p256dh, sub.auth);
+    const resp = await fetch(sub.endpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: 'vapid t=' + jwt + ', k=' + env.VAPID_PUBLIC_KEY,
+        'Content-Encoding': 'aes128gcm',
+        'Content-Type': 'application/octet-stream',
+        TTL: '86400',
+      },
+      body: payload,
+    });
+    if (resp.status === 404 || resp.status === 410) {
+      try {
+        await env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ?1')
+          .bind(sub.endpoint).run();
+      } catch {}
+    }
+  } catch {}
+}
+
+/* إشعار حساب واحد على كل أجهزته المشترِكة */
+async function notifyAccount(env, deviceId, title, body, url) {
+  if (!env.DB || !deviceId) return;
+  try {
+    const r = await env.DB.prepare(
+      'SELECT endpoint, p256dh, auth FROM push_subs WHERE device_id = ?1'
+    ).bind(deviceId).all();
+    const subs = (r && r.results) || [];
+    await Promise.all(subs.map(s => sendPush(env, s, title, body, url)));
+  } catch {}
+}
 function validPlayerId(v) {
   return typeof v === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(v) && !RESERVED_IDS.has(v);
 }
 
-function applyRoomCommon(cls) {
+/* gameKey: مفتاح اللعبة كما يظهر في الروابط واللوبي. الغرفة ما كانت
+   تعرف اسم لعبتها إطلاقًا، فالنتيجة تُسجَّل مجرّدة «فوز» بلا أي تفصيل
+   عن أي لعبة. المفتاح يُمرَّر هنا مرة واحدة لكل صنف. */
+function applyRoomCommon(cls, gameKey) {
+  if (gameKey) cls.prototype.GAME = gameKey;
   for (const [k, v] of Object.entries(RoomCommon)) {
     if (!(k in cls.prototype)) cls.prototype[k] = v;
   }
@@ -5319,15 +5438,15 @@ export class WalimaRoom {
 }
 
 // تفعيل الخنق والتنظيف واستعادة المقعد على كل الغرف
-applyRoomCommon(MafiaRoom);
-applyRoomCommon(GotRoom);
-applyRoomCommon(MawwihRoom);
+applyRoomCommon(MafiaRoom, 'mafia');
+applyRoomCommon(GotRoom, 'khawana');
+applyRoomCommon(MawwihRoom, 'mawwih');
 /* فَطِن انتهت — لم تعد لها صفحة ولا مسار ولا مدخل في اللوبي. الصنف
    يبقى مصدَّرًا لأن ربط FATIN_ROOM ما زال في wrangler.toml؛ حذف صنف
    Durable Object يحتاج ترحيلًا بـ`deleted_classes` وإلا فشل النشر.
    وهو الآن غير قابل للوصول من أي مسار، فلا يكلّف شيئًا. */
-applyRoomCommon(FatinRoom);
-applyRoomCommon(WalimaRoom);
+applyRoomCommon(FatinRoom, 'fatin');
+applyRoomCommon(WalimaRoom, 'walima');
 
 // حدّ إنشاء الغرف لكل IP — يمنع تفريخ غرف بلا نهاية
 const CREATE_LIMIT = 8;              // غرف في الساعة لكل IP
@@ -6570,7 +6689,7 @@ export class DaqashRoom {
     this.broadcastState();
   }
 }
-applyRoomCommon(DaqashRoom);
+applyRoomCommon(DaqashRoom, 'daqash');
 
 // ══════════════════════ لودو الخداع (LudoRoom) ══════════════════════
 // نموذج مختلف عن بقية الألعاب: HTTP قصير (استطلاع كل ١.٢ث) بدل WebSocket،
@@ -7611,7 +7730,7 @@ export class DakhilRoom {
     if (r.phase === 'guess') return this.finishRound();
   }
 }
-applyRoomCommon(DakhilRoom);
+applyRoomCommon(DakhilRoom, 'dakhil');
 
 /* ═══════════════════ دردشة الغرف ═══════════════════
    كائن مستقل لكل (لعبة + رمز غرفة). لا يلمس منطق أي لعبة ولا سوكِتها.
@@ -8099,7 +8218,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v80';
+const WORKER_VERSION = 'v82';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -8110,6 +8229,18 @@ const LOBBY_GAMES = {
   walima:  { name: 'وَليمة',        path: '/walima/' },
   ludo:    { name: 'لودو الخداع', path: '/ludo/' },
   btaqati: { name: 'خمّن من؟',      path: '/btaqati/' },
+};
+
+/* أسماء كل الألعاب للعرض، لا الأونلاين وحدها: سجل اللاعب يشمل ما لعبه
+   بلا نت أيضًا. وهي كذلك قائمة السماح لما يُرسله العميل في /account/played
+   فلا تُخزَّن مفاتيح ملفَّقة. */
+const GAME_NAMES = {
+  mafia: 'مافيا', khawana: 'لمن العرش؟', mawwih: 'مَوِّه', daqash: 'داقش',
+  dakhil: 'مين الدخيل', walima: 'وَليمة', ludo: 'لودو الخداع', btaqati: 'خمّن من؟',
+  fatin: 'فَطِن', liar: 'الكذّاب', kalimat: 'كلمات', fateel: 'فتيل',
+  throne: 'عرش الذئب', westeros: 'ويستروس', island: 'الجزيرة',
+  'blocked-road': 'الطريق المسدود', guest13: 'الضيف الثالث عشر', juraa: 'جرعة',
+  sukoon: 'سُكون', ramad: 'رماد', murawagha: 'مُراوَغة', darbah: 'ضربة', snake: 'أفعى نيون',
 };
 
 export class PublicLobby {
@@ -8706,7 +8837,7 @@ export class BtaqatiRoom {
 
 /* كانت الغرفة الوحيدة بلا هذا السطر: بلا خنق للرسائل وبلا منبّه حذف،
    فكل غرفة «مين بطاقتي؟» تُنشأ تبقى مخزّنة للأبد */
-applyRoomCommon(BtaqatiRoom);
+applyRoomCommon(BtaqatiRoom, 'btaqati');
 
 /* ============================================================================
    YA7 ACCOUNTS v3  —  يطابق عقد صفحة /account/index.html الموجودة
@@ -9304,6 +9435,22 @@ async function handleAccountInner(request, env, url, ctx) {
   }
 
   /* ---------- قراءة الحساب ---------- */
+  /* ── بلاغ جولة بلا نت ──
+     الخادم ما يقدر يحكم على لعب الجهاز الواحد، فهذا خبر من العميل لا
+     حكم: يُخزَّن بوضع 'local' ولا يمسّ مجاميع اللاعب المعروضة إطلاقًا،
+     ولا يُحسب فوزًا مهما ادّعى العميل. للإدارة فقط. */
+  if (path === 'played') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    const game = String(body.game || '');
+    if (!GAME_NAMES[game]) return fail(request, 'bad-game', 'لعبة غير معروفة');
+    if (!await rateLimit(env, 'plyd:' + me.device_id, 60, 60 * 60 * 1000))
+      return fail(request, 'rate');
+    const sc = Number(body.score);
+    await logGame(env, me.device_id, game, 'local', 0, isFinite(sc) ? sc : null);
+    return J(request, { ok: true });
+  }
+
   if (path === 'me') {
     const me = await authFromBody(env, body);
     if (!me) return fail(request, 'auth');
@@ -9317,7 +9464,20 @@ async function handleAccountInner(request, env, url, ctx) {
         .bind(me.device_id, now).run().catch(() => {});
       if (ctx && ctx.waitUntil) ctx.waitUntil(job);
     }
-    return J(request, { ok: true, player: playerOf(me), streak_up: v.isNewDay });
+    /* اللاعب يشوف الأونلاين فقط — لعب الجهاز الواحد ما يظهر له لأنه
+       غير محكوم من الخادم، فعرضه يوحي بأنه معتمد وهو ليس كذلك. */
+    let byGame = [];
+    try {
+      const r = await env.DB.prepare(
+        `SELECT game, plays, wins, last_at FROM game_stats
+          WHERE device_id = ?1 AND mode = 'online' AND plays > 0
+          ORDER BY wins DESC, plays DESC`).bind(me.device_id).all();
+      byGame = ((r && r.results) || []).map(x => ({
+        game: x.game, name: GAME_NAMES[x.game] || x.game,
+        plays: x.plays, wins: x.wins, last_at: x.last_at,
+      }));
+    } catch {}
+    return J(request, { ok: true, player: playerOf(me), by_game: byGame, streak_up: v.isNewDay });
   }
 
   /* ---------- تعديل الاسم/الأفاتار (واليوزر اختيارياً) ---------- */
@@ -9467,6 +9627,42 @@ async function handleAccountInner(request, env, url, ctx) {
     return J(request, Object.assign({ ok: true }, await friendsOf(env, me.device_id)));
   }
 
+  /* ── اشتراك/إلغاء إشعارات الجهاز ──
+     المفتاح الطبيعي هو endpoint لا device_id: نفس الحساب قد يفتح
+     الموقع من أكثر من جهاز، وكل جهاز endpoint مختلف تمامًا. */
+  if (path === 'push/subscribe') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    const s = body.sub || {};
+    const endpoint = String(s.endpoint || '').slice(0, 500);
+    const p256dh = String((s.keys || {}).p256dh || '');
+    const auth = String((s.keys || {}).auth || '');
+    if (!/^https:\/\//.test(endpoint) || !p256dh || !auth)
+      return fail(request, 'bad-sub');
+    if (!await rateLimit(env, 'push:' + me.device_id, 10, 60 * 60 * 1000))
+      return fail(request, 'rate');
+    try {
+      await env.DB.prepare(
+        `INSERT INTO push_subs (endpoint, device_id, p256dh, auth, created_at)
+              VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(endpoint) DO UPDATE SET device_id = ?2, p256dh = ?3, auth = ?4`
+      ).bind(endpoint, me.device_id, p256dh, auth, now).run();
+    } catch { return fail(request, 'db'); }
+    return J(request, { ok: true });
+  }
+  if (path === 'push/unsubscribe') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    const endpoint = String(body.endpoint || '').slice(0, 500);
+    if (endpoint) {
+      try {
+        await env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ?1 AND device_id = ?2')
+          .bind(endpoint, me.device_id).run();
+      } catch {}
+    }
+    return J(request, { ok: true });
+  }
+
   if (path === 'friends/add') {
     const me = await authFromBody(env, body);
     if (!me) return fail(request, 'auth');
@@ -9517,6 +9713,10 @@ async function handleAccountInner(request, env, url, ctx) {
     await env.DB.prepare(
       "INSERT OR IGNORE INTO friends (a,b,status,requested_by,created_at,updated_at) VALUES (?1,?2,'pending',?3,?4,?4)"
     ).bind(a, b, me.device_id, now).run();
+    if (ctx && ctx.waitUntil) {
+      ctx.waitUntil(notifyAccount(env, other.device_id,
+        'طلب صداقة جديد', '@' + me.username + ' يبي يضيفك', '/account/'));
+    }
     return J(request, { ok: true, state: 'sent' });
   }
 
@@ -10016,8 +10216,15 @@ async function adminPanelInner(request, env, url, body) {
         gameName: (LOBBY_GAMES[r.game] || {}).name || '',
       }));
 
+    /* الإدارة تشوف الوضعين مفصولين بوضوح — أي دمج بينهما يخلط ما حكمه
+       الخادم بما أخبر به العميل. */
+    const games = (await admAll(env,
+      `SELECT game, mode, plays, wins, best, last_at FROM game_stats
+        WHERE device_id = ?1 ORDER BY mode, wins DESC, plays DESC`, [did]))
+      .map(g => Object.assign({}, g, { name: GAME_NAMES[g.game] || g.game }));
+
     return Response.json({
-      ok: true, player: pl, friends: fr,
+      ok: true, player: pl, friends: fr, games,
       reports: { from: (from && from.n) || 0, about },
     });
   }
@@ -10180,7 +10387,7 @@ async function adminPanelInner(request, env, url, body) {
       const c = await admFirst(env, 'SELECT COUNT(*) AS n FROM "' + t.name.replace(/"/g, '') + '"');
       out.push({ name: t.name, rows: (c && c.n) || 0 });
     }
-    const want = ['players', 'friends', 'invites', 'reports', 'username_holds', 'rate_limits'];
+    const want = ['players', 'friends', 'invites', 'reports', 'username_holds', 'rate_limits', 'game_stats'];
     return Response.json({
       ok: true,
       version: WORKER_VERSION,
@@ -10238,8 +10445,33 @@ async function adminPanelInner(request, env, url, body) {
 /* --------- تسجيل نتيجة لعبة — يُنادى من داخل غرفة الـ DO فقط --------- */
 /*  لا تعرّضه كمسار HTTP أبداً: أي لاعب سيرفع فوزه بنفسه وتفقد الإحصائيات
     كل معناها. الفوز يقرره السيرفر من مجريات اللعبة، لا ادّعاء العميل.      */
-async function recordResult(env, deviceId, won) {
+/* ═══ سجل اللعبة الواحدة ═══
+   جدول players يحمل المجاميع فقط، فما كان أحد يعرف «أي لعبة لعب ووين
+   فاز». هذا الجدول صف واحد لكل (لاعب، لعبة، وضع) — يكبر بعدد الألعاب
+   لا بعدد الجولات، فيبقى خفيفًا مهما لعبوا.
+   الوضع يفصل الأونلاين عن الأوفلاين: الأونلاين وحده يحكمه الخادم
+   فيدخل إحصائيات اللاعب المعروضة، والأوفلاين للإدارة فقط. */
+async function logGame(env, deviceId, game, mode, won, score) {
+  if (!env.DB || !deviceId || !game) return;
+  const now = Date.now();
+  const s = (score == null || !isFinite(score)) ? null : Math.round(Number(score));
+  try {
+    await env.DB.prepare(
+      `INSERT INTO game_stats (device_id, game, mode, plays, wins, best, last_at)
+            VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)
+       ON CONFLICT(device_id, game, mode) DO UPDATE SET
+            plays   = plays + 1,
+            wins    = wins + ?4,
+            best    = CASE WHEN ?5 IS NULL THEN best
+                           WHEN best IS NULL OR ?5 > best THEN ?5 ELSE best END,
+            last_at = ?6`
+    ).bind(deviceId, String(game).slice(0, 24), mode, won ? 1 : 0, s, now).run();
+  } catch {}
+}
+
+async function recordResult(env, deviceId, won, game) {
   if (!env.DB || !deviceId) return;
+  if (game) await logGame(env, deviceId, game, 'online', won ? 1 : 0, null);
   try {
     await env.DB.prepare(
       `UPDATE players SET
