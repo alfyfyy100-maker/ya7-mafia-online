@@ -31,6 +31,9 @@ function corsFor(origin) {
        بيانات الجوال هذي نصف ثانية مهدورة قبل ما يبدأ الطلب أصلًا.
        كروم يسقّفها عمليًا عند ساعتين، والقيمة الأكبر لا تضرّ. */
     'Access-Control-Max-Age': '86400',
+    /* بلا هذا السطر ما يقدر العميل يقرأ Retry-After إطلاقًا: المتصفح
+       يخفي كل ترويسة رد غير القائمة الآمنة في الطلبات عبر الأصول. */
+    'Access-Control-Expose-Headers': 'Retry-After',
     'Vary': 'Origin',
   };
 }
@@ -419,6 +422,7 @@ function gameNS(env, key) {
     case 'dakhil':  return env.DAKHIL_ROOM;
     case 'btaqati': return env.BTAQATI_ROOM;
     case 'ludo':    return env.LUDO_ROOM;
+    case 'kirm':    return env.KIRM_ROOM;
     default:        return null;
   }
 }
@@ -935,9 +939,11 @@ export class MafiaRoom {
         alive: true, role: null, twinId: null, connected: true,
         seatToken: newSeatToken(),
       };
-      const back = reclaimSeat(this.room, this.sockets, name);
+      const back = reclaimSeat(this.room, this.sockets, name, url.searchParams.get('jid'));
       if (back) { player = back; }
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
+      const _jid = url.searchParams.get('jid');
+      if (_jid && /^[a-f0-9]{32}$/i.test(_jid)) player.jid = _jid;
     } else {
       player.connected = true;
     }
@@ -2602,9 +2608,11 @@ export class GotRoom {
         return new Response(null, { status: 101, webSocket: client });
       }
       player = { id: crypto.randomUUID(), name: cleanName(name), gender, alive: true, role: null, partnerId: null, connected: true, usedRevive: false, seatToken: newSeatToken() };
-      const back = reclaimSeat(this.room, this.sockets, name);
+      const back = reclaimSeat(this.room, this.sockets, name, url.searchParams.get('jid'));
       if (back) { player = back; }
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
+      const _jid = url.searchParams.get('jid');
+      if (_jid && /^[a-f0-9]{32}$/i.test(_jid)) player.jid = _jid;
     } else {
       player.connected = true;
     }
@@ -2664,21 +2672,11 @@ export class GotRoom {
     if (msg.type === 'addBot' && playerId === this.room.hostId && this.room.phase === 'lobby') await this.addBot(msg.gender, msg.dialect);
     if (msg.type === 'removeBot' && playerId === this.room.hostId && this.room.phase === 'lobby') await this.removeBot(msg.targetId);
     if (msg.type === 'setAdultMode' && playerId === this.room.hostId) { this.room.adultMode = !!msg.on; await this.persist(); this.broadcastLobby(); }
-    if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') {
-      const tid = msg.targetId;
-      if (typeof tid === 'string' && tid !== this.room.hostId) {
-        const target = this.room.players.find(x => x.id === tid);
-        if (target) {
-          this.sendPrivate(tid, { type: 'kicked' });
-          const sock = this.sockets.get(tid);
-          if (sock) { try { sock.close(); } catch {} this.sockets.delete(tid); }
-          this.room.players = this.room.players.filter(x => x.id !== tid);
-          await this.persist();
-          this.broadcastState();
-        }
-      }
-      return;
-    }
+    /* كانت هنا نسخة مكرّرة حرفيًا من الطرد تنتهي بـ this.broadcastState()
+       — ودالة بهذا الاسم غير معرّفة في GotRoom إطلاقًا. لم تنفجر إلا
+       لأنها ميتة: النداء فوقها يشيل اللاعب فعلًا فلا تلقاه الثانية.
+       أي تعديل مستقبلي على kickPlayer كان يقدر يوقظها ويرمي
+       TypeError في نص اللوبي. أُزيلت. */
     if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
     if (msg.type === 'nightAction' && this.room.phase === 'night') await this.handleNightAction(playerId, msg);
     if (msg.type === 'baelishAlign') await this.handleBaelishAlign(playerId, msg.side);
@@ -3768,9 +3766,11 @@ export class MawwihRoom {
         return new Response(null, { status: 101, webSocket: client });
       }
       player = { id: crypto.randomUUID(), name: cleanName(name), gender, connected: true, score: 0, av: null, team: null, seatToken: newSeatToken() };
-      const back = reclaimSeat(this.room, this.sockets, name);
+      const back = reclaimSeat(this.room, this.sockets, name, url.searchParams.get('jid'));
       if (back) { player = back; }
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
+      const _jid = url.searchParams.get('jid');
+      if (_jid && /^[a-f0-9]{32}$/i.test(_jid)) player.jid = _jid;
     } else {
       player.connected = true;
     }
@@ -3834,22 +3834,10 @@ export class MawwihRoom {
         await this.persist(); this.broadcastLobby();
       }
     }
-    if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') await this.kickPlayer(msg.targetId);
-    if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') {
-      const tid = msg.targetId;
-      if (typeof tid === 'string' && tid !== this.room.hostId) {
-        const target = this.room.players.find(x => x.id === tid);
-        if (target) {
-          this.sendPrivate(tid, { type: 'kicked' });
-          const sock = this.sockets.get(tid);
-          if (sock) { try { sock.close(); } catch {} this.sockets.delete(tid); }
-          this.room.players = this.room.players.filter(x => x.id !== tid);
-          await this.persist();
-          this.broadcastState();
-        }
-      }
-      return;
-    }
+    /* كان الطرد مكتوبًا مرتين: نداء kickPlayer ثم نسخة مكرّرة حرفيًا
+       تحته. الأولى تشيل اللاعب فعلًا، فالثانية ما تلقاه وترجع صامتة —
+       شيفرة ميتة تُربك أي قراءة لاحقة. أُبقيت الأولى وحدها. */
+    if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') { await this.kickPlayer(msg.targetId); return; }
     if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
     if (msg.type === 'pickCategory' && this.room.phase === 'picking' && playerId === this.chooser().id) await this.pickCategory(msg.catIndex);
     if (msg.type === 'submitAnswer' && this.room.phase === 'writing') await this.submitAnswer(playerId, msg.text);
@@ -3979,7 +3967,13 @@ export class MawwihRoom {
       this.advanceChooser();
     }
     const avail = this.room.cats.filter(ci => BANK[ci][1].some((_, qi) => !this.room.used.includes(ci + ':' + qi)));
-    const pool = avail.length >= 5 ? avail : (this.room.used = [], this.room.cats.slice());
+    /* كان الشرط `avail.length >= 5` — وهو يخلط بين شيئين مختلفين: «هل
+       عندي خمس فئات أعرضها للاختيار؟» و«هل بقي سؤال جديد؟». فلو اختار
+       المضيف أقل من خمس فئات (وهذا شائع) يُمسح `used` في **كل جولة**،
+       فتتكرر الأسئلة نفسها طول اللعبة. الآن لا نعيد التدوير إلا لو ما
+       بقي سؤال جديد إطلاقًا، وعدد الخيارات المعروضة ينزل تلقائيًا
+       لعدد الفئات المتاحة. */
+    const pool = avail.length ? avail : (this.room.used = [], this.room.cats.slice());
     const choices = shuffleArr(pool.slice()).slice(0, Math.min(5, pool.length));
     this.room.choices = choices;
     this.room.phase = 'picking';
@@ -3993,19 +3987,46 @@ export class MawwihRoom {
   async pickCategory(catIndex) {
     // حارس الحسم المزدوج — نفس نمط بقية دوال الانتقال
     if (this.room.phase !== 'picking') return;
-    this.room.phase = 'writing';
-    // الكل يشوف الفئة المختارة قبل الانتقال للكتابة
-    this.broadcastPublic({ type: 'catPicked', index: catIndex, name: BANK[catIndex][0], chooserName: this.chooser().name });
+
+    /* كان catIndex يُستعمل بلا أي تحقّق، والمرحلة تُقلب إلى 'writing'
+       **قبل** اختيار السؤال. فأي فهرس خارج البنك يرمي عند BANK[i][0]
+       والغرفة تبقى في 'writing' وسؤالها null — وبعدها كل submitAnswer
+       يرمي على this.room.q.ans بصمت، فتتجمّد الجولة بلا أي رسالة.
+       الآن: نتحقّق أولًا، ونجهّز السؤال، ثم نقلب المرحلة. */
+    const ci = Number(catIndex);
+    if (!Number.isInteger(ci) || ci < 0 || ci >= BANK.length ||
+        !Array.isArray(this.room.choices) || !this.room.choices.includes(ci)) {
+      this.sendPrivate(this.chooser().id, { type: 'error', message: 'اختيار غير صالح — اختر فئة من المعروضة' });
+      return;
+    }
+
     const pool = [];
-    BANK[catIndex][1].forEach((q, qi) => { const key = catIndex + ':' + qi; if (!this.room.used.includes(key)) pool.push({ key, cat: BANK[catIndex][0], text: q[0], ans: q[1] }); });
+    BANK[ci][1].forEach((q, qi) => { const key = ci + ':' + qi; if (!this.room.used.includes(key)) pool.push({ key, cat: BANK[ci][0], text: q[0], ans: q[1] }); });
+    if (!pool.length) {
+      // الفئة استُهلكت بالكامل: نعيد فتح أسئلتها بدل ما تتجمّد الجولة
+      this.room.used = this.room.used.filter(k => k.indexOf(ci + ':') !== 0);
+      BANK[ci][1].forEach((q, qi) => pool.push({ key: ci + ':' + qi, cat: BANK[ci][0], text: q[0], ans: q[1] }));
+    }
+    if (!pool.length) {
+      this.sendPrivate(this.chooser().id, { type: 'error', message: 'هذي الفئة ما فيها أسئلة — اختر غيرها' });
+      return;
+    }
+
     const q = pool[Math.floor(Math.random() * pool.length)];
     this.room.used.push(q.key);
     this.room.q = q;
+    this.room.phase = 'writing';
+    // الكل يشوف الفئة المختارة قبل الانتقال للكتابة
+    this.broadcastPublic({ type: 'catPicked', index: ci, name: BANK[ci][0], chooserName: this.chooser().name });
     await this.persist();
     this.broadcastPublic({ type: 'phaseChanged', phase: 'writing', cat: q.cat, text: q.text, chooserName: this.chooser().name });
   }
 
   async submitAnswer(playerId, text) {
+    /* بلا هذا الحارس كان أي خلل في اختيار الفئة يترك q فارغًا، فيرمي
+       norm(this.room.q.ans) عند كل إجابة — رفض غير ملتقط بصمت،
+       واللاعبون يكتبون ولا يصير شيء. */
+    if (!this.room.q) { this.sendPrivate(playerId, { type: 'answerRejected', message: 'الجولة ما جهزت بعد — لحظة' }); return; }
     // كان بلا أي حدّ: نص ضخم يُخزَّن ويُبَث للغرفة، وقد يتجاوز سقف التخزين
     const t = cleanText(text, 60);
     if (!t) { this.sendPrivate(playerId, { type: 'answerRejected', message: 'اكتب إجابة أولًا' }); return; }
@@ -4030,6 +4051,7 @@ export class MawwihRoom {
 
   async startVoting() {
     if (this.room.phase !== 'writing') return;
+    if (!this.room.q) { this.room.phase = 'picking'; await this.persist(); await this.nextRound(); return; }
     const nT = norm(this.room.q.ans);
     const opts = [{ k: 'T', text: this.room.q.ans, by: [] }];
     const seen = { [nT]: 'T' };
@@ -4118,7 +4140,7 @@ export class MawwihRoom {
     }));
     const isLast = this.room.round >= this.room.rounds;
     this.broadcastPublic({
-      type: 'revealResult', cat: this.room.q.cat, text: this.room.q.text, cards,
+      type: 'revealResult', cat: (this.room.q && this.room.q.cat) || '', text: (this.room.q && this.room.q.text) || '', cards,
       gains: this.room.players.map(p => ({ id: p.id, name: p.name, gain: p.gain, score: p.score })),
       teams: this.teamsOn() ? this.teamTotals() : null,
       isLast,
@@ -4447,9 +4469,11 @@ export class FatinRoom {
         color: FATIN_COLORS[this.room.players.length % FATIN_COLORS.length],
         connected: true, steps: 0, pts: 0, ammo: 2, special: true, seatToken: newSeatToken(),
       };
-      const back = reclaimSeat(this.room, this.sockets, name);
+      const back = reclaimSeat(this.room, this.sockets, name, url.searchParams.get('jid'));
       if (back) { player = back; }
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
+      const _jid = url.searchParams.get('jid');
+      if (_jid && /^[a-f0-9]{32}$/i.test(_jid)) player.jid = _jid;
     } else {
       player.connected = true;
     }
@@ -5111,9 +5135,11 @@ export class WalimaRoom {
         return new Response(null, { status: 101, webSocket: client });
       }
       player = { id: crypto.randomUUID(), name: cleanName(name), connected: true, seatToken: newSeatToken(), role: null, sus: 0 };
-      const back = reclaimSeat(this.room, this.sockets, name);
+      const back = reclaimSeat(this.room, this.sockets, name, url.searchParams.get('jid'));
       if (back) { player = back; }
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
+      const _jid = url.searchParams.get('jid');
+      if (_jid && /^[a-f0-9]{32}$/i.test(_jid)) player.jid = _jid;
     } else {
       player.connected = true;
     }
@@ -5449,7 +5475,10 @@ applyRoomCommon(FatinRoom, 'fatin');
 applyRoomCommon(WalimaRoom, 'walima');
 
 // حدّ إنشاء الغرف لكل IP — يمنع تفريخ غرف بلا نهاية
-const CREATE_LIMIT = 8;              // غرف في الساعة لكل IP
+/* ٨ كان ضيّقًا فعلًا: بيت واحد على واي فاي واحد = عنوان واحد، ومضيف
+   يفتح غرفًا لأربع ألعاب في مجلس واحد يوصل الحدّ في نصف ساعة. وعلى
+   بيانات الجوال قد تشترك شريحة كاملة في العنوان عبر CGNAT. */
+const CREATE_LIMIT = 25;             // غرف في الساعة لكل بادئة IP
 const CREATE_WINDOW_MS = 60 * 60 * 1000;
 const createHits = new Map();        // ip -> {n, t}
 
@@ -5530,18 +5559,48 @@ function allowLobbyOp(ip) {
   return r.n <= LOBBY_OP_LIMIT;
 }
 
-function allowCreate(ip) {
-  // allowSocket يحدّ على بادئة /64، وهذا كان يحدّ على العنوان الكامل —
-  // فصاحب IPv6 يبدّل العنوان داخل شبكته ويفتح غرفًا بلا سقف
+/* كان العدّاد يزيد **قبل** المقارنة، فكل محاولة مرفوضة تُحسب هي كمان —
+   واللاعب اللي يعيد المحاولة يعمّق الحفرة على نفسه بلا ما يدري. الآن
+   فصلنا الفحص عن العدّ: allowCreate يفحص فقط، وnoteCreate تُنادى بعد
+   نجاح الإنشاء فعلًا. */
+function createState(ip) {
   const key = ipKey(ip);
-  if (!key) return true;
+  if (!key) return null;
   const now = Date.now();
   const r = createHits.get(key) || { n: 0, t: now };
   if (now - r.t > CREATE_WINDOW_MS) { r.n = 0; r.t = now; }
-  r.n++;
-  createHits.set(key, r);
+  return { key, now, r };
+}
+
+function allowCreate(ip) {
+  const s = createState(ip);
+  if (!s) return true;
+  return s.r.n < CREATE_LIMIT;
+}
+
+// الثواني المتبقية حتى تُفتح النافذة — تُرسل في Retry-After
+function createRetryAfter(ip) {
+  const s = createState(ip);
+  if (!s) return 60;
+  return Math.max(1, Math.ceil((s.r.t + CREATE_WINDOW_MS - s.now) / 1000));
+}
+
+function noteCreate(ip) {
+  const s = createState(ip);
+  if (!s) return;
+  s.r.n++;
+  createHits.set(s.key, s.r);
   if (createHits.size > 5000) createHits.clear();   // سقف ذاكرة
-  return r.n <= CREATE_LIMIT;
+}
+
+// رد موحّد لتجاوز الحدّ: يحمل المهلة عشان العميل يعرض «باقي كذا دقيقة»
+function tooManyRooms(ip, origin) {
+  const secs = createRetryAfter(ip);
+  const resp = new Response('too-many-rooms', {
+    status: 429,
+    headers: { 'Retry-After': String(secs) },
+  });
+  return withCors(resp, origin);
 }
 
 // ══════════════════════ داقش أونلاين ══════════════════════
@@ -5764,9 +5823,11 @@ export class DaqashRoom {
       }
       player = this.newSeat(crypto.randomUUID(), name, newSeatToken());
       player.connected = true;
-      const back = reclaimSeat(this.room, this.sockets, name);
+      const back = reclaimSeat(this.room, this.sockets, name, url.searchParams.get('jid'));
       if (back) { player = back; }
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
+      const _jid = url.searchParams.get('jid');
+      if (_jid && /^[a-f0-9]{32}$/i.test(_jid)) player.jid = _jid;
     }
 
     this.noteAccount(url, player);
@@ -7148,9 +7209,11 @@ export class DakhilRoom {
       }
       player = this.newSeat(crypto.randomUUID(), name, newSeatToken());
       player.connected = true;
-      const back = reclaimSeat(this.room, this.sockets, name);
+      const back = reclaimSeat(this.room, this.sockets, name, url.searchParams.get('jid'));
       if (back) { player = back; }
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
+      const _jid = url.searchParams.get('jid');
+      if (_jid && /^[a-f0-9]{32}$/i.test(_jid)) player.jid = _jid;
     }
 
     this.noteAccount(url, player);
@@ -7754,6 +7817,790 @@ const CHAT_SOCKETS = 40;   // سقف اتصالات الغرفة الواحدة
    BtaqatiRoom الذي أُصلح في v50. الغرفة تعيش بعمر غرفة اللعب نفسه. */
 const CHAT_TTL_MS = ROOM_TTL_MS;
 
+
+/* ══════════════════════ الكِيرَم أونلاين (KirmRoom) ══════════════════════
+   الفيزياء تُحسب هنا وحدها ثم تُبَث نتيجتها. السبب: `Math.exp` (احتكاك
+   اللوح) غير مضمونة أن تعطي نفس البتات على كل متصفح ومعالج — فلو حاكى
+   كل جهاز الضربة عنده لتباعدت اللوحات بعد ارتدادين وصار كل لاعب يرى
+   لوحًا مختلفًا. ومع ذلك يمنع الغش: الخادم لا يصدّق من العميل إلا
+   ثلاثة أرقام (موضع القرص، والاتجاه، والقوة) ويتحقق من مداها.
+   العميل يشغّل نفس الضربة عنده للعرض فقط، ثم يلتصق بحالة الخادم.     */
+
+const KIRM_W = 640, KIRM_FRAME = 44;
+const KIRM_IN0 = KIRM_FRAME, KIRM_IN1 = KIRM_W - KIRM_FRAME;
+const KIRM_CX = KIRM_W / 2, KIRM_CY = KIRM_W / 2;
+const KIRM_PR = 12.4, KIRM_SR = 15.6;
+const KIRM_POCK_R = 25, KIRM_POCK_OFF = 18;
+const KIRM_BASE_IN = 88, KIRM_BASE_PAD = 108;
+const KIRM_POCKETS = [
+  { x: KIRM_IN0 + KIRM_POCK_OFF, y: KIRM_IN0 + KIRM_POCK_OFF },
+  { x: KIRM_IN1 - KIRM_POCK_OFF, y: KIRM_IN0 + KIRM_POCK_OFF },
+  { x: KIRM_IN1 - KIRM_POCK_OFF, y: KIRM_IN1 - KIRM_POCK_OFF },
+  { x: KIRM_IN0 + KIRM_POCK_OFF, y: KIRM_IN1 - KIRM_POCK_OFF },
+];
+const KIRM_CFG = {
+  DT: 1 / 240, FRICTION: 1.75, REST_PIECE: 0.94, REST_WALL: 0.70,
+  MAXV: 1650, STOP_V: 6, SHOT_TIMEOUT: 9,
+};
+const KIRM_TRAPS_PER_PLAYER = 2;
+const KIRM_MAX_PLAYERS = 4;
+const KIRM_TURN_MS = 60000;          // مهلة الدور: تمنع تجميد الغرفة
+
+function kirmClamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+function kirmD2(ax, ay, bx, by) { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; }
+
+function kirmBaseline(side) {
+  const I0 = KIRM_IN0, I1 = KIRM_IN1, B = KIRM_BASE_IN, P = KIRM_BASE_PAD;
+  if (side === 0) return { x1: I0 + P, y1: I1 - B, x2: I1 - P, y2: I1 - B, ax: 'x' };
+  if (side === 2) return { x1: I0 + P, y1: I0 + B, x2: I1 - P, y2: I0 + B, ax: 'x' };
+  if (side === 1) return { x1: I1 - B, y1: I0 + P, x2: I1 - B, y2: I1 - P, ax: 'y' };
+  return { x1: I0 + B, y1: I0 + P, x2: I0 + B, y2: I1 - P, ax: 'y' };
+}
+function kirmInward(side) {
+  return side === 0 ? { x: 0, y: -1 } : side === 2 ? { x: 0, y: 1 }
+       : side === 1 ? { x: -1, y: 0 } : { x: 1, y: 0 };
+}
+
+function kirmMakeBodies() {
+  const b = [];
+  b.push({ x: KIRM_CX, y: KIRM_CY, vx: 0, vy: 0, r: KIRM_PR, m: 1, type: 'q', alive: true, id: 0 });
+  let id = 1;
+  for (let i = 0; i < 6; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 3;
+    b.push({ x: KIRM_CX + Math.cos(a) * 2 * KIRM_PR, y: KIRM_CY + Math.sin(a) * 2 * KIRM_PR,
+             vx: 0, vy: 0, r: KIRM_PR, m: 1, type: (i % 2 ? 'w' : 'b'), alive: true, id: id++ });
+  }
+  for (let i = 0; i < 12; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 6;
+    b.push({ x: KIRM_CX + Math.cos(a) * 4 * KIRM_PR, y: KIRM_CY + Math.sin(a) * 4 * KIRM_PR,
+             vx: 0, vy: 0, r: KIRM_PR, m: 1, type: (i % 2 ? 'b' : 'w'), alive: true, id: id++ });
+  }
+  return b;
+}
+
+/* خطوة الفيزياء — نسخة طبق الأصل من العميل، بلا أي اعتماد على المتصفح */
+function kirmStep(bodies, zones, dt, potted) {
+  let i, j, b;
+  for (i = 0; i < bodies.length; i++) {
+    b = bodies[i];
+    if (!b.alive) continue;
+    let fr = KIRM_CFG.FRICTION;
+    for (j = 0; j < zones.length; j++) {
+      const z = zones[j];
+      if (z.t === 'glue' && kirmD2(b.x, b.y, z.x, z.y) < z.r * z.r) fr *= 3.6;
+    }
+    const damp = Math.exp(-fr * dt);
+    b.vx *= damp; b.vy *= damp;
+    if (b.vx * b.vx + b.vy * b.vy < KIRM_CFG.STOP_V * KIRM_CFG.STOP_V) { b.vx = 0; b.vy = 0; }
+    b.x += b.vx * dt; b.y += b.vy * dt;
+  }
+  for (i = 0; i < bodies.length; i++) {
+    const A = bodies[i]; if (!A.alive) continue;
+    for (j = i + 1; j < bodies.length; j++) {
+      const B = bodies[j]; if (!B.alive) continue;
+      const dx = B.x - A.x, dy = B.y - A.y, rr = A.r + B.r;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rr * rr || d2 < 1e-9) continue;
+      const d = Math.sqrt(d2), nx = dx / d, ny = dy / d;
+      const overlap = rr - d, tot = A.m + B.m;
+      A.x -= nx * overlap * (B.m / tot); A.y -= ny * overlap * (B.m / tot);
+      B.x += nx * overlap * (A.m / tot); B.y += ny * overlap * (A.m / tot);
+      const vn = (B.vx - A.vx) * nx + (B.vy - A.vy) * ny;
+      if (vn > 0) continue;
+      const imp = -(1 + KIRM_CFG.REST_PIECE) * vn / (1 / A.m + 1 / B.m);
+      A.vx -= imp * nx / A.m; A.vy -= imp * ny / A.m;
+      B.vx += imp * nx / B.m; B.vy += imp * ny / B.m;
+      if (A.type === 's' || B.type === 's' || A.wasHit || B.wasHit) { A.wasHit = B.wasHit = true; }
+    }
+  }
+  for (j = 0; j < zones.length; j++) {
+    const zb = zones[j]; if (zb.t !== 'bar') continue;
+    for (i = 0; i < bodies.length; i++) {
+      const C = bodies[i]; if (!C.alive) continue;
+      const sx = zb.x2 - zb.x1, sy = zb.y2 - zb.y1;
+      let t = ((C.x - zb.x1) * sx + (C.y - zb.y1) * sy) / (sx * sx + sy * sy);
+      t = kirmClamp(t, 0, 1);
+      const px = zb.x1 + sx * t, py = zb.y1 + sy * t;
+      const ddx = C.x - px, ddy = C.y - py, dd2 = ddx * ddx + ddy * ddy;
+      const minD = C.r + zb.half;
+      if (dd2 >= minD * minD || dd2 < 1e-9) continue;
+      const dd = Math.sqrt(dd2), nx = ddx / dd, ny = ddy / dd;
+      C.x += nx * (minD - dd); C.y += ny * (minD - dd);
+      const vn = C.vx * nx + C.vy * ny;
+      if (vn < 0) { C.vx -= (1 + KIRM_CFG.REST_WALL) * vn * nx; C.vy -= (1 + KIRM_CFG.REST_WALL) * vn * ny; }
+    }
+  }
+  for (i = 0; i < bodies.length; i++) {
+    const P = bodies[i]; if (!P.alive) continue;
+    let inPocket = false;
+    for (j = 0; j < 4; j++) {
+      const lim = KIRM_POCK_R - P.r * 0.30;
+      if (kirmD2(P.x, P.y, KIRM_POCKETS[j].x, KIRM_POCKETS[j].y) < lim * lim) { inPocket = true; break; }
+    }
+    if (inPocket) { P.alive = false; P.vx = P.vy = 0; if (potted) potted.push(P); continue; }
+    let near = false;
+    for (j = 0; j < 4; j++) {
+      const lim = KIRM_POCK_R + P.r;
+      if (kirmD2(P.x, P.y, KIRM_POCKETS[j].x, KIRM_POCKETS[j].y) < lim * lim) near = true;
+    }
+    if (near) continue;
+    const e = KIRM_CFG.REST_WALL;
+    if (P.x - P.r < KIRM_IN0) { P.x = KIRM_IN0 + P.r; if (P.vx < 0) P.vx = -P.vx * e; }
+    if (P.x + P.r > KIRM_IN1) { P.x = KIRM_IN1 - P.r; if (P.vx > 0) P.vx = -P.vx * e; }
+    if (P.y - P.r < KIRM_IN0) { P.y = KIRM_IN0 + P.r; if (P.vy < 0) P.vy = -P.vy * e; }
+    if (P.y + P.r > KIRM_IN1) { P.y = KIRM_IN1 - P.r; if (P.vy > 0) P.vy = -P.vy * e; }
+  }
+}
+function kirmMoving(list) {
+  for (const b of list) if (b.alive && (b.vx !== 0 || b.vy !== 0)) return true;
+  return false;
+}
+function kirmFreeSpot(bodies) {
+  const rings = [0, 2 * KIRM_PR, 4 * KIRM_PR, 6 * KIRM_PR, 8 * KIRM_PR];
+  for (let k = 0; k < rings.length; k++) {
+    const steps = k === 0 ? 1 : Math.max(6, k * 6);
+    for (let s = 0; s < steps; s++) {
+      const a = s / steps * Math.PI * 2 + k * 0.3;
+      const x = KIRM_CX + Math.cos(a) * rings[k], y = KIRM_CY + Math.sin(a) * rings[k];
+      if (x < KIRM_IN0 + KIRM_PR + 4 || x > KIRM_IN1 - KIRM_PR - 4) continue;
+      if (y < KIRM_IN0 + KIRM_PR + 4 || y > KIRM_IN1 - KIRM_PR - 4) continue;
+      let ok = true;
+      for (const b of bodies) {
+        if (!b.alive) continue;
+        if (kirmD2(x, y, b.x, b.y) < (KIRM_PR * 2 + 1) * (KIRM_PR * 2 + 1)) { ok = false; break; }
+      }
+      if (ok) return { x, y };
+    }
+  }
+  return { x: KIRM_CX, y: KIRM_CY };
+}
+
+export class KirmRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.sockets = new Map();
+    this.timer = null;
+    this.state.blockConcurrencyWhile(async () => {
+      this.room = (await this.state.storage.get('room')) || {
+        code: null, hostId: null, phase: 'lobby',
+        players: [], bodies: [], striker: null, traps: [],
+        turn: 0, round: 0, rounds: 3, queenBy: -1, dry: 0,
+        place: null, promise: 0, msg: '', turnEndsAt: 0,
+        opt: { promise: true, traps: true, rounds: 3 },
+        lastSeen: Date.now(),
+      };
+    });
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith('/ws')) return this.handleWebSocket(request);
+    if (url.pathname.endsWith('/create')) return this.handleCreate(request);
+    return new Response('غير موجود', { status: 404 });
+  }
+
+  async persist() {
+    await this.touchRoom();
+    await this.state.storage.put('room', this.room);
+  }
+
+  findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
+  connectedPlayers() { return this.room.players.filter(p => p.connected); }
+  cur() { return this.room.players[this.room.turn] || null; }
+  colorMode() { return this.room.players.length === 2; }
+
+  /* ── مهلة الدور ──
+     بلا مهلة، لاعب ينسحب بلا قطع اتصال يجمّد الغرفة للأبد. والمؤقّت
+     يعيش في ذاكرة الكائن وحده، فأي نشرة تمسحه — لذلك `resumePhase`
+     يعيد تسليحه من `turnEndsAt` المحفوظ. */
+  setTurnTimer(ms) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(async () => {
+      this.timer = null;
+      try { await this.turnTimeout(); } catch {}
+    }, Math.max(0, ms));
+  }
+  resumePhase() {
+    if (this.timer) return;
+    const r = this.room;
+    if ((r.phase !== 'aim' && r.phase !== 'placing') || !r.turnEndsAt) return;
+    this.setTurnTimer(r.turnEndsAt - Date.now());
+  }
+  async turnTimeout() {
+    const r = this.room;
+    if (r.phase === 'placing') { await this.skipPlacer('انتهى وقت الوضع'); return; }
+    if (r.phase !== 'aim') return;
+    r.msg = (this.cur() ? this.cur().name : '') + ' تأخّر — انتقل الدور';
+    this.nextTurn();
+    await this.persist();
+    this.broadcastState();
+  }
+  armTurn() {
+    this.room.turnEndsAt = Date.now() + KIRM_TURN_MS;
+    this.setTurnTimer(KIRM_TURN_MS);
+  }
+
+  async handleCreate(request) {
+    let body;
+    try { body = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
+    const { name, roomCode } = body || {};
+    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
+      return new Response('room-exists', { status: 409 });
+    }
+    const o = (body && body.opt) || {};
+    this.room.code = roomCode;
+    this.room.phase = 'lobby';
+    this.room.players = [];
+    this.room.opt = {
+      promise: o.promise !== false,
+      traps: o.traps !== false,
+      rounds: [1, 3, 5].includes(+o.rounds) ? +o.rounds : 3,
+    };
+    this.room.rounds = this.room.opt.rounds;
+    this.room.round = 0;
+    const hostId = crypto.randomUUID();
+    const hostToken = newSeatToken();
+    this.room.hostId = hostId;
+    this.room.players = [this.newSeat(hostId, name, hostToken)];
+    await this.persist();
+    return Response.json({ roomCode: this.room.code, playerId: hostId, seatToken: hostToken });
+  }
+
+  newSeat(id, name, token) {
+    return {
+      id, name: cleanName(name), seatToken: token || newSeatToken(),
+      connected: false, side: 0, color: null,
+      pts: 0, roundPts: 0, due: 0,
+    };
+  }
+
+  async handleWebSocket(request) {
+    const url = new URL(request.url);
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('يتطلب WebSocket', { status: 426 });
+    }
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    const token = url.searchParams.get('token');
+    const name = url.searchParams.get('name');
+    let player = this.seatByToken(token);
+
+    if (player) {
+      const stale = this.sockets.get(player.id);
+      if (stale && stale !== server) { try { stale.close(); } catch {} }
+      this.sockets.delete(player.id);
+      player.connected = true;
+    } else {
+      if (!this.room.code) {
+        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
+        server.send(JSON.stringify({ type: 'error', message: 'المباراة شغّالة — انتظر لين تخلص' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.players.length >= KIRM_MAX_PLAYERS) {
+        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      player = this.newSeat(crypto.randomUUID(), name, newSeatToken());
+      player.connected = true;
+      const back = reclaimSeat(this.room, this.sockets, name, url.searchParams.get('jid'));
+      if (back) { player = back; }
+      else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
+      const jid = url.searchParams.get('jid');
+      if (jid && /^[a-f0-9]{32}$/i.test(jid)) player.jid = jid;
+    }
+
+    this.noteAccount(url, player);
+    this.sockets.set(player.id, server);
+    this.resumePhase();
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id));
+
+    await this.persist();
+    this.sendPrivate(player.id, {
+      type: 'welcome', playerId: player.id,
+      roomCode: this.room.code, seatToken: player.seatToken,
+    });
+    this.broadcastState();
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async onClose(playerId) {
+    const p = this.findPlayer(playerId);
+    if (p) p.connected = false;
+    this.sockets.delete(playerId);
+    const wasHost = this.room.hostId === playerId;
+    const host = this.findPlayer(this.room.hostId);
+    if (!host || !host.connected) {
+      const next = this.room.players.find(q => q.connected);
+      if (next) this.room.hostId = next.id;
+    }
+    if (wasHost && this.room.hostId !== playerId) {
+      this.broadcast({ type: 'hostChanged', hostId: this.room.hostId });
+    }
+    /* المنقطع في دوره لا يوقف الغرفة: ينتقل الدور فورًا */
+    if (this.room.phase === 'aim' && this.cur() && this.cur().id === playerId) {
+      this.room.msg = (p ? p.name : '') + ' انقطع — انتقل الدور';
+      this.nextTurn();
+    } else if (this.room.phase === 'placing' && this.room.place
+               && this.room.players[this.room.place.i]
+               && this.room.players[this.room.place.i].id === playerId) {
+      await this.skipPlacer((p ? p.name : '') + ' انقطع');
+    }
+    await this.persist();
+    this.broadcastState();
+  }
+
+  send(playerId, obj) {
+    const ws = this.sockets.get(playerId);
+    if (!ws) return;
+    try { ws.send(JSON.stringify(obj)); } catch {}
+  }
+  sendPrivate(playerId, obj) { this.send(playerId, obj); }
+  broadcast(obj) { for (const id of this.sockets.keys()) this.send(id, obj); }
+  broadcastState() { const st = this.stateAll(); for (const id of this.sockets.keys()) this.send(id, st); }
+
+  /* الحالة كاملة — ما فيه أسرار في الكيرم: اللوح مكشوف للجميع أصلًا */
+  stateAll() {
+    const r = this.room;
+    return {
+      type: 'state',
+      phase: r.phase,
+      roomCode: r.code,
+      hostId: r.hostId,
+      colorMode: this.colorMode(),
+      round: r.round, rounds: r.rounds,
+      turn: r.turn,
+      turnEndsAt: r.turnEndsAt,
+      queenBy: r.queenBy,
+      msg: r.msg || '',
+      opt: r.opt,
+      place: r.place ? { i: r.place.i, left: r.place.left } : null,
+      players: r.players.map(p => ({
+        id: p.id, name: p.name, connected: p.connected,
+        isHost: p.id === r.hostId, side: p.side, color: p.color,
+        pts: p.pts, roundPts: p.roundPts, due: p.due,
+      })),
+      bodies: r.bodies.map(b => ({ i: b.id, t: b.type, a: b.alive ? 1 : 0,
+                                   x: Math.round(b.x * 100) / 100, y: Math.round(b.y * 100) / 100 })),
+      striker: r.striker ? { x: Math.round(r.striker.x * 100) / 100,
+                             y: Math.round(r.striker.y * 100) / 100,
+                             a: r.striker.alive ? 1 : 0 } : null,
+      traps: r.traps.map(z => ({ t: z.t, x: z.x, y: z.y, r: z.r || 0, by: z.by, target: z.target,
+                                 x1: z.x1, y1: z.y1, x2: z.x2, y2: z.y2, half: z.half })),
+    };
+  }
+}
+
+/* ═══════════ منطق اللعب — يُدمج في KirmRoom.prototype ═══════════ */
+const KirmLogic = {
+
+  // ── بدء المباراة ──
+  async onStart(playerId) {
+    const r = this.room;
+    if (playerId !== r.hostId) return;
+    if (r.phase !== 'lobby' && r.phase !== 'over') return;
+    const live = this.connectedPlayers();
+    if (live.length < 2) { this.sendPrivate(playerId, { type: 'toast', message: 'لازم لاعبَين على الأقل' }); return; }
+    r.players = live;
+    const n = r.players.length;
+    const sides = n === 2 ? [0, 2] : n === 3 ? [0, 1, 2] : [0, 1, 2, 3];
+    r.players.forEach((p, i) => {
+      p.side = sides[i];
+      p.color = (n === 2) ? (i === 0 ? 'w' : 'b') : null;
+      p.pts = 0; p.roundPts = 0; p.due = 0;
+    });
+    r.round = 0;
+    this.startRound();
+    await this.persist();
+    this.broadcastState();
+  },
+
+  startRound() {
+    const r = this.room;
+    r.round++;
+    r.bodies = kirmMakeBodies();
+    r.traps = [];
+    r.queenBy = -1;
+    r.dry = 0;
+    r.promise = 0;
+    r.msg = '';
+    r.turn = (r.round - 1) % r.players.length;
+    r.players.forEach(p => { p.roundPts = 0; p.due = 0; });
+    if (r.opt.traps) {
+      r.place = { i: 0, left: KIRM_TRAPS_PER_PLAYER };
+      r.phase = 'placing';
+    } else {
+      r.place = null;
+      r.phase = 'aim';
+    }
+    this.placeStriker();
+    this.armTurn();
+  },
+
+  placeStriker() {
+    const r = this.room;
+    const p = this.cur() || r.players[0];
+    const bl = kirmBaseline(p.side);
+    r.striker = { x: (bl.x1 + bl.x2) / 2, y: (bl.y1 + bl.y2) / 2, vx: 0, vy: 0,
+                  r: KIRM_SR, m: 1.9, type: 's', alive: true, id: 99 };
+    this.strikerClear();
+  },
+  strikerClear() {
+    const r = this.room, s = r.striker;
+    const bl = kirmBaseline((this.cur() || r.players[0]).side);
+    const t0 = bl.ax === 'x' ? (s.x - bl.x1) / (bl.x2 - bl.x1) : (s.y - bl.y1) / (bl.y2 - bl.y1);
+    for (let off = 0; off <= 1.02; off += 0.02) {
+      for (let sg = 0; sg < 2; sg++) {
+        const t = kirmClamp(t0 + (sg ? -off : off), 0, 1);
+        const x = bl.x1 + (bl.x2 - bl.x1) * t, y = bl.y1 + (bl.y2 - bl.y1) * t;
+        let ok = true;
+        for (const b of r.bodies) {
+          if (!b.alive) continue;
+          const lim = KIRM_SR + b.r + 0.5;
+          if (kirmD2(x, y, b.x, b.y) < lim * lim) { ok = false; break; }
+        }
+        if (ok) { s.x = x; s.y = y; return true; }
+      }
+    }
+    return false;
+  },
+
+  // ── العوائق ──
+  trapTarget(byIdx) { return (byIdx + 1) % this.room.players.length; },
+  trapBlockReason(x, y) {
+    const r = this.room;
+    if (x < KIRM_IN0 + 16 || x > KIRM_IN1 - 16 || y < KIRM_IN0 + 16 || y > KIRM_IN1 - 16) return 'برّا اللوح';
+    if (kirmD2(x, y, KIRM_CX, KIRM_CY) < 74 * 74) return 'بعيد عن كومة الوسط شوي';
+    for (let k = 0; k < 4; k++) {
+      if (kirmD2(x, y, KIRM_POCKETS[k].x, KIRM_POCKETS[k].y) < 40 * 40) return 'لا تسدّ فم الجيب';
+    }
+    for (const p of r.players) {
+      const bl = kirmBaseline(p.side);
+      const sx = bl.x2 - bl.x1, sy = bl.y2 - bl.y1;
+      const tt = kirmClamp(((x - bl.x1) * sx + (y - bl.y1) * sy) / (sx * sx + sy * sy), 0, 1);
+      if (kirmD2(x, y, bl.x1 + sx * tt, bl.y1 + sy * tt) < 32 * 32) return 'بعيد عن خطوط القاعدة';
+    }
+    for (const z of r.traps) if (kirmD2(x, y, z.x, z.y) < 46 * 46) return 'قريب من عائق ثاني';
+    return '';
+  },
+  makeTrap(kind, x, y, by, ang) {
+    const tgt = this.trapTarget(by);
+    if (kind === 'bar') {
+      const IN = kirmInward(this.room.players[tgt].side);
+      const a = (typeof ang === 'number' && isFinite(ang)) ? ang : Math.atan2(IN.x, -IN.y);
+      const L = 52;
+      return { t: 'bar', x, y, ang: a, half: 6, by, target: tgt,
+               x1: x - Math.cos(a) * L, y1: y - Math.sin(a) * L,
+               x2: x + Math.cos(a) * L, y2: y + Math.sin(a) * L };
+    }
+    return { t: 'glue', x, y, r: 58, by, target: tgt };
+  },
+  async onTrap(playerId, m) {
+    const r = this.room;
+    if (r.phase !== 'placing' || !r.place) return;
+    const placer = r.players[r.place.i];
+    if (!placer || placer.id !== playerId) return;
+    const x = Number(m.x), y = Number(m.y);
+    if (!isFinite(x) || !isFinite(y)) return;
+    if (m.act === 'undo') {
+      for (let i = r.traps.length - 1; i >= 0; i--) {
+        if (r.traps[i].by === r.place.i) { r.traps.splice(i, 1); r.place.left++; break; }
+      }
+      await this.persist(); this.broadcastState(); return;
+    }
+    if (m.act === 'remove') {
+      for (let i = r.traps.length - 1; i >= 0; i--) {
+        const z = r.traps[i];
+        if (z.by !== r.place.i) continue;
+        const hit = z.t === 'bar'
+          ? (() => { const sx = z.x2 - z.x1, sy = z.y2 - z.y1;
+                     const t = kirmClamp(((x - z.x1) * sx + (y - z.y1) * sy) / (sx * sx + sy * sy), 0, 1);
+                     return kirmD2(x, y, z.x1 + sx * t, z.y1 + sy * t) < 26 * 26; })()
+          : kirmD2(x, y, z.x, z.y) < (z.r * 0.8) * (z.r * 0.8);
+        if (hit) { r.traps.splice(i, 1); r.place.left++; break; }
+      }
+      await this.persist(); this.broadcastState(); return;
+    }
+    if (r.place.left <= 0) return;
+    const why = this.trapBlockReason(x, y);
+    if (why) { this.sendPrivate(playerId, { type: 'toast', message: why }); return; }
+    const kind = m.kind === 'glue' ? 'glue' : 'bar';
+    const ang = Number(m.ang);
+    r.traps.push(this.makeTrap(kind, x, y, r.place.i, isFinite(ang) ? ang : null));
+    r.place.left--;
+    if (r.place.left <= 0) await this.advancePlacer();
+    await this.persist();
+    this.broadcastState();
+  },
+  async skipPlacer(why) {
+    const r = this.room;
+    if (r.phase !== 'placing' || !r.place) return;
+    r.msg = why || '';
+    r.place.left = 0;
+    await this.advancePlacer();
+    await this.persist();
+    this.broadcastState();
+  },
+  async advancePlacer() {
+    const r = this.room;
+    r.place.i++;
+    r.place.left = KIRM_TRAPS_PER_PLAYER;
+    if (r.place.i >= r.players.length) {
+      r.place = null;
+      r.phase = 'aim';
+      this.placeStriker();
+    }
+    this.armTurn();
+  },
+
+  // ── الضربة ──
+  async onShot(playerId, m) {
+    const r = this.room;
+    if (r.phase !== 'aim') return;
+    const p = this.cur();
+    if (!p || p.id !== playerId) return;
+
+    /* الخادم لا يصدّق إلا ثلاثة أرقام، وكلها محدودة المدى */
+    const t = kirmClamp(Number(m.t), 0, 1);
+    let dx = Number(m.dx), dy = Number(m.dy), power = Number(m.power);
+    if (!isFinite(t) || !isFinite(dx) || !isFinite(dy) || !isFinite(power)) return;
+    const L = Math.hypot(dx, dy);
+    if (!(L > 1e-6)) return;
+    dx /= L; dy /= L;
+    power = kirmClamp(power, 0.08, 1);
+
+    const bl = kirmBaseline(p.side);
+    r.striker.x = bl.x1 + (bl.x2 - bl.x1) * t;
+    r.striker.y = bl.y1 + (bl.y2 - bl.y1) * t;
+    r.striker.alive = true;
+    if (!this.strikerClear()) { this.sendPrivate(playerId, { type: 'toast', message: 'مكان القرص مشغول' }); return; }
+
+    r.promise = r.opt.promise ? kirmClamp(Math.round(Number(m.promise) || 0), 0, 3) : 0;
+    const v = power * KIRM_CFG.MAXV;
+    r.striker.vx = dx * v; r.striker.vy = dy * v;
+
+    const zones = r.traps.filter(z => z.target === r.turn);
+    for (const b of r.bodies) b.wasHit = false;
+    r.striker.wasHit = false;
+    const list = r.bodies.concat([r.striker]);
+    const potted = [];
+    let simT = 0;
+    while (simT < KIRM_CFG.SHOT_TIMEOUT && kirmMoving(list)) {
+      kirmStep(list, zones, KIRM_CFG.DT, potted);
+      simT += KIRM_CFG.DT;
+    }
+    for (const b of list) { b.vx = 0; b.vy = 0; }
+    const contact = r.bodies.some(b => b.wasHit);
+
+    const res = this.resolveShot(p, potted, contact);
+
+    /* الضربة تُبَث بمعطياتها ليعيدها كل عميل عنده للعرض، ثم يلتصق بالحالة */
+    this.broadcast({
+      type: 'shot',
+      by: p.id,
+      t, dx, dy, power,
+      promise: r.promise,
+      msg: r.msg,
+    });
+
+    if (res.roundOver) {
+      if (r.round >= r.rounds) {
+        r.phase = 'over';
+        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+        r.turnEndsAt = 0;
+        await this.finish();
+      } else {
+        this.startRound();
+      }
+    } else {
+      this.armTurn();
+    }
+    await this.persist();
+    this.broadcastState();
+  },
+
+  resolveShot(p, potted, contact) {
+    const r = this.room;
+    const colorMode = this.colorMode();
+    let own = 0, opp = 0, neutral = 0, queen = false;
+    for (const b of potted) {
+      if (b.type === 's') continue;
+      if (b.type === 'q') { queen = true; continue; }
+      if (colorMode) { if (b.type === p.color) own++; else opp++; }
+      else neutral++;
+    }
+    const strikerIn = !r.striker.alive;
+    const lines = [];
+    let foul = false;
+    if (strikerIn) { foul = true; lines.push('نزل القرص الضارب'); }
+    if (!contact) { foul = true; lines.push('ما لمست ولا قطعة'); }
+    if (colorMode && opp > 0) { foul = true; lines.push('نزّلت من قطع الخصم'); }
+
+    let gained = 0;
+    if (!colorMode) { gained += neutral; if (queen) gained += 3; }
+
+    let othersLeft = 0;
+    for (const b of r.bodies) if (b.alive && b.type !== 'q') othersLeft++;
+
+    if (queen) {
+      r.queenBy = p.id === (this.cur() ? this.cur().id : null) ? r.turn : r.turn;
+      const covered = colorMode ? own > 0 : (neutral > 0 || othersLeft === 0);
+      if (covered) { r.queenBy = -1; lines.push('الملكة نزلت ومُغطّاة'); }
+      else lines.push('الملكة نزلت — غطّها بالضربة الجاية');
+    } else if (r.queenBy === r.turn) {
+      const cov = colorMode ? own > 0 : (neutral > 0 || othersLeft === 0);
+      if (cov) { r.queenBy = -1; lines.push('غطّيت الملكة'); }
+      else {
+        const q = r.bodies.find(b => b.type === 'q');
+        if (q) { const sp = kirmFreeSpot(r.bodies); q.alive = true; q.x = sp.x; q.y = sp.y; q.vx = q.vy = 0; }
+        r.queenBy = -1;
+        if (!colorMode) p.roundPts -= 3;
+        lines.push('ما غطّيت الملكة — رجعت للوسط');
+      }
+    }
+
+    let promiseDelta = 0;
+    if (r.opt.promise && r.promise > 0) {
+      const scored = colorMode ? own : (neutral + (queen ? 1 : 0));
+      let okP = false;
+      if (r.promise === 1) { okP = scored >= 1; promiseDelta = okP ? 2 : -1; }
+      else if (r.promise === 2) { okP = scored >= 2; promiseDelta = okP ? 5 : -2; }
+      else if (r.promise === 3) { okP = queen && r.queenBy === -1; promiseDelta = okP ? 6 : -3; }
+      lines.push(okP ? 'وفيت بوعدك' : 'ما وفيت بوعدك');
+    }
+    p.roundPts += gained + promiseDelta;
+
+    if (foul) {
+      if (this.returnPiece(p)) lines.push('غرامة: رجعت لك قطعة');
+      else { p.due++; lines.push('غرامة معلّقة'); }
+    } else if (p.due > 0) {
+      if (this.returnPiece(p)) { p.due--; lines.push('سُدّدت غرامة معلّقة'); }
+    }
+
+    /* في وضع الألوان: لا يجوز إنهاء قطعك والملكة على اللوح */
+    if (colorMode && this.countLeft(p.color) === 0 && r.bodies.some(b => b.alive && b.type === 'q')) {
+      if (this.returnPiece(p)) lines.push('لازم تنزّل الملكة قبل آخر قطعة');
+      foul = true;
+    }
+
+    const scoredAny = colorMode ? (own > 0 || (queen && r.queenBy === -1)) : (neutral > 0 || queen);
+    const again = scoredAny && !foul;
+    r.dry = (own + opp + neutral + (queen ? 1 : 0)) > 0 ? 0 : (r.dry || 0) + 1;
+
+    r.msg = lines.length ? lines.join(' · ') : (again ? 'ضربة موفّقة — ارمِ مرة ثانية' : 'ما نزل شيء');
+
+    const roundOver = this.checkRoundEnd();
+    if (!roundOver) {
+      if (!again) this.nextTurn();
+      r.striker.alive = true;
+      this.placeStriker();
+      r.promise = 0;
+    }
+    return { roundOver };
+  },
+
+  countLeft(color) {
+    let n = 0;
+    for (const b of this.room.bodies) if (b.alive && b.type === color) n++;
+    return n;
+  },
+  returnPiece(p) {
+    const r = this.room;
+    const want = this.colorMode() ? p.color : null;
+    for (const b of r.bodies) {
+      if (b.alive || b.type === 'q') continue;
+      if (want && b.type !== want) continue;
+      const sp = kirmFreeSpot(r.bodies);
+      b.alive = true; b.x = sp.x; b.y = sp.y; b.vx = b.vy = 0;
+      if (!this.colorMode()) p.roundPts -= 1;
+      return true;
+    }
+    return false;
+  },
+  nextTurn() {
+    const r = this.room;
+    const n = r.players.length;
+    for (let k = 1; k <= n; k++) {
+      const idx = (r.turn + k) % n;
+      if (r.players[idx].connected || k === n) { r.turn = idx; break; }
+    }
+    r.striker && (r.striker.alive = true);
+    this.placeStriker();
+  },
+  checkRoundEnd() {
+    const r = this.room;
+    const colorMode = this.colorMode();
+    let done = false, note = '';
+    if (colorMode) {
+      const wLeft = this.countLeft('w'), bLeft = this.countLeft('b');
+      const queenAlive = r.bodies.some(b => b.alive && b.type === 'q');
+      let winner = null;
+      if (wLeft === 0) winner = 'w';
+      if (bLeft === 0) winner = 'b';
+      if (queenAlive) winner = null;
+      if (winner) {
+        done = true;
+        const loserLeft = winner === 'w' ? bLeft : wLeft;
+        for (const p of r.players) if (p.color === winner) p.roundPts += 3 + loserLeft;
+        note = 'فاز ' + (winner === 'w' ? 'الأبيض' : 'الأسود') + ' بالجولة';
+      }
+    } else {
+      let left = 0;
+      for (const b of r.bodies) if (b.alive) left++;
+      if (left === 0) { done = true; note = 'خلصت القطع'; }
+    }
+    /* حلّ الجمود: ضربات فارغة متتالية تنهي الجولة بدل ما تدور بلا نهاية */
+    if (!done && r.dry >= r.players.length * 3 + 3) { done = true; note = 'ما نزلت ولا قطعة — انتهت الجولة'; }
+    if (!done) return false;
+    for (const p of r.players) p.pts += p.roundPts;
+    r.msg = note;
+    return true;
+  },
+
+  /* ── تسجيل الفوز ──
+     الفائز يقرره الخادم من النقاط المتراكمة، لا من ادّعاء أي عميل. */
+  async finish() {
+    const r = this.room;
+    let best = -Infinity;
+    for (const p of r.players) if (p.pts > best) best = p.pts;
+    const winners = r.players.filter(p => p.pts === best).map(p => p.id);
+    r.msg = 'انتهت المباراة';
+    try { await this.recordResults(winners); } catch {}
+    this.broadcast({ type: 'over', winners, players: r.players.map(p => ({ id: p.id, name: p.name, pts: p.pts })) });
+  },
+
+  async onMessage(playerId, evt) {
+    if (!this.allowMsg(playerId)) return;
+    let m;
+    try { m = JSON.parse(evt.data); } catch { return; }
+    if (!m || typeof m.type !== 'string') return;
+    this.resumePhase();
+    if (m.type === 'start') return this.onStart(playerId);
+    if (m.type === 'shot') return this.onShot(playerId, m);
+    if (m.type === 'trap') return this.onTrap(playerId, m);
+    if (m.type === 'ping') { this.sendPrivate(playerId, this.stateAll()); return; }
+    if (m.type === 'again') {
+      const r = this.room;
+      if (playerId !== r.hostId || r.phase !== 'over') return;
+      r.phase = 'lobby'; r.round = 0;
+      r.players.forEach(p => { p.pts = 0; p.roundPts = 0; p.due = 0; });
+      await this.persist();
+      this.broadcastState();
+    }
+  },
+};
+Object.assign(KirmRoom.prototype, KirmLogic);
+applyRoomCommon(KirmRoom, 'kirm');
+
 export class ChatRoom {
   constructor(state, env) {
     this.state = state;
@@ -7926,7 +8773,8 @@ export default {
           MAWWIH_ROOM: !!env.MAWWIH_ROOM, FATIN_ROOM: !!env.FATIN_ROOM,
           DAQASH_ROOM: !!env.DAQASH_ROOM, WALIMA_ROOM: !!env.WALIMA_ROOM,
           LUDO_ROOM: !!env.LUDO_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
-          BTAQATI_ROOM: !!env.BTAQATI_ROOM, PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
+          BTAQATI_ROOM: !!env.BTAQATI_ROOM, KIRM_ROOM: !!env.KIRM_ROOM,
+          PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
           CHAT_ROOM: !!env.CHAT_ROOM,
           DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
           ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
@@ -8078,7 +8926,7 @@ export default {
       }
       if (ludoCreate) {
         const ip = request.headers.get('CF-Connecting-IP') || '';
-        if (!allowCreate(ip)) return withCors(new Response('too-many-rooms', { status: 429 }), origin);
+        if (!allowCreate(ip)) return tooManyRooms(ip, origin);
         let body;
         try { body = await request.json(); } catch { return withCors(new Response('bad-json', { status: 400 }), origin); }
         for (let attempt = 0; attempt < 6; attempt++) {
@@ -8088,6 +8936,8 @@ export default {
             method: 'POST', body: JSON.stringify({ ...body, roomCode: code }),
           }));
           if (resp.status !== 409) {
+            // لا نحسب إلا الغرفة اللي انولدت فعلًا
+            if (resp.ok) noteCreate(ip);
             if (resp.ok && body && body.public === true && env.PUBLIC_LOBBY) {
               ctx.waitUntil((async () => {
                 try {
@@ -8117,8 +8967,9 @@ export default {
       return withCors(resp, origin);
     }
 
-    if (url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
-      const gameNS = url.pathname.startsWith('/btaqati/') ? env.BTAQATI_ROOM
+    if (url.pathname === '/kirm/room/create' || url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
+      const gameNS = url.pathname.startsWith('/kirm/') ? env.KIRM_ROOM
+                    : url.pathname.startsWith('/btaqati/') ? env.BTAQATI_ROOM
                     : url.pathname.startsWith('/got/') ? env.GOT_ROOM
                     : url.pathname.startsWith('/mawwih/') ? env.MAWWIH_ROOM
                     : url.pathname.startsWith('/daqash/') ? env.DAQASH_ROOM
@@ -8133,9 +8984,7 @@ export default {
           { status: 501 }), origin);
       }
       const ip = request.headers.get('CF-Connecting-IP') || '';
-      if (!allowCreate(ip)) {
-        return withCors(new Response('too-many-rooms', { status: 429 }), origin);
-      }
+      if (!allowCreate(ip)) return tooManyRooms(ip, origin);
       let body;
       try { body = await request.json(); }
       catch { return withCors(new Response('bad-json', { status: 400 }), origin); }
@@ -8149,9 +8998,12 @@ export default {
           body: JSON.stringify({ ...body, roomCode: code }),
         }));
         if (resp.status !== 409) {
+          // لا نحسب إلا الغرفة اللي انولدت فعلًا
+          if (resp.ok) noteCreate(ip);
           // الإدراج في اللوبي اختياري وصريح: بلا public:true تبقى الغرفة خاصة
           if (resp.ok && body && body.public === true && env.PUBLIC_LOBBY) {
-            const g = url.pathname.startsWith('/btaqati/') ? 'btaqati'
+            const g = url.pathname.startsWith('/kirm/') ? 'kirm'
+                    : url.pathname.startsWith('/btaqati/') ? 'btaqati'
                     : url.pathname.startsWith('/got/') ? 'khawana'
                     : url.pathname.startsWith('/mawwih/') ? 'mawwih'
                     : url.pathname.startsWith('/daqash/') ? 'daqash'
@@ -8176,10 +9028,10 @@ export default {
     }
 
     // الانضمام لغرفة موجودة بالكود، أو فتح اتصال WebSocket لغرفة قائمة
-    const match = url.pathname.match(/^\/(btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(kirm|btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
       if (!gameNS) {
         return withCors(new Response(
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
@@ -8218,10 +9070,11 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v82';
+const WORKER_VERSION = 'v85';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
+  kirm:    { name: 'الكِيرَم',      path: '/kirm/' },
   khawana: { name: 'لمن العرش؟',   path: '/khawana/' },
   mawwih:  { name: 'مَوِّه',        path: '/mawwih/' },
   daqash:  { name: 'داقش',         path: '/daqash/' },
@@ -8366,12 +9219,41 @@ const BT_MIN_PLAYERS = 2;
    نستعيد المقعد القديم بشرط: ما زلنا في اللوبي، والاسم مطابق، ومقبس
    ذلك المقعد ميت أو غير موجود. لو كان المقبس حيًّا فهو شخص آخر يحمل
    نفس الاسم — فلا نسرق مقعده، بل نميّز الاسم الجديد برقم. */
-function reclaimSeat(room, sockets, rawName) {
+function reclaimSeat(room, sockets, rawName, jid) {
   if (!room || room.phase !== 'lobby' || !Array.isArray(room.players)) return null;
+
+  /* ═══ المطابقة بـ jid أولاً — هذا هو الإصلاح الحقيقي ═══
+     العطل المُبلَّغ عنه: «أدخل الغرفة فيتكرر اسمي ثلاث مرات». السبب أن
+     أزرار «انضم» في كل الألعاب بلا أي رد فعل — إيقاظ الـ Durable Object
+     ياخذ ثانية إلى ثلاث، فيضغط اللاعب مرتين وثلاثًا. وكل ضغطة تفتح
+     سوكِتًا بلا توكن (التوكن ما يصل إلا مع أول welcome)، فيصير ثلاثة
+     مقاعد: «سعود» و«سعود ٢» و«سعود ٣».
+
+     والمطابقة بالاسم وحدها لا تكفي: المقبس الأول قد يبقى half-open —
+     العميل مات لكن ما وصل FIN للوركر — فيراه الخادم readyState===1
+     ويظنه لاعبًا آخر يحمل نفس الاسم، فيميّز الاسم برقم بدل أن يستعيد
+     المقعد. مع jid نعرف يقينًا أنه نفس التبويب فنستعيد مقعده دائمًا.
+
+     jid معرّف عشوائي لكل تبويب (نفس قوة seatToken) يولّده
+     ya7-seat-token.js ويحفظه في sessionStorage، فيصمد عبر التحديث
+     وإعادة الاتصال ولا يُسرَّب بين تبويبين. */
+  if (jid && /^[a-f0-9]{32}$/i.test(jid)) {
+    const mine = room.players.find(p => p.jid && p.jid === jid);
+    if (mine) {
+      const old = sockets.get(mine.id);
+      if (old) { try { old.close(); } catch {} sockets.delete(mine.id); }
+      mine.connected = true;
+      return mine;
+    }
+  }
+
   const n = cleanName(rawName);
   if (!n) return null;
   const seat = room.players.find(p => cleanName(p.name) === n);
   if (!seat) return null;
+  /* لا نسرق مقعد صاحب jid آخر: لو المقعد مربوط بتبويب معروف وجاء
+     طلب بـ jid مختلف فهما شخصان مختلفان يحملان نفس الاسم */
+  if (seat.jid && jid && seat.jid !== jid) return null;
   const stale = sockets.get(seat.id);
   const live = stale && stale.readyState === 1;   // 1 = OPEN
   if (live) return null;
@@ -8519,9 +9401,11 @@ export class BtaqatiRoom {
       }
       player = this.newPlayer(crypto.randomUUID(), name, null);
       player.connected = true;
-      const back = reclaimSeat(this.room, this.sockets, name);
+      const back = reclaimSeat(this.room, this.sockets, name, url.searchParams.get('jid'));
       if (back) { player = back; }
       else { player.name = uniqueName(this.room, player.name); this.room.players.push(player); }
+      const _jid = url.searchParams.get('jid');
+      if (_jid && /^[a-f0-9]{32}$/i.test(_jid)) player.jid = _jid;
     }
 
     this.noteAccount(url, player);
