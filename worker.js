@@ -120,6 +120,371 @@ const sanitizeGotConfig = makeConfigSanitizer(
 
 // خنق الرسائل: كل رسالة تقريبًا تكتب في التخزين، فبلا حدّ يقدر لاعب واحد
 // يستنزف الفاتورة. نُطبّق ١٢ رسالة/ثانية لكل لاعب.
+/* ═════════════ محرك البلياردو — مستخرج آليًا ═════════════
+   المصدر الوحيد: bilyardo/index.html بين ENGINE-BEGIN و ENGINE-END.
+   لا تُعدَّل هنا يدويًا؛ أي تغيير في الفيزياء يُعاد استخراجه من هناك،
+   وإلا تفرّقت نسخة الخادم عن نسخة اللاعب وانكسر التزامن بصمت.      */
+/* ya7-billiard-engine.js — محرك البلياردو المشترك
+   ------------------------------------------------------------------
+   يعمل في المتصفح وفي الـ Worker من نفس الملف. لا DOM، لا canvas، لا صوت.
+   كل ما هنا حتمي (deterministic): نفس الحالة + نفس الضربة = نفس النتيجة
+   على أي جهاز وأي متصفح.
+
+   قواعد لا تُكسر عند التعديل:
+   1) ممنوع Math.random — استخدم rnd(S) فقط.
+   2) ممنوع Math.hypot و Math.cos/sin داخل مسار المحاكاة. hypot غير مضمون
+      التطابق بين محركات JS، والمثلثات كذلك. الجذر التربيعي مضمون.
+      اتجاه الضربة يدخل كمتجه (vx,vy) جاهز ومقرّب، لا كزاوية.
+   3) ممنوع أي شيء يعتمد على الوقت الحقيقي أو معدل الإطارات أو حجم الشاشة.
+   4) أي عشوائية جديدة تمر عبر rnd(S) وتزيد S.draws.
+   ------------------------------------------------------------------ */
+(function (root, factory) {
+  const API = factory();
+  if (typeof module !== 'undefined' && module.exports) module.exports = API;
+  root.Ya7Billiard = API;
+})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+  'use strict';
+
+  /* ===================== عالم ثابت ===================== */
+  const VW = 616, VH = 976;
+  const L = 68, T = 68, R = 548, B = 908;
+  const W = R - L, H = B - T;
+  const BR = 11.5, POCKET = 25;
+  const POCKETS = [
+    { x: L, y: T, c: 1 }, { x: R, y: T, c: 1 },
+    { x: L, y: (T + B) / 2, c: 0 }, { x: R, y: (T + B) / 2, c: 0 },
+    { x: L, y: B, c: 1 }, { x: R, y: B, c: 1 }
+  ];
+
+  const FRICTION = 0.9885, STOP = 0.055;
+  const E_BALL = 0.96, E_RAIL = 0.86;
+  const MAX_SPEED = 30;
+  const MAX_TICKS = 3000;              // سقف أمان للمحاكاة على السيرفر
+
+  const WORLD = { VW, VH, L, T, R, B, W, H, BR, POCKET, POCKETS, MAX_SPEED };
+
+  /* ===================== أدوات ===================== */
+  const dist = (ax, ay, bx, by) => {          // بديل Math.hypot الحتمي
+    const dx = bx - ax, dy = by - ay;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  const q6 = v => Math.round(v * 1e6) / 1e6;  // تقريب موحد قبل الإرسال
+
+  function rnd(S) {                           // xorshift مبذور
+    S.draws++;
+    let x = (S.seed + S.draws * 0x9E3779B9) >>> 0;
+    x ^= x << 13; x >>>= 0; x ^= x >> 17; x ^= x << 5; x >>>= 0;
+    return x / 4294967296;
+  }
+
+  const typeOf = n => n === 0 ? 'cue' : n === 8 ? 'eight' : n < 8 ? 'solid' : 'stripe';
+  const remaining = (S, g) => S.balls.filter(b => !b.potted && typeOf(b.n) === g).length;
+
+  /* بذرة من نص (أسماء اللاعبين) — نفس FNV-1a المستخدم في لودو */
+  function seedFrom(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    }
+    return h >>> 0 || 1;
+  }
+
+  /* ===================== إنشاء اللعبة ===================== */
+  function newGame(opts) {
+    opts = opts || {};
+    const players = clamp(opts.players || 2, 2, 4);
+    const S = {
+      v: 1,
+      seed: (opts.seed >>> 0) || 1,
+      draws: 0,
+      players,
+      turn: 0,
+      group: new Array(players).fill(null),
+      open: true,
+      phase: 'aim',                 // aim | rolling | inhand | over
+      balls: [],
+      shot: null,
+      winner: null,
+      last: null,                   // نتيجة آخر ضربة (للواجهة)
+      events: [],                   // أحداث التِك الحالي (صوت/تأثيرات)
+      ticks: 0
+    };
+    rack(S);
+    return S;
+  }
+
+  function rack(S) {
+    S.balls = [];
+    S.draws = 0;
+    const push = (n, x, y) => S.balls.push({ n, x, y, vx: 0, vy: 0, potted: false });
+    push(0, L + W / 2, B - H * 0.24);                     // البيضاء
+    const order = [1, 11, 2, 3, 8, 10, 9, 4, 12, 5, 6, 13, 7, 14, 15];
+    const d = 2 * BR + 0.7, dy = d * Math.sqrt(3) / 2;
+    const ax = L + W / 2, ay = T + H * 0.26;
+    let k = 0;
+    for (let r = 0; r < 5; r++)
+      for (let i = 0; i <= r; i++)
+        push(order[k++], ax + (i - r / 2) * d, ay - r * dy);
+    S.cueIndex = 0;
+  }
+
+  const cueBall = S => S.balls[S.cueIndex];
+
+  /* ===================== الضربة ===================== */
+  /* تُستدعى في العميل فقط: تحوّل زاوية+قوة إلى متجه مقرّب.
+     المثلثات تبقى خارج مسار المحاكاة الحتمي. */
+  function shotVector(aim, power) {
+    const p = clamp(power, 0.05, 1);
+    return { vx: q6(Math.cos(aim) * MAX_SPEED * p), vy: q6(Math.sin(aim) * MAX_SPEED * p) };
+  }
+
+  function beginShot(S, vx, vy) {
+    if (S.phase !== 'aim') return false;
+    const sp = dist(0, 0, vx, vy);
+    if (!(sp > 0) || sp > MAX_SPEED * 1.001) return false;   // تحقق من صحة الضربة
+    const c = cueBall(S);
+    c.vx = q6(vx); c.vy = q6(vy);
+    S.shot = { firstHit: null, potted: [], railAfter: false };
+    S.phase = 'rolling';
+    S.ticks = 0;
+    return true;
+  }
+
+  /* ===================== المحاكاة ===================== */
+  function pot(S, b) {
+    b.potted = true; b.vx = 0; b.vy = 0;
+    if (S.shot) S.shot.potted.push(b.n);
+    S.events.push({ t: 'pot', n: b.n, x: b.x, y: b.y });
+  }
+
+  /* عدد الخطوات الفرعية مشتق من الحالة نفسها لا من الجهاز:
+     يكفي أن تكون أقصر خطوة أصغر من نصف قطر الكرة. */
+  function subSteps(S) {
+    let vmax = 0;
+    for (const b of S.balls) {
+      if (b.potted) continue;
+      const v = b.vx * b.vx + b.vy * b.vy;
+      if (v > vmax) vmax = v;
+    }
+    vmax = Math.sqrt(vmax);
+    return clamp(Math.ceil(vmax / (BR * 0.5)), 1, 8);
+  }
+
+  function tick(S) {
+    if (S.phase !== 'rolling') return false;
+    S.events.length = 0;
+    S.ticks++;
+
+    const SUB = subSteps(S);
+    const balls = S.balls;
+
+    for (let s = 0; s < SUB; s++) {
+      // حركة
+      for (let i = 0; i < balls.length; i++) {
+        const b = balls[i];
+        if (b.potted || (b.vx === 0 && b.vy === 0)) continue;
+        b.x += b.vx / SUB; b.y += b.vy / SUB;
+      }
+
+      // الجيوب + خروج الطاولة
+      for (let i = 0; i < balls.length; i++) {
+        const b = balls[i];
+        if (b.potted) continue;
+        let done = false;
+        for (let p = 0; p < POCKETS.length; p++) {
+          if (dist(b.x, b.y, POCKETS[p].x, POCKETS[p].y) < POCKET) { pot(S, b); done = true; break; }
+        }
+        if (done) continue;
+        if (b.x < L - 16 || b.x > R + 16 || b.y < T - 16 || b.y > B + 16) pot(S, b);
+      }
+
+      // البانوات
+      for (let i = 0; i < balls.length; i++) {
+        const b = balls[i];
+        if (b.potted || (b.vx === 0 && b.vy === 0)) continue;
+        let near = false;
+        for (let p = 0; p < POCKETS.length; p++) {
+          if (dist(b.x, b.y, POCKETS[p].x, POCKETS[p].y) < POCKET + BR + 6) { near = true; break; }
+        }
+        if (near) continue;
+        let hit = false;
+        if (b.x < L + BR) { b.x = L + BR; b.vx = -b.vx * E_RAIL; hit = true; }
+        if (b.x > R - BR) { b.x = R - BR; b.vx = -b.vx * E_RAIL; hit = true; }
+        if (b.y < T + BR) { b.y = T + BR; b.vy = -b.vy * E_RAIL; hit = true; }
+        if (b.y > B - BR) { b.y = B - BR; b.vy = -b.vy * E_RAIL; hit = true; }
+        if (hit) {
+          if (S.shot && S.shot.firstHit !== null) S.shot.railAfter = true;
+          const sp = Math.abs(b.vx) + Math.abs(b.vy);
+          if (sp > 2) S.events.push({ t: 'rail', v: sp, x: b.x, y: b.y });
+        }
+      }
+
+      // تصادم الكرات — فرز عريض رخيص قبل حساب الجذر
+      const D2 = BR * 2;
+      for (let i = 0; i < balls.length; i++) {
+        const a = balls[i];
+        if (a.potted) continue;
+        const aRest = (a.vx === 0 && a.vy === 0);
+        for (let j = i + 1; j < balls.length; j++) {
+          const b = balls[j];
+          if (b.potted) continue;
+          if (aRest && b.vx === 0 && b.vy === 0) continue;   // ساكنتان: تخطَّ
+          let dx = b.x - a.x;
+          if (dx > D2 || dx < -D2) continue;
+          let dy = b.y - a.y;
+          if (dy > D2 || dy < -D2) continue;
+          let d = Math.sqrt(dx * dx + dy * dy);
+          if (d === 0) { dx = 0.01; d = 0.01; }
+          if (d >= D2) continue;
+
+          const nx = dx / d, ny = dy / d, ov = (D2 - d) / 2;
+          a.x -= nx * ov; a.y -= ny * ov;
+          b.x += nx * ov; b.y += ny * ov;
+          const rel = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+          if (rel < 0) {
+            const imp = -(1 + E_BALL) * rel / 2;
+            a.vx -= imp * nx; a.vy -= imp * ny;
+            b.vx += imp * nx; b.vy += imp * ny;
+            S.events.push({ t: 'hit', v: rel < 0 ? -rel : rel, x: a.x + nx * BR, y: a.y + ny * BR });
+            if (S.shot && S.shot.firstHit === null) {
+              if (a.n === 0) S.shot.firstHit = b.n;
+              else if (b.n === 0) S.shot.firstHit = a.n;
+            }
+          }
+        }
+      }
+    }
+
+    // احتكاك
+    let moving = false;
+    for (let i = 0; i < balls.length; i++) {
+      const b = balls[i];
+      if (b.potted || (b.vx === 0 && b.vy === 0)) continue;
+      b.vx *= FRICTION; b.vy *= FRICTION;
+      if (dist(0, 0, b.vx, b.vy) < STOP) { b.vx = 0; b.vy = 0; }
+      else moving = true;
+    }
+
+    if (!moving || S.ticks >= MAX_TICKS) {
+      for (const b of balls) { b.vx = 0; b.vy = 0; }
+      return false;
+    }
+    return true;
+  }
+
+  /* السيرفر: شغّل الضربة كاملة دفعة واحدة */
+  function settle(S) {
+    while (tick(S)) { /* noop */ }
+    return resolveShot(S);
+  }
+
+  /* ===================== القوانين ===================== */
+  function resolveShot(S) {
+    const s = S.shot; S.shot = null;
+    const me = S.turn, foe = (S.turn + 1) % S.players;
+    const potted = s ? s.potted : [];
+    const cuePotted = potted.indexOf(0) >= 0;
+    const eightPotted = potted.indexOf(8) >= 0;
+    const myGroup = S.group[me];
+    let foul = false, why = '';
+
+    if (cuePotted) { foul = true; why = 'cue-potted'; }
+    else if (!s || s.firstHit === null) { foul = true; why = 'no-contact'; }
+    else {
+      const ft = typeOf(s.firstHit);
+      if (myGroup) {
+        const needEight = remaining(S, myGroup) === 0;
+        if (needEight && ft !== 'eight') { foul = true; why = 'must-hit-eight'; }
+        else if (!needEight && ft !== myGroup) { foul = true; why = 'wrong-group'; }
+      } else if (ft === 'eight') { foul = true; why = 'eight-on-open'; }
+    }
+
+    const res = { foul, why, potted, groupSet: null, winner: null, sameTurn: false };
+
+    if (eightPotted) {
+      const cleared = myGroup ? remaining(S, myGroup) === 0 : false;
+      res.winner = (cleared && !foul && !cuePotted) ? me : foe;
+      res.why = res.winner === me ? 'eight-legal' : (myGroup ? 'eight-early' : 'eight-open');
+      S.winner = res.winner; S.phase = 'over'; S.last = res;
+      return res;
+    }
+
+    const scored = potted.filter(n => n !== 0 && n !== 8);
+    if (S.open && !foul && scored.length) {
+      const t = typeOf(scored[0]);
+      S.group[me] = t;
+      // في لعبة ثنائية يأخذ الخصم العكس؛ في 3-4 لاعبين نوزّع لاحقاً حسب الوضع
+      if (S.players === 2) S.group[foe] = (t === 'solid' ? 'stripe' : 'solid');
+      S.open = false;
+      res.groupSet = t;
+    }
+
+    if (foul) {
+      S.turn = foe;
+      S.phase = 'inhand';
+      const c = cueBall(S);
+      c.potted = false; c.vx = 0; c.vy = 0;
+      c.x = L + W / 2; c.y = B - H * 0.24;
+      S.last = res;
+      return res;
+    }
+
+    const g = S.group[me];
+    const mine = g ? scored.filter(n => typeOf(n) === g).length : scored.length;
+    if (mine > 0) { S.phase = 'aim'; res.sameTurn = true; }
+    else { S.turn = foe; S.phase = 'aim'; }
+    S.last = res;
+    return res;
+  }
+
+  /* ===================== الكرة في اليد ===================== */
+  function legalPlace(S, x, y) {
+    x = clamp(x, L + BR + 1, R - BR - 1);
+    y = clamp(y, T + BR + 1, B - BR - 1);
+    for (const p of POCKETS) if (dist(x, y, p.x, p.y) < POCKET + BR) return null;
+    for (const b of S.balls) {
+      if (b.potted || b.n === 0) continue;
+      if (dist(x, y, b.x, b.y) < BR * 2 + 1) return null;
+    }
+    return { x, y };
+  }
+  function placeCue(S, x, y) {
+    const spot = legalPlace(S, x, y);
+    if (!spot) return false;
+    const c = cueBall(S);
+    c.x = spot.x; c.y = spot.y;
+    return true;
+  }
+  function endPlacement(S) { if (S.phase === 'inhand') S.phase = 'aim'; }
+
+  /* ===================== تزامن ===================== */
+  /* بصمة الحالة — يرسلها العميل بعد كل ضربة، والسيرفر يقارنها بحسابه.
+     اختلافها = انحراف، فيُرسل السيرفر الحالة الكاملة بدل إخفاء المشكلة. */
+  function checksum(S) {
+    let h = 0x811c9dc5;
+    const put = v => {
+      const n = (Math.round(v * 1000) | 0) >>> 0;
+      h ^= n; h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
+    };
+    for (const b of S.balls) { put(b.n); put(b.potted ? 1 : 0); put(b.x); put(b.y); }
+    put(S.turn); put(S.open ? 1 : 0); put(S.draws);
+    return h >>> 0;
+  }
+
+  function snapshot(S) { return JSON.parse(JSON.stringify(S)); }
+  function restore(S, snap) { Object.assign(S, JSON.parse(JSON.stringify(snap))); }
+
+  return {
+    WORLD, POCKETS,
+    newGame, rack, cueBall,
+    shotVector, beginShot, tick, settle, resolveShot,
+    legalPlace, placeCue, endPlacement,
+    typeOf, remaining, rnd, seedFrom, checksum, snapshot, restore, q6
+  };
+});
+
 const MSG_PER_SEC = 12;
 
 // عمر الغرفة الخاملة قبل الحذف التلقائي
@@ -335,6 +700,21 @@ function validPlayerId(v) {
 /* gameKey: مفتاح اللعبة كما يظهر في الروابط واللوبي. الغرفة ما كانت
    تعرف اسم لعبتها إطلاقًا، فالنتيجة تُسجَّل مجرّدة «فوز» بلا أي تفصيل
    عن أي لعبة. المفتاح يُمرَّر هنا مرة واحدة لكل صنف. */
+/* نطاق الـ Durable Object حسب اللعبة — نقطة واحدة بدل تكرار السلسلة */
+function roomNS(env, g) {
+  switch (g) {
+    case 'kirm':    return env.KIRM_ROOM;
+    case 'btaqati': return env.BTAQATI_ROOM;
+    case 'got':     return env.GOT_ROOM;
+    case 'mawwih':  return env.MAWWIH_ROOM;
+    case 'daqash':  return env.DAQASH_ROOM;
+    case 'walima':   return env.WALIMA_ROOM;
+    case 'dakhil':   return env.DAKHIL_ROOM;
+    case 'bilyardo': return env.BILLIARD_ROOM;
+    default:         return env.MAFIA_ROOM;
+  }
+}
+
 function applyRoomCommon(cls, gameKey) {
   if (gameKey) cls.prototype.GAME = gameKey;
   for (const [k, v] of Object.entries(RoomCommon)) {
@@ -377,6 +757,75 @@ function applyRoomCommon(cls, gameKey) {
         });
       } catch { return Response.json({ ok: false, live: false }); }
     }
+    /* ── /roster: من في الغرفة الآن ──
+       يخدم لوحة الغرفة المشتركة (طرد + مشاركة). لا يكشف إلا ما هو
+       معروض أصلًا في لوبي كل لعبة: الاسم والمعرّف وهل هو مضيف أو بوت
+       أو منقطع. التوكن الخاطئ يرجع ok:false بلا تفصيل، فلا يصير
+       العقد وسيلة لاستطلاع الغرف من الخارج.                        */
+    if (u && u.pathname === '/roster') {
+      try {
+        const me = this.seatByToken(u.searchParams.get('token') || '');
+        if (!me) return Response.json({ ok: false });
+        const players = ((this.room && this.room.players) || []).map(q => ({
+          id: String(q.id || ''),
+          name: String(q.name || ''),
+          bot: !!q.isBot,
+          connected: q.connected !== false,
+          host: !!(this.room && this.room.hostId === q.id),
+        }));
+        return Response.json({
+          ok: true,
+          me: String(me.id || ''),
+          host: !!(this.room && this.room.hostId === me.id),
+          phase: String((this.room && this.room.phase) || ''),
+          players,
+        });
+      } catch { return Response.json({ ok: false }); }
+    }
+
+    /* ── /kick: المضيف يطرد لاعبًا ──
+       الطرد سلاح، فله ثلاثة حرّاس: التوكن يثبت أن الطالب صاحب مقعد،
+       ومقعده هو مقعد المضيف، والهدف ليس هو نفسه. يُنفَّذ بالطريقة
+       الخاصة باللعبة إن وُجدت (داقش والدخيل تعرفان كيف تطردان بلا
+       كسر جولة جارية)، وإلا فبإزالة عامة تُغلق مقبسه وتبثّ الحالة. */
+    if (u && u.pathname === '/kick' && request.method === 'POST') {
+      try {
+        let body = {};
+        try { body = await request.json(); } catch {}
+        const me = this.seatByToken(String(body.token || ''));
+        if (!me) return Response.json({ ok: false, error: 'no-seat' }, { status: 403 });
+        if (!this.room || this.room.hostId !== me.id) {
+          return Response.json({ ok: false, error: 'not-host' }, { status: 403 });
+        }
+        const target = String(body.targetId || '');
+        if (!target || target === me.id) {
+          return Response.json({ ok: false, error: 'bad-target' }, { status: 400 });
+        }
+        const list = (this.room.players || []);
+        const victim = list.filter(q => String(q.id) === target)[0];
+        if (!victim) return Response.json({ ok: false, error: 'not-found' }, { status: 404 });
+
+        if (typeof this.kickPlayer === 'function') {
+          await this.kickPlayer(target);
+        } else {
+          victim.kicked = true;
+          victim.connected = false;
+          const sock = this.sockets && this.sockets.get(target);
+          if (sock) {
+            try { sock.send(JSON.stringify({ type: 'error', message: 'طردك المضيف من الغرفة' })); } catch {}
+            try { sock.close(); } catch {}
+          }
+          if (this.sockets) this.sockets.delete(target);
+          const i = list.indexOf(victim);
+          if (i >= 0 && this.room.phase === 'lobby') list.splice(i, 1);
+          if (typeof this.persist === 'function') { try { await this.persist(); } catch {} }
+          if (typeof this.broadcastState === 'function') { try { this.broadcastState(); } catch {} }
+          else if (typeof this.broadcast === 'function') { try { this.broadcast(); } catch {} }
+        }
+        return Response.json({ ok: true });
+      } catch { return Response.json({ ok: false, error: 'failed' }, { status: 500 }); }
+    }
+
     return innerFetch.call(this, request);
   };
 
@@ -421,9 +870,10 @@ function gameNS(env, key) {
     case 'walima':  return env.WALIMA_ROOM;
     case 'dakhil':  return env.DAKHIL_ROOM;
     case 'btaqati': return env.BTAQATI_ROOM;
-    case 'ludo':    return env.LUDO_ROOM;
-    case 'kirm':    return env.KIRM_ROOM;
-    default:        return null;
+    case 'ludo':     return env.LUDO_ROOM;
+    case 'kirm':     return env.KIRM_ROOM;
+    case 'bilyardo': return env.BILLIARD_ROOM;
+    default:         return null;
   }
 }
 
@@ -8774,6 +9224,7 @@ export default {
           DAQASH_ROOM: !!env.DAQASH_ROOM, WALIMA_ROOM: !!env.WALIMA_ROOM,
           LUDO_ROOM: !!env.LUDO_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
           BTAQATI_ROOM: !!env.BTAQATI_ROOM, KIRM_ROOM: !!env.KIRM_ROOM,
+          BILLIARD_ROOM: !!env.BILLIARD_ROOM,
           PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
           CHAT_ROOM: !!env.CHAT_ROOM,
           DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
@@ -8967,8 +9418,9 @@ export default {
       return withCors(resp, origin);
     }
 
-    if (url.pathname === '/kirm/room/create' || url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
-      const gameNS = url.pathname.startsWith('/kirm/') ? env.KIRM_ROOM
+    if (url.pathname === '/bilyardo/room/create' || url.pathname === '/kirm/room/create' || url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
+      const gameNS = url.pathname.startsWith('/bilyardo/') ? env.BILLIARD_ROOM
+                    : url.pathname.startsWith('/kirm/') ? env.KIRM_ROOM
                     : url.pathname.startsWith('/btaqati/') ? env.BTAQATI_ROOM
                     : url.pathname.startsWith('/got/') ? env.GOT_ROOM
                     : url.pathname.startsWith('/mawwih/') ? env.MAWWIH_ROOM
@@ -9002,7 +9454,8 @@ export default {
           if (resp.ok) noteCreate(ip);
           // الإدراج في اللوبي اختياري وصريح: بلا public:true تبقى الغرفة خاصة
           if (resp.ok && body && body.public === true && env.PUBLIC_LOBBY) {
-            const g = url.pathname.startsWith('/kirm/') ? 'kirm'
+            const g = url.pathname.startsWith('/bilyardo/') ? 'bilyardo'
+                    : url.pathname.startsWith('/kirm/') ? 'kirm'
                     : url.pathname.startsWith('/btaqati/') ? 'btaqati'
                     : url.pathname.startsWith('/got/') ? 'khawana'
                     : url.pathname.startsWith('/mawwih/') ? 'mawwih'
@@ -9028,10 +9481,38 @@ export default {
     }
 
     // الانضمام لغرفة موجودة بالكود، أو فتح اتصال WebSocket لغرفة قائمة
-    const match = url.pathname.match(/^\/(kirm|btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    /* ── لوحة الغرفة المشتركة: قائمة اللاعبين والطرد ──
+       نفس نطاقات الغرف، لكن بمسارَي /roster و/kick. الغرفة نفسها
+       تتحقق من التوكن وأن الطالب هو المضيف — الراوتر ينقل فقط.     */
+    const rk = url.pathname.match(/^\/(bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/(roster|kick)$/i);
+    if (rk) {
+      const g = (rk[1] || '').toLowerCase();
+      const ns = roomNS(env, g);
+      if (!ns) {
+        return withCors(new Response(
+          'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
+          { status: 501 }), origin);
+      }
+      const code = rk[2].toUpperCase();
+      const op = rk[3].toLowerCase();
+      const stub = ns.get(ns.idFromName(code));
+      /* الاستعلام يُنقل كما هو — التوكن فيه، وبدونه ترجع الغرفة ok:false */
+      const fwd = new Request(url.origin + '/' + op + url.search, {
+        method: request.method,
+        headers: { 'Content-Type': 'application/json' },
+        body: request.method === 'POST' ? await request.text() : undefined,
+      });
+      const resp = await stub.fetch(fwd);
+      return withCors(new Response(resp.body, {
+        status: resp.status,
+        headers: { 'Content-Type': 'application/json' },
+      }), origin);
+    }
+
+    const match = url.pathname.match(/^\/(bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
       if (!gameNS) {
         return withCors(new Response(
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
@@ -9070,7 +9551,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v86';
+const WORKER_VERSION = 'v97';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -9082,6 +9563,7 @@ const LOBBY_GAMES = {
   walima:  { name: 'وَليمة',        path: '/walima/' },
   ludo:    { name: 'لودو الخداع', path: '/ludo/' },
   btaqati: { name: 'خمّن من؟',      path: '/btaqati/' },
+  bilyardo:{ name: 'بلياردو',       path: '/bilyardo/' },
 };
 
 /* أسماء كل الألعاب للعرض، لا الأونلاين وحدها: سجل اللاعب يشمل ما لعبه
@@ -9094,7 +9576,287 @@ const GAME_NAMES = {
   throne: 'عرش الذئب', westeros: 'ويستروس', island: 'الجزيرة',
   'blocked-road': 'الطريق المسدود', guest13: 'الضيف الثالث عشر', juraa: 'جرعة',
   sukoon: 'سُكون', ramad: 'رماد', murawagha: 'مُراوَغة', darbah: 'ضربة', snake: 'أفعى نيون',
+  bilyardo: 'بلياردو',
 };
+
+/* ═══════════════════════ البلياردو (BilliardRoom) ═══════════════════════
+   أول غرفة مسبتة في الوركر، وأول غرفة يكون فيها الخادم حَكَمًا حقيقيًا:
+   يستقبل متجه الضربة، يعيد المحاكاة بنفسه بمحرك مطابق للعميل حرفيًا،
+   ويقرر النتيجة. فالفوز يُسجَّل بلا ثغرة من أول يوم — بخلاف لودو التي
+   الخادم فيها مُرحِّل لا يعرف أين البيادق.
+
+   السبات (Hibernation) هنا ليس ترفًا: البلياردو لعبة أدوار، واللاعب
+   يفكّر نصف دقيقة قبل الضربة. غرفة بلا سبات تُحاسَب على هذا الصمت كله.
+   ⚠️ نبضة العميل {"type":"hb"} تُردّ من الرَّنتايم عبر
+   setWebSocketAutoResponse — لو مرّت عبر webSocketMessage لأيقظت الغرفة
+   كل ٢٥ ثانية وضاعت فائدة السبات بالكامل.
+
+   المحرك (Ya7Billiard) معرَّف أعلى هذا الملف، ومستخرج آليًا من
+   bilyardo/index.html بين ENGINE-BEGIN و ENGINE-END. لا تُكتب نسخة
+   ثانية منه بيدك أبدًا — نسختان تتفرّقان مع الوقت وينكسر التزامن.     */
+
+const BIL_MAX = 4;
+
+export class BilliardRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    try {
+      this.state.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"hb-ok"}')
+      );
+    } catch {}
+    this.state.blockConcurrencyWhile(async () => {
+      this.room = (await this.state.storage.get('room')) || null;
+    });
+  }
+
+  /* ── أدوات ── */
+  async persist() {
+    if (!this.room) return;
+    this.room.lastSeen = Date.now();
+    try {
+      await this.state.storage.put('room', this.room);
+      await this.state.storage.setAlarm(Date.now() + ROOM_TTL_MS);
+    } catch {}
+  }
+  async alarm() {
+    const idle = Date.now() - ((this.room && this.room.lastSeen) || 0);
+    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
+      await this.state.storage.deleteAll();
+      this.room = null;
+    } else {
+      try { await this.state.storage.setAlarm(Date.now() + ROOM_TTL_MS); } catch {}
+    }
+  }
+  wsOf(id) {
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() || {};
+      if (a.id === id) return ws;
+    }
+    return null;
+  }
+  send(ws, o) { try { ws.send(JSON.stringify(o)); } catch {} }
+  broadcast(o, exceptId) {
+    const t = JSON.stringify(o);
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() || {};
+      if (exceptId && a.id === exceptId) continue;
+      try { ws.send(t); } catch {}
+    }
+  }
+  seats() {
+    return (this.room.players || []).map((p, i) => ({
+      id: p.id, seat: i, name: p.name, connected: p.connected !== false,
+    }));
+  }
+  pushSeats() {
+    this.broadcast({ type: 'seats', seats: this.seats(), hostId: this.room.hostId });
+  }
+  uniqueName(raw) {
+    let n = String(raw || 'لاعب').trim().slice(0, 14) || 'لاعب';
+    const taken = new Set((this.room.players || []).map(p => p.name));
+    if (!taken.has(n)) return n;
+    for (let i = 2; i < 40; i++) if (!taken.has(n + ' ' + i)) return n + ' ' + i;
+    return n + ' ' + Math.floor(Math.random() * 900 + 100);
+  }
+  newPlayer(name, url) {
+    const p = {
+      id: crypto.randomUUID().slice(0, 8),
+      name: this.uniqueName(name),
+      seatToken: crypto.randomUUID().replace(/-/g, ''),
+      connected: true,
+    };
+    this.noteAccount(url, p);          // acc→did تحقّق منه الراوتر قبلنا
+    return p;
+  }
+
+  /* ── الإنشاء والاتصال ── */
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/create' && request.method === 'POST') {
+      let body = {};
+      try { body = await request.json(); } catch {}
+      // غرفة حيّة بنفس الرمز: لا تُمسح، يولّد الراوتر رمزًا غيره
+      if (this.room && (this.room.players || []).some(p => p.connected !== false)) {
+        return new Response('room-exists', { status: 409 });
+      }
+      const code = String(body.roomCode || '').toUpperCase();
+      this.room = {
+        code, phase: 'lobby', players: [], hostId: '',
+        S: null, seed: 0, lastSeen: Date.now(),
+      };
+      const host = this.newPlayer(body.name, url);
+      this.room.players.push(host);
+      this.room.hostId = host.id;
+      await this.persist();
+      return Response.json({ roomCode: code, seatToken: host.seatToken, id: host.id });
+    }
+
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('expected-websocket', { status: 426 });
+    }
+    if (!this.room || !this.room.code) {
+      return new Response('room-not-found', { status: 404 });
+    }
+
+    const pair = new WebSocketPair();
+    const client = pair[0], server = pair[1];
+    this.state.acceptWebSocket(server);          // سبات، لا accept()
+
+    const token = url.searchParams.get('token') || '';
+    const name = url.searchParams.get('name') || 'لاعب';
+    let me = token ? this.seatByToken(token) : null;
+
+    if (me) {
+      me.connected = true;
+      me.kicked = false;
+      this.noteAccount(url, me);
+    } else {
+      if (this.room.phase !== 'lobby') {
+        this.send(server, { type: 'error', message: 'المباراة بدأت — انتظر الجولة القادمة' });
+        try { server.close(1000, 'started'); } catch {}
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if ((this.room.players || []).length >= BIL_MAX) {
+        this.send(server, { type: 'error', message: 'الغرفة ممتلئة' });
+        try { server.close(1000, 'full'); } catch {}
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      me = this.newPlayer(name, url);
+      this.room.players.push(me);
+      if (!this.room.hostId) this.room.hostId = me.id;
+    }
+
+    server.serializeAttachment({ id: me.id });
+    await this.persist();
+
+    this.send(server, {
+      type: 'welcome',
+      roomCode: this.room.code,          // تلتقطه طبقتا الباركود ولوحة الغرفة
+      seatToken: me.seatToken,
+      id: me.id,
+      seat: this.room.players.indexOf(me),
+      hostId: this.room.hostId,
+      seats: this.seats(),
+      phase: this.room.phase,
+      state: this.room.S || null,
+    });
+    this.pushSeats();
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /* ── الطرد: نسختنا الخاصة، لأن العام يفترض this.sockets خريطة ── */
+  async kickPlayer(targetId) {
+    const list = this.room.players || [];
+    const v = list.filter(p => p.id === targetId)[0];
+    if (!v) return;
+    v.kicked = true; v.connected = false;
+    const ws = this.wsOf(targetId);
+    if (ws) {
+      this.send(ws, { type: 'error', message: 'طردك المضيف من الغرفة' });
+      try { ws.close(1000, 'kicked'); } catch {}
+    }
+    const i = list.indexOf(v);
+    if (i >= 0 && this.room.phase === 'lobby') list.splice(i, 1);
+    await this.persist();
+    this.pushSeats();
+  }
+
+  /* ── الرسائل (نمط السبات) ── */
+  async webSocketMessage(ws, raw) {
+    if (!this.room) return;
+    let m; try { m = JSON.parse(raw); } catch { return; }
+    if (!m || m.type === 'hb') return;            // احتياط لو تعطّل الرد الآلي
+
+    const a = ws.deserializeAttachment() || {};
+    const me = (this.room.players || []).filter(p => p.id === a.id)[0];
+    if (!me) return;
+    if (!this.allowMsg(me.id)) return;
+
+    const isHost = this.room.hostId === me.id;
+    const seat = this.room.players.indexOf(me);
+
+    if (m.type === 'start') {
+      if (!isHost) return this.send(ws, { type: 'error', message: 'المضيف وحده يبدأ' });
+      const n = this.room.players.length;
+      if (n < 2) return this.send(ws, { type: 'error', message: 'نحتاج لاعبَين على الأقل' });
+      this.room.seed = (crypto.getRandomValues(new Uint32Array(1))[0] >>> 0) || 1;
+      this.room.S = Ya7Billiard.newGame({ seed: this.room.seed, players: n });
+      this.room.phase = 'play';
+      await this.persist();
+      this.broadcast({ type: 'start', seed: this.room.seed, players: n, seats: this.seats() });
+      return;
+    }
+
+    if (this.room.phase !== 'play' || !this.room.S) return;
+    const S = this.room.S;
+
+    /* الضربة: هنا يعمل الحَكَم */
+    if (m.type === 'shot') {
+      if (S.turn !== seat) return this.send(ws, { type: 'error', message: 'ليس دورك' });
+      if (S.phase !== 'aim') return this.send(ws, { type: 'error', message: 'انتظر استقرار الكرات' });
+      const vx = +m.vx, vy = +m.vy;
+      if (!isFinite(vx) || !isFinite(vy)) return;
+      if (!Ya7Billiard.beginShot(S, vx, vy)) {
+        return this.send(ws, { type: 'error', message: 'ضربة غير صالحة' });
+      }
+      this.broadcast({ type: 'shot', seat, vx, vy });
+      const res = Ya7Billiard.settle(S);            // ~0.5ms
+      if (res.winner !== null) await this.finish(res);
+      else await this.persist();
+      return;
+    }
+
+    /* وضع الكرة البيضاء بعد خطأ */
+    if (m.type === 'place') {
+      if (S.turn !== seat || S.phase !== 'inhand') return;
+      if (!Ya7Billiard.placeCue(S, +m.x, +m.y)) {
+        return this.send(ws, { type: 'error', message: 'مكان غير صالح' });
+      }
+      Ya7Billiard.endPlacement(S);
+      await this.persist();
+      this.broadcast({ type: 'place', seat, x: S.balls[0].x, y: S.balls[0].y });
+      return;
+    }
+
+    /* بصمة العميل: أي اختلاف يُصلَح بحالة كاملة بدل أن يظهر لاحقًا
+       على شكل «الكرات مختلفة عندي» بلا سبب مفهوم */
+    if (m.type === 'sum') {
+      if ((+m.sum >>> 0) !== Ya7Billiard.checksum(S)) {
+        this.send(ws, { type: 'state', state: S });
+      }
+      return;
+    }
+  }
+
+  async webSocketClose(ws) {
+    if (!this.room) return;
+    const a = ws.deserializeAttachment() || {};
+    const p = (this.room.players || []).filter(q => q.id === a.id)[0];
+    if (p) { p.connected = false; await this.persist(); }
+    this.pushSeats();
+  }
+  async webSocketError(ws) { return this.webSocketClose(ws); }
+
+  /* ── النهاية: هنا يُسجَّل الفوز ── */
+  async finish(res) {
+    this.room.phase = 'over';
+    await this.persist();
+    const winner = this.room.players[res.winner];
+    this.broadcast({
+      type: 'over',
+      seat: res.winner,
+      winner: winner ? winner.name : '',
+      reason: res.why === 'eight-legal' ? 'أنهى مجموعته ثم أدخل السوداء'
+        : res.why === 'eight-early' ? 'السوداء دخلت قبل إنهاء المجموعة'
+          : 'السوداء دخلت مبكرًا',
+    });
+    try { await this.recordResults(winner ? [winner.id] : []); } catch {}
+  }
+}
+applyRoomCommon(BilliardRoom, 'bilyardo');
 
 export class PublicLobby {
   constructor(state, env) {
