@@ -61,6 +61,10 @@ class_name = "ChatRoom"
 name = "KIRM_ROOM"
 class_name = "KirmRoom"
 
+[[durable_objects.bindings]]
+name = "BILLIARD_ROOM"
+class_name = "BilliardRoom"
+
 ## ── قاعدة D1 ──
 [[d1_databases]]
 binding = "DB"
@@ -90,6 +94,12 @@ new_sqlite_classes = ["ChatRoom"]
 [[migrations]]
 tag = "v12"
 new_sqlite_classes = ["KirmRoom"]
+
+# ── جديد في v97: البلياردو ──
+# v12 محجوز للكِيرَم، فالبلياردو تأخذ v13. الوسوم تُضاف فقط ولا تُعدَّل.
+[[migrations]]
+tag = "v13"
+new_sqlite_classes = ["BilliardRoom"]
 
 ## ════════════════════════════════════════════════════════════════
 ##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:
