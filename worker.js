@@ -12,6 +12,8 @@
 
 // ══════════════════════ أعلام ══════════════════════
 const ALLOWED_ORIGINS = [
+  'https://dozplay.com',
+  'https://www.dozplay.com',
   'https://games.playsmart2030.com',
 ];
 
@@ -9642,7 +9644,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v112';
+const WORKER_VERSION = 'v116';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10663,7 +10665,7 @@ const ACC = {
 
 const RESERVED_USERNAMES = [
   'ya7', 'ya7studio', 'ya7game', 'ya7games', 'yaseven', 'ya7official',
-  'playsmart', 'playsmart2030',
+  'playsmart', 'playsmart2030', 'dozplay', 'dozplaygames',
   'admin', 'administrator', 'adm', 'sysadmin', 'root', 'superuser', 'super',
   'owner', 'staff', 'team', 'mod', 'mods', 'moderator', 'moderators',
   'system', 'sys', 'server', 'service', 'services', 'official', 'support',
