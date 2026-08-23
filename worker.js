@@ -1416,7 +1416,7 @@ export class MafiaRoom {
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
     server.addEventListener('message', (evt) => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.broadcastLobby();
@@ -1505,7 +1505,13 @@ export class MafiaRoom {
     }
   }
 
-  async onClose(playerId) {
+  async onClose(playerId, ws) {
+    /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
+       العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
+       إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
+       الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
+    if (ws && this.sockets.get(playerId) !== ws) return;
     const player = this.room.players.find(p => p.id === playerId);
     if (player) player.connected = false;
     this.sockets.delete(playerId);
@@ -3085,7 +3091,7 @@ export class GotRoom {
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.broadcastLobby();
@@ -3151,7 +3157,13 @@ export class GotRoom {
     if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
 
-  async onClose(playerId) {
+  async onClose(playerId, ws) {
+    /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
+       العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
+       إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
+       الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
+    if (ws && this.sockets.get(playerId) !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -4242,7 +4254,7 @@ export class MawwihRoom {
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.broadcastLobby();
@@ -4307,7 +4319,13 @@ export class MawwihRoom {
     if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
 
-  async onClose(playerId) {
+  async onClose(playerId, ws) {
+    /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
+       العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
+       إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
+       الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
+    if (ws && this.sockets.get(playerId) !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -4947,7 +4965,7 @@ export class FatinRoom {
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     if (!player.seatToken) player.seatToken = newSeatToken();
@@ -5062,7 +5080,13 @@ export class FatinRoom {
     }
   }
 
-  async onClose(playerId) {
+  async onClose(playerId, ws) {
+    /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
+       العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
+       إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
+       الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
+    if (ws && this.sockets.get(playerId) !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -5612,7 +5636,7 @@ export class WalimaRoom {
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code, seatToken: player.seatToken });
@@ -5694,7 +5718,13 @@ export class WalimaRoom {
     if (msg.type === 'hostForce' && playerId === this.room.hostId && this.room.phase === 'writing') await this.forceRound();
   }
 
-  async onClose(playerId){
+  async onClose(playerId, ws){
+    /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
+       العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
+       إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
+       الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
+    if (ws && this.sockets.get(playerId) !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -6321,7 +6351,7 @@ export class DaqashRoom {
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.sendPrivate(player.id, {
@@ -6334,7 +6364,13 @@ export class DaqashRoom {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async onClose(playerId) {
+  async onClose(playerId, ws) {
+    /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
+       العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
+       إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
+       الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
+    if (ws && this.sockets.get(playerId) !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -7707,7 +7743,7 @@ export class DakhilRoom {
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.sendPrivate(player.id, {
@@ -7720,7 +7756,13 @@ export class DakhilRoom {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async onClose(playerId) {
+  async onClose(playerId, ws) {
+    /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
+       العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
+       إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
+       الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
+    if (ws && this.sockets.get(playerId) !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -8607,7 +8649,7 @@ export class KirmRoom {
     this.sockets.set(player.id, server);
     this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.sendPrivate(player.id, {
@@ -8618,7 +8660,13 @@ export class KirmRoom {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  async onClose(playerId) {
+  async onClose(playerId, ws) {
+    /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
+       العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
+       إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
+       الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
+    if (ws && this.sockets.get(playerId) !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -9594,7 +9642,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v111';
+const WORKER_VERSION = 'v112';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10226,7 +10274,7 @@ export class BtaqatiRoom {
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code, seatToken: player.seatToken });
@@ -10513,7 +10561,13 @@ export class BtaqatiRoom {
     }
   }
 
-  onClose(playerId) {
+  onClose(playerId, ws) {
+    /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
+       العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
+       إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
+       الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
+    if (ws && this.sockets.get(playerId) !== ws) return;
     const p = this.findPlayer(playerId);
     this.sockets.delete(playerId);
     if (p) p.connected = false;
