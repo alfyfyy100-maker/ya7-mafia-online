@@ -558,9 +558,17 @@ const RoomCommon = {
      ما هو معرَّف في الصنف أصلًا. */
   resumePhase() {},
 
+  /* ── مقعد مطرود لا يُفتح ثانيةً ──
+     كان الطرد أثناء الجولة بلا أثر عمليًا: `applyRoomCommon` تشيل
+     اللاعب من القائمة في اللوبي فقط، وأثناء اللعب تكتفي بـ kicked=true.
+     ولا صنف يفحص العلم عند إعادة الاتصال إلا داقش — فالمطرود يفتح
+     السوكِت بنفس seatToken ويرجع بنفس المقعد والدور خلال ثانية.
+     الفحص هنا مركزي فيغطي كل صنف يستعمل seatByToken المشترك،
+     وتدوير التوكن في /kick يقفل الباب حتى لو وُجد مسار بحث آخر. */
   seatByToken(token) {
     if (!token) return null;
-    return this.room.players.find(p => tokenEquals(p.seatToken, token)) || null;
+    const p = this.room.players.find(q => tokenEquals(q.seatToken, token)) || null;
+    return (p && p.kicked) ? null : p;
   },
 };
 
@@ -810,6 +818,9 @@ function applyRoomCommon(cls, gameKey) {
         } else {
           victim.kicked = true;
           victim.connected = false;
+          /* تدوير التوكن: العلم وحده لا يكفي لو أضاف أحدٌ لاحقًا مسار
+             بحث ثانيًا لا يمرّ على seatByToken. التوكن القديم يموت هنا. */
+          victim.seatToken = 'kicked-' + newSeatToken();
           const sock = this.sockets && this.sockets.get(target);
           if (sock) {
             try { sock.send(JSON.stringify({ type: 'error', message: 'طردك المضيف من الغرفة' })); } catch {}
@@ -5610,9 +5621,11 @@ export class WalimaRoom {
     return new Response(null, { status: 101, webSocket: client });
   }
 
+  /* نسخة وليمة الخاصة — تحتاج نفس حارس المطرود، فهي تحجب المشترك */
   seatByToken(token){
     if (!token) return null;
-    return this.room.players.find(p => p.seatToken === token) || null;
+    const p = this.room.players.find(q => q.seatToken === token) || null;
+    return (p && p.kicked) ? null : p;
   }
   findPlayer(id){ return this.room.players.find(p => p.id === id) || null; }
   async persist(){ await this.state.storage.put('room', this.room); }
@@ -5987,6 +6000,28 @@ function allowLudoOp(ip) {
     while (ludoHits.size > 5000) ludoHits.delete(ludoHits.keys().next().value);
   }
   return r.n <= LUDO_HTTP_LIMIT;
+}
+
+/* لوحة الغرفة (/roster و/kick) كانت المسار الوحيد الذي يوقظ Durable
+   Object بلا أي خنق: ٥٠٠ طلب من عنوان واحد برموز مخترعة = ٥٦٠ كائنًا
+   أُيقظ، كل واحد فاتورة طلب + مدة. خانق مستقل لا يخصم من ميزانية
+   السوكِت: اللوحة تستطلع كل ٤ ثوانٍ (١٥/دقيقة)، فمئة تكفي لعدة تبويبات
+   وتقفل المسح بالتخمين. */
+const ROOM_OP_LIMIT = 100;
+const roomOpHits = new Map();
+function allowRoomOp(ip) {
+  const key = ipKey(ip);
+  if (!key) return true;
+  const now = Date.now();
+  const r = roomOpHits.get(key) || { n: 0, t: now };
+  if (now - r.t > WS_WINDOW_MS) { r.n = 0; r.t = now; }
+  r.n++;
+  roomOpHits.set(key, r);
+  if (roomOpHits.size > 5000) {
+    for (const [k, v] of roomOpHits) if (now - v.t > WS_WINDOW_MS) roomOpHits.delete(k);
+    while (roomOpHits.size > 5000) roomOpHits.delete(roomOpHits.keys().next().value);
+  }
+  return r.n <= ROOM_OP_LIMIT;
 }
 
 /* اللوبي له خانقه: خلطه مع خانق السوكِت كان يخصم من ميزانية اللعب نفسها
@@ -9229,6 +9264,10 @@ export default {
           CHAT_ROOM: !!env.CHAT_ROOM,
           DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
           ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
+          /* sendPush ترجع صامتة تمامًا بلا هذين السرّين — لا خطأ ولا سجل،
+             فالإشعارات تختفي بلا أي شيء يفسّر السبب. وجودها هنا يجعل
+             العطل مرئيًا في نداء واحد. */
+          VAPID_PUBLIC_KEY: !!env.VAPID_PUBLIC_KEY, VAPID_PRIVATE_D: !!env.VAPID_PRIVATE_D,
         },
       }), origin);
     }
@@ -9493,6 +9532,10 @@ export default {
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
           { status: 501 }), origin);
       }
+      /* بلا هذا كان المسار الوحيد الذي يوقظ Durable Object مجانًا */
+      if (!allowRoomOp(request.headers.get('CF-Connecting-IP') || '')) {
+        return withCors(new Response('too-many-requests', { status: 429 }), origin);
+      }
       const code = rk[2].toUpperCase();
       const op = rk[3].toLowerCase();
       const stub = ns.get(ns.idFromName(code));
@@ -9551,7 +9594,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v97';
+const WORKER_VERSION = 'v111';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -9654,7 +9697,12 @@ export class BilliardRoom {
     this.broadcast({ type: 'seats', seats: this.seats(), hostId: this.room.hostId });
   }
   uniqueName(raw) {
-    let n = String(raw || 'لاعب').trim().slice(0, 14) || 'لاعب';
+    /* كانت هذي الغرفة الوحيدة في الوركر التي تخزّن الاسم خامًا:
+       `<svg onload=1>` يمرّ كما هو (١٤ محرفًا بالضبط) ويُبَث في
+       seats/welcome/roster. عميل البلياردو نفسه يرسم بـtextContent
+       فما ظهر ضرر، لكن أي طبقة مشتركة قادمة ترسم بـinnerHTML تنفجر
+       عندها. cleanName هو ثابت الموقع — لا استثناء له. */
+    let n = cleanName(raw);
     const taken = new Set((this.room.players || []).map(p => p.name));
     if (!taken.has(n)) return n;
     for (let i = 2; i < 40; i++) if (!taken.has(n + ' ' + i)) return n + ' ' + i;
@@ -9711,7 +9759,9 @@ export class BilliardRoom {
 
     if (me) {
       me.connected = true;
-      me.kicked = false;
+      /* كان هنا `me.kicked = false` — أي أن المطرود يمسح طرده بنفسه
+         بمجرّد إعادة الاتصال. seatByToken صار يرفض المطرود أصلًا،
+         فما يوصل هنا إلا صاحب مقعد سليم. */
       this.noteAccount(url, me);
     } else {
       if (this.room.phase !== 'lobby') {
@@ -11654,8 +11704,13 @@ async function handleReports(request, env, url) {
   const ip = clientKey(request);
   if (!await rateLimit(env, 'adm:' + ip, 240, 10 * 60 * 1000))
     return Response.json({ ok: false, error: 'rate' }, { status: 429 });
-  if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN)))
+  /* خانق المحاولات الفاشلة — كان في /admin/panel وحده، فصار تخمين
+     نفس التوكن أرخص ٢٤ مرة من هذا الباب. نفس السقف بالضبط. */
+  if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN))) {
+    if (!await rateLimit(env, 'admf:' + ip, 10, 10 * 60 * 1000))
+      return Response.json({ ok: false, error: 'rate' }, { status: 429 });
     return Response.json({ ok: false, error: 'auth' }, { status: 401 });
+  }
 
   const now = Date.now();
 
