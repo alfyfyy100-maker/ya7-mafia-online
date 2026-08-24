@@ -8514,7 +8514,7 @@ export class KirmRoom {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
         players: [], bodies: [], striker: null, traps: [],
-        turn: 0, round: 0, rounds: 3, queenBy: -1, dry: 0,
+        turn: 0, round: 0, rounds: 3, queenBy: -1, dry: 0, promiseHold: 0,
         place: null, promise: 0, msg: '', turnEndsAt: 0,
         opt: { promise: true, traps: true, rounds: 3 },
         lastSeen: Date.now(),
@@ -8600,7 +8600,7 @@ export class KirmRoom {
     return {
       id, name: cleanName(name), seatToken: token || newSeatToken(),
       connected: false, side: 0, color: null,
-      pts: 0, roundPts: 0, due: 0,
+      pts: 0, roundPts: 0, due: 0, potOwn: 0,
     };
   }
 
@@ -8764,12 +8764,12 @@ const KirmLogic = {
     r.round++;
     r.bodies = kirmMakeBodies();
     r.traps = [];
-    r.queenBy = -1;
+    r.queenBy = -1; r.promiseHold = 0;
     r.dry = 0;
     r.promise = 0;
     r.msg = '';
     r.turn = (r.round - 1) % r.players.length;
-    r.players.forEach(p => { p.roundPts = 0; p.due = 0; });
+    r.players.forEach(p => { p.roundPts = 0; p.due = 0; p.potOwn = 0; });
     if (r.opt.traps) {
       r.place = { i: 0, left: KIRM_TRAPS_PER_PLAYER };
       r.phase = 'placing';
@@ -8973,6 +8973,8 @@ const KirmLogic = {
       if (colorMode) { if (b.type === p.color) own++; else opp++; }
       else neutral++;
     }
+    /* كم قطعة من لونه كانت نازلة قبل هذه الضربة — يحكم قانونَي الملكة أدناه */
+    const priorOwn = colorMode ? (p.potOwn || 0) : 0;
     const strikerIn = !r.striker.alive;
     const lines = [];
     let foul = false;
@@ -8980,39 +8982,71 @@ const KirmLogic = {
     if (!contact) { foul = true; lines.push('ما لمست ولا قطعة'); }
     if (colorMode && opp > 0) { foul = true; lines.push('نزّلت من قطع الخصم'); }
 
-    let gained = 0;
-    if (!colorMode) { gained += neutral; if (queen) gained += 3; }
-
     let othersLeft = 0;
     for (const b of r.bodies) if (b.alive && b.type !== 'q') othersLeft++;
 
+    const queenToCenter = () => {
+      const q = r.bodies.find(b => b.type === 'q');
+      if (!q) return;
+      const sp = kirmFreeSpot(r.bodies);
+      q.alive = true; q.x = sp.x; q.y = sp.y; q.vx = q.vy = 0;
+    };
+
+    /* ── الملكة: لا تُنزَّل قبل أول قطعة لك، وترجع للوسط مع الضارب،
+       وأول قطعة لك معها لا تُغطّيها (قانون ٩٧) ── */
+    let queenTaken = false, queenCoveredNow = false;
     if (queen) {
-      r.queenBy = p.id === (this.cur() ? this.cur().id : null) ? r.turn : r.turn;
-      const covered = colorMode ? own > 0 : (neutral > 0 || othersLeft === 0);
-      if (covered) { r.queenBy = -1; lines.push('الملكة نزلت ومُغطّاة'); }
-      else lines.push('الملكة نزلت — غطّها بالضربة الجاية');
+      if (strikerIn) {
+        queenToCenter();
+        lines.push('الملكة نزلت مع الضارب — رجعت للوسط');
+      } else if (colorMode && priorOwn === 0 && own === 0) {
+        queenToCenter();
+        lines.push('ما تنزّل الملكة قبل أول قطعة من لونك — رجعت للوسط');
+      } else {
+        queenTaken = true;
+        r.queenBy = r.turn;
+        const need = (colorMode && priorOwn === 0) ? 2 : 1;
+        const covered = colorMode ? (own >= need) : (neutral > 0 || othersLeft === 0);
+        if (covered) { r.queenBy = -1; queenCoveredNow = true; lines.push('الملكة نزلت ومُغطّاة'); }
+        else lines.push('الملكة نزلت — غطّها بالضربة الجاية');
+      }
     } else if (r.queenBy === r.turn) {
       const cov = colorMode ? own > 0 : (neutral > 0 || othersLeft === 0);
-      if (cov) { r.queenBy = -1; lines.push('غطّيت الملكة'); }
+      if (cov) { r.queenBy = -1; queenCoveredNow = true; lines.push('غطّيت الملكة'); }
       else {
-        const q = r.bodies.find(b => b.type === 'q');
-        if (q) { const sp = kirmFreeSpot(r.bodies); q.alive = true; q.x = sp.x; q.y = sp.y; q.vx = q.vy = 0; }
+        queenToCenter();
         r.queenBy = -1;
-        if (!colorMode) p.roundPts -= 3;
         lines.push('ما غطّيت الملكة — رجعت للوسط');
       }
     }
 
-    let promiseDelta = 0;
-    if (r.opt.promise && r.promise > 0) {
-      const scored = colorMode ? own : (neutral + (queen ? 1 : 0));
-      let okP = false;
-      if (r.promise === 1) { okP = scored >= 1; promiseDelta = okP ? 2 : -1; }
-      else if (r.promise === 2) { okP = scored >= 2; promiseDelta = okP ? 5 : -2; }
-      else if (r.promise === 3) { okP = queen && r.queenBy === -1; promiseDelta = okP ? 6 : -3; }
-      lines.push(okP ? 'وفيت بوعدك' : 'ما وفيت بوعدك');
+    /* في وضع النقاط لا تُحتسب الملكة إلا لحظة تغطيتها */
+    let gained = 0;
+    if (!colorMode) { gained += neutral; if (queenCoveredNow) gained += 3; }
+
+    /* وعد الملكة يُؤجَّل إذا نزلت ولم تُغطَّ بعد */
+    let promiseDelta = 0, promiseLine = '';
+    if (r.opt.promise) {
+      if (r.promise === 3 && queenTaken && !queenCoveredNow) {
+        r.promiseHold = 3;
+        promiseLine = 'وعد الملكة معلّق — غطّها بالضربة الجاية';
+      } else if (r.promiseHold === 3) {
+        const okH = queenCoveredNow;
+        promiseDelta = okH ? 6 : -3;
+        r.promiseHold = 0;
+        promiseLine = okH ? 'وفيت بوعد الملكة' : 'ما وفيت بوعد الملكة';
+      } else if (r.promise > 0) {
+        const scored = colorMode ? own : (neutral + (queenTaken ? 1 : 0));
+        let okP = false;
+        if (r.promise === 1) { okP = scored >= 1; promiseDelta = okP ? 2 : -1; }
+        else if (r.promise === 2) { okP = scored >= 2; promiseDelta = okP ? 5 : -2; }
+        else if (r.promise === 3) { okP = queenCoveredNow; promiseDelta = okP ? 6 : -3; }
+        promiseLine = okP ? 'وفيت بوعدك' : 'ما وفيت بوعدك';
+      }
+      if (promiseLine) lines.push(promiseLine);
     }
     p.roundPts += gained + promiseDelta;
+    if (colorMode) p.potOwn = priorOwn + own;
 
     if (foul) {
       if (this.returnPiece(p)) lines.push('غرامة: رجعت لك قطعة');
@@ -9027,7 +9061,8 @@ const KirmLogic = {
       foul = true;
     }
 
-    const scoredAny = colorMode ? (own > 0 || (queen && r.queenBy === -1)) : (neutral > 0 || queen);
+    /* إنزال الملكة — ولو بلا تغطية — يمنح ضربة تالية */
+    const scoredAny = colorMode ? (own > 0 || queenTaken) : (neutral > 0 || queenTaken);
     const again = scoredAny && !foul;
     r.dry = (own + opp + neutral + (queen ? 1 : 0)) > 0 ? 0 : (r.dry || 0) + 1;
 
@@ -9035,7 +9070,10 @@ const KirmLogic = {
 
     const roundOver = this.checkRoundEnd();
     if (!roundOver) {
-      if (!again) this.nextTurn();
+      if (!again) {
+        if (r.promiseHold === 3) { p.roundPts -= 3; r.promiseHold = 0; }
+        this.nextTurn();
+      }
       r.striker.alive = true;
       this.placeStriker();
       r.promise = 0;
@@ -9644,7 +9682,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v116';
+const WORKER_VERSION = 'v126';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
