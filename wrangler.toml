@@ -65,6 +65,11 @@ class_name = "KirmRoom"
 name = "BILLIARD_ROOM"
 class_name = "BilliardRoom"
 
+# ── جديد: غرفة الشيفرة ──
+[[durable_objects.bindings]]
+name = "SHIFRA_ROOM"
+class_name = "ShifraRoom"
+
 ## ── قاعدة D1 ──
 [[d1_databases]]
 binding = "DB"
@@ -100,6 +105,12 @@ new_sqlite_classes = ["KirmRoom"]
 [[migrations]]
 tag = "v13"
 new_sqlite_classes = ["BilliardRoom"]
+
+# ── جديد: الشيفرة ──
+# الوسوم تُضاف فقط ولا تُعدَّل — تكرار الوسم يرفضه wrangler.
+[[migrations]]
+tag = "v14"
+new_sqlite_classes = ["ShifraRoom"]
 
 ## ════════════════════════════════════════════════════════════════
 ##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:
