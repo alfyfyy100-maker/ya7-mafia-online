@@ -9640,10 +9640,10 @@ export default {
       }), origin);
     }
 
-    const match = url.pathname.match(/^\/(bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : g==='shifra' ? env.SHIFRA_ROOM : env.MAFIA_ROOM;
       if (!gameNS) {
         return withCors(new Response(
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
@@ -9667,7 +9667,7 @@ export default {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، ولودو أونلاين — استوديو يا٧ · /health للفحص',
+      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، لودو، والشيفرة أونلاين — استوديو يا٧ · /health للفحص',
       { status: 200 }), origin);
   },
 };
@@ -12303,3 +12303,429 @@ async function recordResult(env, deviceId, won, game) {
     ).bind(deviceId, won ? 1 : 0, won ? 0 : 1, Date.now()).run();
   } catch {}
 }
+
+// ══════════════════════════════════════════════════════════════════════
+//  الشيفرة — لعبة الكلمات السرية (ShifraRoom)
+//  المسار: /shifra/room/{CODE}/ws   ·   الغرفة تُنشأ تلقائيًا بأول اتصال
+// ══════════════════════════════════════════════════════════════════════
+
+const SHIFRA_POOLS = {
+  "أكلات":["كبسة","مندي","مطازيز","جريش","قرصان","مرقوق","ثريد","هريس","مضغوط","مظبي","سليق","معصوب","فول","تميس","شاورما","سمبوسة","لقيمات","كنافة","بسبوسة","معمول","دبس","تمر","قهوة","شاي","كرك","لبن","جبن","عسل","سمن","بهار","هيل","زعفران","كمون","فلفل","ملح","رز","لحم","دجاج","سمك","روبيان","بيض","خبز","سلطة","شوربة","مخلل","طماطم","بصل","ثوم","ليمون","بطاطس","باذنجان","بامية","خيار","جزر","تفاح","موز","عنب","بطيخ","رمان","مانجو"],
+  "أماكن":["الرياض","جدة","مكة","المدينة","الدمام","أبها","الطائف","تبوك","حائل","نجران","جازان","القصيم","العلا","الأحساء","ينبع","الخبر","البحر","الجبل","الصحراء","الوادي","الشاطئ","المطار","الميناء","السوق","المول","المسجد","المدرسة","المستشفى","الملعب","الحديقة","المزرعة","المصنع","البنك","الفندق","المطعم","المقهى","المكتبة","المتحف","الجسر","النفق","الشارع","الحي","القرية","الجزيرة","الكهف","الغابة","النهر","البحيرة","الشلال","الطريق","المحطة","البرج","القصر","الخيمة","الاستراحة","البيت","السطح","القبو","الحدود","الميدان"],
+  "حياة يومية":["جوال","شاحن","مفتاح","محفظة","نظارة","ساعة","حذاء","شنطة","مكيف","مروحة","ثلاجة","فرن","مكنسة","مرآة","سرير","وسادة","بطانية","كرسي","طاولة","باب","نافذة","ستارة","سجادة","لمبة","شمعة","ولاعة","قلم","دفتر","ورقة","مقص","صمغ","مسمار","مطرقة","حبل","سلم","صندوق","كيس","علبة","زجاجة","كوب","صحن","ملعقة","سكين","منشفة","صابون","مشط","عطر","تلفزيون","ريموت","سماعة","كاميرا","بطارية","سلك","مظلة","دراجة","سيارة","إطار","بنزين","مكتب"],
+  "طبيعة وحيوانات":["جمل","صقر","حصان","غزال","ذئب","أسد","نمر","ثعلب","قط","كلب","فأر","أرنب","حمار","خروف","بقرة","دجاجة","حمامة","بومة","نحلة","نملة","عنكبوت","عقرب","أفعى","ضب","سلحفاة","حوت","قرش","دولفين","أخطبوط","سرطان","نخلة","شجرة","وردة","عشب","صبار","جذر","بذرة","مطر","رعد","برق","غيمة","ضباب","رياح","عاصفة","رمل","صخر","تراب","ماء","نار","ثلج","شمس","قمر","نجمة","سماء","أفق","ظل","موج","جبل","بركان"],
+  "رياضة وترفيه":["كرة","هدف","حكم","بطاقة","ملعب","مدرج","جمهور","كأس","ميدالية","بطولة","دوري","مباراة","شوط","ركلة","تمريرة","حارس","مدافع","مهاجم","مدرب","بديل","سباق","ماراثون","سباحة","تنس","سلة","طائرة","ملاكمة","مصارعة","شطرنج","ورق","نرد","دومينو","بلوت","لغز","جائزة","بطل","خسارة","تعادل","تصفيات","نهائي","لعبة","مقطع","بث","تعليق","إعادة","هدنة","إحماء","تدريب","صافرة","قميص"],
+  "مفردات خليجية":["دلة","فنجال","برّاد","مسند","بشت","شماغ","غترة","عقال","طوفة","حوش","محمس","مبخرة","دخون","مرش","ديرة","مجلس","استراحة","بر","كشتة","طعس","ملحق","هبوب","قايلة","نفود","طريدة","عيال","بزران","ربع","خوي","معرس","قهوجي","سالفة","سواليف","طاري","هرج","قعدة","لمة","دوامية","وناسة","فزعة","نخوة","عزوة","هبال","زين","شين","سنع","طفران","عرضة","هيل","صحن"]
+};
+
+
+/* ============================ Durable Object ============================ */
+export class ShifraRoom {
+  constructor(state) {
+    this.state = state;
+    this.sockets = new Map();       // playerId -> WebSocket
+    this.kicked = new Set();        // معرّفات مطرودة — لا تُقبل إعادة اتصالها
+    this.g = null;                  // حالة اللعبة
+    this.turnTimer = null;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const m = url.pathname.match(/\/room\/([A-Z0-9]{6})\/ws$/i);
+    const code = m ? m[1].toUpperCase() : '';
+    const name = cleanName(url.searchParams.get('name'));
+    let pid = url.searchParams.get('pid') || null;
+
+    if (request.headers.get('Upgrade') !== 'websocket')
+      return new Response('expected websocket', { status: 426 });
+
+    const pair = new WebSocketPair();
+    const ws = pair[1];
+    ws.accept();
+
+    if (!this.g) this.init(code);
+
+    if (pid && this.kicked.has(pid)) {
+      ws.send(JSON.stringify({ t: 'kicked' }));
+      ws.close(1000);
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
+    let p = pid ? this.g.players.find(x => x.id === pid) : null;
+    if (p) {
+      p.connected = true;
+      p.name = name || p.name;
+    } else {
+      if (this.g.phase !== 'lobby' && this.g.phase !== 'end') {
+        ws.send(JSON.stringify({ t: 'err', m: 'الجولة بدأت — انتظر انتهاءها.' }));
+        ws.close(1000);
+        return new Response(null, { status: 101, webSocket: pair[0] });
+      }
+      if (this.g.players.length >= 16) {
+        ws.send(JSON.stringify({ t: 'err', m: 'الغرفة ممتلئة.' }));
+        ws.close(1000);
+        return new Response(null, { status: 101, webSocket: pair[0] });
+      }
+      pid = crypto.randomUUID();
+      p = { id: pid, name, team: null, spymaster: false, connected: true };
+      this.g.players.push(p);
+      if (!this.g.hostId) this.g.hostId = pid;
+    }
+
+    this.sockets.set(pid, ws);
+    ws.send(JSON.stringify({ t: 'you', pid }));
+
+    ws.addEventListener('message', ev => {
+      let m2; try { m2 = JSON.parse(ev.data); } catch { return; }
+      try { this.onMsg(pid, m2); } catch (e) { ws.send(JSON.stringify({ t: 'err', m: String(e.message || e) })); }
+      this.broadcast();
+    });
+    const bye = () => {
+      const q = this.g.players.find(x => x.id === pid);
+      if (q) q.connected = false;
+      this.sockets.delete(pid);
+      if (this.g.phase === 'lobby') this.g.players = this.g.players.filter(x => x.connected);
+      // الاستضافة تنتقل لأقدم لاعب متصل (ترتيب المصفوفة = ترتيب الدخول)
+      const wasHost = this.g.hostId === pid;
+      this.ensureHost();
+      if (wasHost && this.g.hostId) {
+        this.g.log.unshift(`انتقلت الاستضافة إلى ${this.nameOf(this.g.hostId)}`);
+      }
+      this.broadcast();
+    };
+    ws.addEventListener('close', bye);
+    ws.addEventListener('error', bye);
+
+    this.broadcast();
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  init(code) {
+    this.g = {
+      code,
+      hostId: null,
+      players: [],
+      phase: "lobby",
+      settings: { cats: ["أكلات", "حياة يومية"], invadeMode: false, informerMode: false, timerLen: 0 },
+      tokens: { red: false, blue: false }, invading: false,
+      board: [], left: { red: 0, blue: 0 }, turn: "red", first: "red",
+      hint: null, guessesLeft: 0, turnEndsAt: 0,
+      assassinIdx: -1,
+      informers: { red: null, blue: null }, leak: { red: null, blue: null }, leaked: { red: 0, blue: 0 },
+      winner: null, endReason: "", log: []
+    };
+  }
+
+  /* -------------------- الرسائل -------------------- */
+  onMsg(pid, m) {
+    const g = this.g;
+    const me = g.players.find(x => x.id === pid);
+    if (!me) return;
+    const isHost = g.hostId === pid;
+
+    switch (m.t) {
+      case "seat": {
+        if (g.phase !== "lobby") return;
+        me.team = (m.team === "red" || m.team === "blue") ? m.team : null;
+        me.spymaster = !!m.spymaster && !!me.team;
+        if (me.spymaster) {
+          g.players.forEach(p => { if (p !== me && p.team === me.team) p.spymaster = false; });
+        }
+        return;
+      }
+      case "settings": {
+        if (!isHost || g.phase !== "lobby") return;
+        const s = g.settings;
+        if (Array.isArray(m.cats)) s.cats = m.cats.filter(c => SHIFRA_POOLS[c]);
+        if (typeof m.invadeMode === "boolean") s.invadeMode = m.invadeMode;
+        if (typeof m.informerMode === "boolean") s.informerMode = m.informerMode;
+        if ([0, 60, 90, 120].includes(m.timerLen)) s.timerLen = m.timerLen;
+        return;
+      }
+      case "start": {
+        if (!isHost) return;
+        if (g.phase !== "lobby" && g.phase !== "end") return;
+        const err = this.validate();
+        if (err) throw new Error(err);
+        this.newRound();
+        return;
+      }
+      case "invade": {
+        if (g.phase !== "play" || g.hint) return;
+        if (!me.spymaster || me.team !== g.turn) return;
+        if (!g.settings.invadeMode || !g.tokens[me.team]) return;
+        g.invading = !!m.on;
+        return;
+      }
+      case "kick": {
+        if (!isHost) return;
+        if (g.phase !== "lobby" && g.phase !== "end") return;
+        if (m.target === pid) return;                 // لا يطرد نفسه
+        const t = g.players.find(p => p.id === m.target);
+        if (!t) return;
+        g.players = g.players.filter(p => p.id !== m.target);
+        g.log.unshift(`طُرد ${t.name} من الغرفة`);
+        const sock = this.sockets.get(m.target);
+        if (sock) {
+          try { sock.send(JSON.stringify({ t: "kicked" })); sock.close(1000); } catch (e) {}
+          this.sockets.delete(m.target);
+        }
+        this.kicked.add(m.target);
+        this.ensureHost();
+        return;
+      }
+      case "hint": {
+        if (g.phase !== "play" || g.hint) return;
+        if (!me.spymaster || me.team !== g.turn) return;
+        const num = m.num === -1 ? -1 : Math.max(1, Math.min(9, m.num | 0));
+        let text = cleanText(m.text, 40);
+        if (!text) return;
+        if (!g.settings.emojiMode && /\s/.test(text)) text = text.split(/\s+/)[0];
+        g.hint = { text, num };
+        g.guessesLeft = num === -1 ? 99 : num + 1;
+        if (g.invading) {
+          g.tokens[g.turn] = false;
+          g.log.unshift(`الفريق ${shifraAr(g.turn)} أعلن الغزو`);
+        }
+        this.armTimer();
+        return;
+      }
+      case "guess": {
+        if (g.phase !== "play" || !g.hint) return;
+        if (me.spymaster || me.team !== g.turn) return;
+        this.guess(m.i | 0);
+        return;
+      }
+      case "pass": {
+        if (g.phase !== "play" || !g.hint) return;
+        if (me.spymaster || me.team !== g.turn) return;
+        this.endTurn();
+        return;
+      }
+    }
+  }
+
+  // أقدم لاعب متصل يصير مضيفًا إن شغر المكان
+  ensureHost() {
+    const g = this.g;
+    if (g.hostId && g.players.some(p => p.id === g.hostId && p.connected)) return;
+    const nxt = g.players.find(p => p.connected);
+    g.hostId = nxt ? nxt.id : null;
+  }
+
+  validate() {
+    const g = this.g;
+    const R = g.players.filter(p => p.team === "red");
+    const B = g.players.filter(p => p.team === "blue");
+    if (!R.some(p => p.spymaster) || !B.some(p => p.spymaster)) return "كل فريق يحتاج قائدًا.";
+    const need = g.settings.informerMode ? 3 : 2;
+    if (R.length < need || B.length < need)
+      return g.settings.informerMode
+        ? "نمط المخبر يحتاج ٣ لاعبين في كل فريق."
+        : "كل فريق يحتاج لاعبَين على الأقل.";
+    if (g.players.some(p => !p.team)) return "فيه لاعب ما اختار فريقًا.";
+    let total = 0; g.settings.cats.forEach(c => total += SHIFRA_POOLS[c].length);
+    if (total < 25) return "الفئات المختارة ما فيها ٢٥ كلمة.";
+    return null;
+  }
+
+  /* -------------------- الجولة -------------------- */
+  newRound() {
+    const g = this.g;
+    let pool = [];
+    g.settings.cats.forEach(c => pool.push(...SHIFRA_POOLS[c]));
+    pool = shifraShuffle([...new Set(pool)]).slice(0, 25);
+    g.first = Math.random() < .5 ? "red" : "blue";
+    const other = g.first === "red" ? "blue" : "red";
+    const roles = shifraShuffle([
+      ...Array(9).fill(g.first), ...Array(8).fill(other), ...Array(7).fill("neu"), "ass"
+    ]);
+    g.board = pool.map((w, i) => ({ word: w, role: roles[i], open: false, burned: false }));
+    g.assassinIdx = g.board.findIndex(c => c.role === "ass");
+    g.left = { red: g.first === "red" ? 9 : 8, blue: g.first === "blue" ? 9 : 8 };
+    g.turn = g.first;
+    g.hint = null; g.guessesLeft = 0; g.turnEndsAt = 0;
+    g.tokens = { red: g.settings.invadeMode, blue: g.settings.invadeMode };
+    g.invading = false;
+    g.winner = null; g.endReason = "";
+    g.log = [];
+    g.informers = { red: null, blue: null };
+    g.leak = { red: null, blue: null };
+    g.leaked = { red: 0, blue: 0 };
+    if (g.settings.informerMode) {
+      ["red", "blue"].forEach(t => {
+        const agents = g.players.filter(p => p.team === t && !p.spymaster);
+        if (agents.length) g.informers[t] = agents[(Math.random() * agents.length) | 0].id;
+      });
+      this.dealLeak(g.turn);
+    }
+    g.phase = "play";
+    this.clearTimer();
+  }
+
+  // يسحب لمخبر الفريق صاحب الدور كلمة واحدة من كلمات الخصم لم تُفتح بعد
+  dealLeak(team) {
+    const g = this.g;
+    if (!g.settings.informerMode || !g.informers[team]) { g.leak[team] = null; return; }
+    const foe = team === "red" ? "blue" : "red";
+    const pool = g.board.filter(c => c.role === foe && !c.open).map(c => c.word);
+    g.leak[team] = pool.length ? pool[(Math.random() * pool.length) | 0] : null;
+  }
+
+  guess(i) {
+    const g = this.g;
+    const c = g.board[i];
+    if (!c || c.open) return;
+    c.open = true;
+    g.log.unshift(`الفريق ${shifraAr(g.turn)} فتح «${c.word}»`);
+
+    // التسريب: لو كانت هي كلمة المخبر، تُبطل دائمًا.
+    // وتُحتسب له فقط إن أضرّت فريقه — أي في دور عادي لا في دور غزو
+    // (في الغزو فتح كلمة الخصم مكسب للفريق، فتوجيههم إليها ليس تسريبًا).
+    if (g.settings.informerMode && g.leak[g.turn] === c.word) {
+      const foeCard = c.role === (g.turn === "red" ? "blue" : "red");
+      if (foeCard && !g.invading) g.leaked[g.turn]++;
+      g.leak[g.turn] = null;
+    }
+
+    if (c.role === "ass") {
+      this.clearTimer();
+      g.winner = g.turn === "red" ? "blue" : "red";
+      g.endReason = "ass";
+      return this.finish();
+    }
+    const foe = g.turn === "red" ? "blue" : "red";
+
+    if (g.invading) {
+      // دور الغزو: البطاقة تُنسب لغير صاحبها.
+      // البطاقة تختفي من رصيد صاحبها، وتُحسب تقدّمًا لمن نسبها لنفسه —
+      // فينقص العدّادان معًا، وهكذا يبقى رصيد كل فريق مساويًا لما تبقّى له فعلًا.
+      if (c.role === foe || c.role === g.turn) {
+        const gainer = c.role === foe ? g.turn : foe;   // من كسب البطاقة
+        g.left[g.turn]--; g.left[foe]--;
+        if (c.role === g.turn)
+          g.log.unshift(`الغزو ارتد — «${c.word}» راحت للفريق ${shifraAr(foe)}`);
+        // لو نفد رصيد الطرفين بنفس الكشف، يفوز من نُسبت له البطاقة
+        if (g.left[gainer] === 0) {
+          g.winner = gainer;
+          g.endReason = gainer === g.turn ? "clear" : "invade";
+          return this.finish();
+        }
+        const other = gainer === g.turn ? foe : g.turn;
+        if (g.left[other] === 0) {
+          g.winner = other;
+          g.endReason = other === g.turn ? "clear" : "invade";
+          return this.finish();
+        }
+        if (c.role === foe) {                 // كسبها صاحب الدور: يكمل
+          g.guessesLeft--;
+          if (g.guessesLeft <= 0) return this.endTurn();
+          return;
+        }
+        return this.endTurn();                // ارتدّت عليه: ينتهي دوره
+      }
+      return this.endTurn();  // محايدة
+    }
+
+    if (c.role === g.turn) {
+      g.left[g.turn]--; g.guessesLeft--;
+      if (g.left[g.turn] === 0) { g.winner = g.turn; g.endReason = "clear"; return this.finish(); }
+      if (g.guessesLeft <= 0) return this.endTurn();
+      return;
+    }
+    if (c.role === "red" || c.role === "blue") {
+      g.left[c.role]--;
+      if (g.left[c.role] === 0) { g.winner = c.role; g.endReason = "gift"; return this.finish(); }
+    }
+    this.endTurn();
+  }
+
+  endTurn() {
+    const g = this.g;
+    this.clearTimer();
+    g.turn = g.turn === "red" ? "blue" : "red";
+    g.hint = null; g.guessesLeft = 0; g.turnEndsAt = 0;
+    g.invading = false;
+    this.dealLeak(g.turn);
+  }
+
+  finish() {
+    this.clearTimer();
+    this.g.phase = "end";
+  }
+
+  nameOf(id) { const p = this.g.players.find(x => x.id === id); return p ? p.name : "—"; }
+
+  armTimer() {
+    const g = this.g;
+    this.clearTimer();
+    if (!g.settings.timerLen) return;
+    g.turnEndsAt = Date.now() + g.settings.timerLen * 1000;
+    this.turnTimer = setTimeout(() => {
+      if (this.g.phase === "play" && this.g.hint) { this.endTurn(); this.broadcast(); }
+    }, g.settings.timerLen * 1000 + 200);
+  }
+  clearTimer() { if (this.turnTimer) clearTimeout(this.turnTimer); this.turnTimer = null; this.g.turnEndsAt = 0; }
+
+  /* -------------------- البث (كل لاعب يشوف نسخته) -------------------- */
+  viewFor(pid) {
+    const g = this.g;
+    const me = g.players.find(p => p.id === pid);
+    const ended = g.phase === "end";
+    const seesKey = ended || (me && me.spymaster);
+
+    const board = g.board.map(c => ({
+      word: c.word,
+      open: c.open,
+      burned: c.burned,
+      role: (c.open || seesKey) ? c.role : null
+    }));
+
+    const v = {
+      t: "state",
+      code: g.code,
+      phase: g.phase,
+      hostId: g.hostId,
+      settings: g.settings,
+      players: g.players.map(p => ({ id: p.id, name: p.name, team: p.team, spymaster: p.spymaster, connected: p.connected })),
+      board, left: g.left, turn: g.turn, first: g.first,
+      hint: g.hint, guessesLeft: g.guessesLeft, turnEndsAt: g.turnEndsAt,
+      tokens: g.tokens, invading: g.invading,
+      log: g.log.slice(0, 6),
+      winner: g.winner, endReason: g.endReason,
+      me: me ? { id: me.id, name: me.name, team: me.team, spymaster: me.spymaster } : null
+    };
+
+    // سرّ المخبر — الكلمة المسرّبة تُرسل لصاحبها وحده، ودوره فقط
+    if (g.settings.informerMode && me && g.phase !== "lobby") {
+      const amInformer = me.team && g.informers[me.team] === pid;
+      v.informer = {
+        me: amInformer,
+        word: (amInformer && g.turn === me.team) ? g.leak[me.team] : null,
+        leaked: amInformer ? g.leaked[me.team] : null
+      };
+    }
+
+    if (ended) {
+      v.reveal = {
+        assassinWord: g.board[g.assassinIdx] ? g.board[g.assassinIdx].word : "",
+        informers: g.settings.informerMode
+          ? {
+              red: { name: this.nameOf(g.informers.red), leaked: g.leaked.red },
+              blue: { name: this.nameOf(g.informers.blue), leaked: g.leaked.blue }
+            }
+          : null
+      };
+    }
+    return v;
+  }
+
+  broadcast() {
+    for (const [pid, ws] of this.sockets) {
+      try { ws.send(JSON.stringify(this.viewFor(pid))); } catch { this.sockets.delete(pid); }
+    }
+  }
+}
+
+function shifraShuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0;[a[i], a[j]] = [a[j], a[i]]; } return a; }
+function shifraAr(t) { return t === "red" ? "الأحمر" : "الأزرق"; }
