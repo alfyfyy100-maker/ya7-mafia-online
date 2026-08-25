@@ -12419,6 +12419,7 @@ export class ShifraRoom {
   /* -------------------- الرسائل -------------------- */
   onMsg(pid, m) {
     const g = this.g;
+    if (!m || typeof m !== "object") return;   // JSON.parse("null") يمرّ كـnull
     const me = g.players.find(x => x.id === pid);
     if (!me) return;
     const isHost = g.hostId === pid;
