@@ -9691,7 +9691,7 @@ const WORKER_VERSION = 'v131';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
-  baloot:  { name: 'البلوت',       path: '/baloot/' },
+  baloot:  { name: 'بلوت',         path: '/baloot/' },
   kirm:    { name: 'الكِيرَم',      path: '/kirm/' },
   khawana: { name: 'لمن العرش؟',   path: '/khawana/' },
   mawwih:  { name: 'مَوِّه',        path: '/mawwih/' },
@@ -9707,7 +9707,7 @@ const LOBBY_GAMES = {
    بلا نت أيضًا. وهي كذلك قائمة السماح لما يُرسله العميل في /account/played
    فلا تُخزَّن مفاتيح ملفَّقة. */
 const GAME_NAMES = {
-  baloot: 'البلوت',
+  baloot: 'بلوت',
   mafia: 'مافيا', khawana: 'لمن العرش؟', mawwih: 'مَوِّه', daqash: 'داقش',
   dakhil: 'مين الدخيل', walima: 'وَليمة', ludo: 'لودو الخداع', btaqati: 'خمّن من؟',
   fatin: 'فَطِن', liar: 'الكذّاب', kalimat: 'كلمات', fateel: 'فتيل',
