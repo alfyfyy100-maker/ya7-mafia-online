@@ -1,0 +1,140 @@
+## ════════════════════════════════════════════════════════════════
+##  ya7-mafia-online — wrangler.toml  (نسخة v85 كاملة)
+##  ⚠️ لا تحذف ولا تعدّل وسوم الترحيل v8 / v9 / v10 / v11 — الحذف = خطأ 10074
+##  الجديد في v85: ربط KIRM_ROOM + وسم الترحيل v12 (لعبة الكِيرَم أونلاين)
+## ════════════════════════════════════════════════════════════════
+
+name = "ya7-mafia-online"
+main = "worker.js"
+compatibility_date = "2025-05-01"
+
+## ── Durable Objects: اثنتا عشرة ربطة ──
+[[durable_objects.bindings]]
+name = "MAFIA_ROOM"
+class_name = "MafiaRoom"
+
+[[durable_objects.bindings]]
+name = "GOT_ROOM"
+class_name = "GotRoom"
+
+[[durable_objects.bindings]]
+name = "MAWWIH_ROOM"
+class_name = "MawwihRoom"
+
+[[durable_objects.bindings]]
+name = "FATIN_ROOM"
+class_name = "FatinRoom"
+
+[[durable_objects.bindings]]
+name = "WALIMA_ROOM"
+class_name = "WalimaRoom"
+
+[[durable_objects.bindings]]
+name = "DAQASH_ROOM"
+class_name = "DaqashRoom"
+
+[[durable_objects.bindings]]
+name = "LUDO_ROOM"
+class_name = "LudoRoom"
+
+[[durable_objects.bindings]]
+name = "DAKHIL_ROOM"
+class_name = "DakhilRoom"
+
+# ── جديد في v38 ──
+[[durable_objects.bindings]]
+name = "BTAQATI_ROOM"
+class_name = "BtaqatiRoom"
+
+# ── جديد في v42 ──
+[[durable_objects.bindings]]
+name = "PUBLIC_LOBBY"
+class_name = "PublicLobby"
+
+# ── جديد في v56: دردشة الغرف ──
+[[durable_objects.bindings]]
+name = "CHAT_ROOM"
+class_name = "ChatRoom"
+
+# ── جديد في v85: غرفة الكِيرَم ──
+[[durable_objects.bindings]]
+name = "KIRM_ROOM"
+class_name = "KirmRoom"
+
+[[durable_objects.bindings]]
+name = "BILLIARD_ROOM"
+class_name = "BilliardRoom"
+
+# ── جديد: غرفة الشيفرة ──
+[[durable_objects.bindings]]
+name = "SHIFRA_ROOM"
+class_name = "ShifraRoom"
+
+# ── جديد: غرفة البلوت ──
+[[durable_objects.bindings]]
+name = "BALOOT_ROOM"
+class_name = "BalootRoom"
+
+## ── قاعدة D1 ──
+[[d1_databases]]
+binding = "DB"
+database_name = "sukoon-db"
+database_id = "2cf6a580-99e0-41e2-9490-52e30d18fc4e"
+
+## ── الترحيلات: القديمة كما هي بالضبط، والجديد يُضاف في آخرها فقط ──
+[[migrations]]
+tag = "v8"
+new_sqlite_classes = ["WalimaRoom", "LudoRoom"]
+
+[[migrations]]
+tag = "v9"
+new_sqlite_classes = ["BtaqatiRoom"]
+
+[[migrations]]
+tag = "v10"
+new_sqlite_classes = ["PublicLobby"]
+
+# ── جديد في v56 ──
+[[migrations]]
+tag = "v11"
+new_sqlite_classes = ["ChatRoom"]
+
+# ── جديد في v85: الكِيرَم ──
+# v11 محجوز للدردشة عندك، فالكيرم تأخذ v12. تكرار الوسم يرفضه wrangler.
+[[migrations]]
+tag = "v12"
+new_sqlite_classes = ["KirmRoom"]
+
+# ── جديد في v97: البلياردو ──
+# v12 محجوز للكِيرَم، فالبلياردو تأخذ v13. الوسوم تُضاف فقط ولا تُعدَّل.
+[[migrations]]
+tag = "v13"
+new_sqlite_classes = ["BilliardRoom"]
+
+# ── جديد: الشيفرة ──
+# الوسوم تُضاف فقط ولا تُعدَّل — تكرار الوسم يرفضه wrangler.
+[[migrations]]
+tag = "v14"
+new_sqlite_classes = ["ShifraRoom"]
+
+# ── جديد: البلوت ──
+# v14 محجوز للشيفرة، فالبلوت تأخذ v15. الوسوم تُضاف فقط ولا تُعدَّل —
+# تكرار وسم أو تعديله يرفضه wrangler ويفشل النشر كله.
+[[migrations]]
+tag = "v15"
+new_sqlite_classes = ["BalootRoom"]
+
+## ════════════════════════════════════════════════════════════════
+##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:
+##    npx wrangler secret put ACCOUNT_SECRET
+##    npx wrangler secret put ACCOUNT_CODE_KEY
+##    npx wrangler secret put ADMIN_TOKEN          # لوحة البلاغات (v55)
+##    npx wrangler secret put VAPID_PUBLIC_KEY     # إشعارات الويب (v82)
+##    npx wrangler secret put VAPID_PRIVATE_D      # إشعارات الويب (v82)
+##
+##  ⚠️ سرّا VAPID كانا غير موثّقين هنا، والكود يتوقّعهما: بدونهما ترجع
+##     sendPush صامتة بلا خطأ ولا سجل، فتختفي الإشعارات بلا سبب ظاهر.
+##     VAPID_PUBLIC_KEY لازم يطابق VAPID_PUBLIC في account/index.html
+##     حرفًا بحرف — اختلافهما يجعل الاشتراك يُقبل والدفع يُرفض.
+##     صار /health يعرضهما، فافحصه بعد أي نشرة.
+## ════════════════════════════════════════════════════════════════
