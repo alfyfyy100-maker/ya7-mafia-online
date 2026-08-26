@@ -12508,6 +12508,7 @@ Baloot.prototype.startHand = function () {
   this.flip = d[20];
   this.rest = d.slice(21);           /* ١١ ورقة باقية */
   this.bid = null;
+  this.bidLog = [];          /* ماذا قال كل لاعب بالترتيب — اللاعب لازم يشوفه ليعرف متى يعارض */
   this.bidRound = 1;
   this.bidSpoken = 0;
   this.turn = (this.dealer + 1) % 4;
@@ -12536,6 +12537,7 @@ Baloot.prototype.bidAction = function (seat, action) {
     this.bid = { type: 'sun', suit: -1, seat: seat, round: this.bidRound };
     this.bidSpoken = 4;                 /* الصن أعلى شيء: تنتهي المزايدة */
   } else if (t !== 'pass') throw new Error('حركة غير معروفة');
+  this.bidLog.push({ seat: seat, round: this.bidRound, t: t, suit: t === 'hokum' ? (this.bid ? this.bid.suit : null) : null });
 
   this.bidSpoken++;
   this.turn = (this.turn + 1) % 4;
@@ -12560,6 +12562,44 @@ Baloot.prototype._deployRest = function () {
     for (i = 0; i < 3; i++) this.hands[s].push(r.shift());
   }
   this.trump = this.bid.type === 'hokum' ? this.bid.suit : -1;
+  /* المشاريع تُكتشف الآن، لكنها لا تُحسب إلا بإعلان صاحبها — مثل المجلس:
+     اللي ما يقول «مشروع» ما ياخذ شيئًا. */
+  this.found = [0, 1, 2, 3].map(function (s) { return findProjects(this.hands[s], this.bid.type); }, this);
+  this.declared = [null, null, null, null];
+  this.turn = (this.dealer + 1) % 4;
+  this.trick = [];
+  if (this.found.every(function (l) { return !l.length; })) return this._startPlay();
+  this.phase = 'declare';
+  return this;
+};
+
+/* اللاعب يختار أي مشاريعه يعلن: مصفوفة فهارس داخل found[seat]، أو [] لعدم الإعلان */
+Baloot.prototype.declare = function (seat, idx) {
+  if (this.phase !== 'declare') throw new Error('ليس وقت إعلان المشاريع');
+  if (this.declared[seat]) throw new Error('أعلنت من قبل');
+  var mine = this.found[seat] || [], pick = [];
+  (idx || []).forEach(function (i) {
+    i = +i;
+    if (i >= 0 && i < mine.length && pick.indexOf(i) < 0) pick.push(i);
+  });
+  this.declared[seat] = pick;
+  if (this.declared.every(function (d) { return d; })) this._startPlay();
+  return this;
+};
+Baloot.prototype.botDeclare = function (seat) {
+  var n = (this.found[seat] || []).length, a = [];
+  for (var i = 0; i < n; i++) a.push(i);          /* البوت يعلن كل مشاريعه */
+  return a;
+};
+Baloot.prototype.pendingDeclare = function () {
+  var out = [];
+  for (var s = 0; s < 4; s++) if (!this.declared || !this.declared[s]) out.push(s);
+  return out;
+};
+
+Baloot.prototype._startPlay = function () {
+  if (!this.declared) this.declared = [null, null, null, null];
+  for (var s = 0; s < 4; s++) if (!this.declared[s]) this.declared[s] = [];
   this.projects = this._collectProjects();
   this.phase = 'play';
   this.turn = (this.dealer + 1) % 4;
@@ -12569,7 +12609,11 @@ Baloot.prototype._deployRest = function () {
 
 Baloot.prototype._collectProjects = function () {
   var mode = this.bid.type, per = [[], [], [], []], i;
-  for (i = 0; i < 4; i++) per[i] = findProjects(this.hands[i], mode);
+  var found = this.found || [0, 1, 2, 3].map(function (s) { return findProjects(this.hands[s], mode); }, this);
+  for (i = 0; i < 4; i++) {
+    var pickIdx = (this.declared && this.declared[i]) || [];
+    per[i] = pickIdx.map(function (k) { return found[i][k]; }).filter(Boolean);
+  }
   /* المقارنة: أفضل مشروع في كل فريق — الأسبقية للفريق الأقرب لبداية اللعب عند التساوي التام */
   var order = [], st = (this.dealer + 1) % 4;
   for (i = 0; i < 4; i++) order.push((st + i) % 4);
@@ -12822,6 +12866,7 @@ const BAL_BOT_MS = 800;          // مهلة قبل حركة البوت — إي
 const BAL_TURN_MS = 45000;       // مهلة اللاعب المتصل
 const BAL_GONE_MS = 12000;       // مهلة من انقطع اتصاله
 const BAL_END_MS = 30000;        // انتظار «جاهز» بعد نهاية اليد
+const BAL_DECL_MS = 20000;       // مهلة إعلان المشاريع
 const BAL_BOTS = ['عبدالله', 'سعود', 'مشعل', 'تركي'];
 
 export class BalootRoom {
@@ -13024,6 +13069,7 @@ export class BalootRoom {
       score: G.score,
       bid: G.bid,
       bidRound: G.bidRound,
+      bidLog: G.bidLog || [],
       trump: G.trump == null ? -1 : G.trump,
       flip: G.phase === 'bid' ? G.flip : null,
       trick: G.trick || [],
@@ -13034,6 +13080,10 @@ export class BalootRoom {
       lastTrick: R.lastTrick,
       result: G.phase === 'handEnd' || G.phase === 'gameEnd' ? G.result : null,
       projects: G.projects ? (G.projects.per || []).map(l => l.map(p => p.kind)) : null,
+      /* مشاريعك أنت فقط — كشف مشاريع غيرك قبل إعلانها تسريب لأوراقهم */
+      myFound: (G.found && G.found[seat] ? G.found[seat] : []).map(p => ({ kind: p.kind, value: p.value })),
+      declaredMe: (G.declared && G.declared[seat]) || null,
+      waitingDeclare: G.phase === 'declare' ? G.pendingDeclare().length : 0,
       deadline: R.deadline || 0,
       ready: Object.keys(R.ready || {}).length,
     };
@@ -13055,6 +13105,16 @@ export class BalootRoom {
     if (!G) return;
     if (G.phase === 'thrown') { R.tick = Date.now() + 900; return; }
     if (G.phase === 'handEnd') { R.tick = Date.now() + BAL_END_MS; R.deadline = R.tick; return; }
+    if (G.phase === 'declare') {
+      /* البوتات تعلن فورًا؛ ومن بقي من البشر له مهلة، وبعدها تُعلن مشاريعه كاملة
+         (الغياب لا يُعاقَب بضياع مشروعه). */
+      const pend = G.pendingDeclare();
+      const anyHuman = pend.some(sx => { const q = (R.players || [])[sx]; return q && !q.isBot; });
+      if (!anyHuman) { R.tick = Date.now() + BAL_BOT_MS; return; }
+      R.deadline = Date.now() + BAL_DECL_MS;
+      R.tick = R.deadline;
+      return;
+    }
     if (G.phase !== 'bid' && G.phase !== 'play') return;
     const p = (R.players || [])[G.turn];
     if (!p) return;
@@ -13070,6 +13130,16 @@ export class BalootRoom {
     const R = this.room;
 
     if (G.phase === 'thrown') { G.nextHand(); R.ready = {}; R.lastTrick = null; }
+    else if (G.phase === 'declare') {
+      const pend = G.pendingDeclare();
+      const late = !R.deadline || Date.now() >= R.deadline - 60;
+      for (const sx of pend) {
+        const q = (R.players || [])[sx];
+        if (!q) { try { G.declare(sx, G.botDeclare(sx)); } catch {} continue; }
+        if (q.isBot || late) { try { G.declare(sx, G.botDeclare(sx)); } catch {} }
+      }
+      if (G.phase === 'declare') { this.schedule(G); await this.persist(); return; }
+    }
     else if (G.phase === 'handEnd') { this.advance(G); }
     else if (G.phase === 'bid' || G.phase === 'play') {
       const seat = G.turn, p = (R.players || [])[seat];
@@ -13183,6 +13253,11 @@ export class BalootRoom {
       if (!(card >= 0 && card <= 31)) return;
       try { this.applyPlay(G, seat, card); }
       catch (e) { return this.send(ws, { type: 'error', message: 'ورقة غير قانونية' }); }
+    } else if (m.type === 'declare') {
+      if (G.phase !== 'declare') return;
+      const raw = Array.isArray(m.idx) ? m.idx.slice(0, 8).map(Number).filter(n => Number.isInteger(n) && n >= 0 && n < 8) : [];
+      try { G.declare(seat, raw); }
+      catch (e) { return this.send(ws, { type: 'error', message: String(e.message || 'تعذّر الإعلان') }); }
     } else if (m.type === 'ready') {
       if (G.phase !== 'handEnd') return;
       this.room.ready[me.id] = 1;
