@@ -70,6 +70,11 @@ class_name = "BilliardRoom"
 name = "SHIFRA_ROOM"
 class_name = "ShifraRoom"
 
+# ── جديد: غرفة البلوت ──
+[[durable_objects.bindings]]
+name = "BALOOT_ROOM"
+class_name = "BalootRoom"
+
 ## ── قاعدة D1 ──
 [[d1_databases]]
 binding = "DB"
@@ -111,6 +116,13 @@ new_sqlite_classes = ["BilliardRoom"]
 [[migrations]]
 tag = "v14"
 new_sqlite_classes = ["ShifraRoom"]
+
+# ── جديد: البلوت ──
+# v14 محجوز للشيفرة، فالبلوت تأخذ v15. الوسوم تُضاف فقط ولا تُعدَّل —
+# تكرار وسم أو تعديله يرفضه wrangler ويفشل النشر كله.
+[[migrations]]
+tag = "v15"
+new_sqlite_classes = ["BalootRoom"]
 
 ## ════════════════════════════════════════════════════════════════
 ##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:
