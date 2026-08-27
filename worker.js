@@ -13079,7 +13079,7 @@ export class BalootRoom {
       tricks: (G.tricks || []).length,
       lastTrick: R.lastTrick,
       result: G.phase === 'handEnd' || G.phase === 'gameEnd' ? G.result : null,
-      projects: G.projects ? (G.projects.per || []).map(l => l.map(p => p.kind)) : null,
+      projects: G.projects ? (G.projects.per || []).map(l => l.map(p => ({ kind: p.kind, cards: p.cards || [] }))) : null,
       /* مشاريعك أنت فقط — كشف مشاريع غيرك قبل إعلانها تسريب لأوراقهم */
       myFound: (G.found && G.found[seat] ? G.found[seat] : []).map(p => ({ kind: p.kind, value: p.value })),
       declaredMe: (G.declared && G.declared[seat]) || null,
