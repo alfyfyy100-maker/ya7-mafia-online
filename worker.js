@@ -722,6 +722,10 @@ function roomNS(env, g) {
     case 'walima':   return env.WALIMA_ROOM;
     case 'dakhil':   return env.DAKHIL_ROOM;
     case 'bilyardo': return env.BILLIARD_ROOM;
+    /* الشفرة لا تمرّ من هنا اليوم (مسارها ws فقط، والطرد داخل اللعبة)،
+       لكن السقوط الافتراضي على مافيا يعني أن أي مسار مشترك يُضاف لاحقًا
+       سيصيب الغرفة الخطأ بصمت بدل أن يفشل بوضوح. */
+    case 'shifra':   return env.SHIFRA_ROOM;
     default:         return env.MAFIA_ROOM;
   }
 }
@@ -6078,6 +6082,64 @@ function allowLobbyOp(ip) {
   return r.n <= LOBBY_OP_LIMIT;
 }
 
+/* ═══════════ خانق الحساب في الذاكرة — أمام D1 لا بعدها (v145) ═══════════
+   `rateLimit` تعتمد على D1 وتكتب **قبل** ما تقارن: INSERT ثم SELECT ثم
+   القرار. فالطلب المرفوض يكلّف كتابة وقراءة تمامًا مثل المقبول — أي أن
+   الخانق يوقف المنطق ولا يوقف الفاتورة. ومسار /account/check وحده فيه
+   خانقان (IP + عالمي) = أربع عمليات D1 لكل طلب، وسقفه العالمي ٣٠٠٠ في
+   الدقيقة، فحلقة واحدة تلتهم حصة D1 اليومية وهي «مرفوضة» طول الوقت.
+
+   هذا الخانق في ذاكرة العامل: المكرّر يُردّ بصفر عمليات قاعدة بيانات.
+   وهو حارس دفقات لا سياسة — السياسة تبقى في D1 لأنها وحدها تعبر كل
+   العُقَد. لذلك السقف واسع عمدًا: شبكات الجوال هنا خلف NAT مشترك،
+   ومئات المشتركين قد يخرجون من عنوان IPv4 واحد. الهجوم يكون بالآلاف
+   في الدقيقة فيسقط، واستعمال طبيعي مزدحم يمرّ.
+
+   طبقتان: سقف عام لكل مسارات الحساب، وسقف أضيق للمسارات التي لا تطلب
+   توكنًا (check/register/recover) — وهي التي يناديها اللاعب الحقيقي
+   مرات معدودة في عمره، بينما هي بالضبط ما يقصده المهاجم. */
+const ACC_BURST_LIMIT = 300;        // أي مسار حساب، لكل بادئة، في الدقيقة
+const ACC_ANON_LIMIT  = 60;         // المسارات المفتوحة بلا توكن
+const accBurstHits = new Map();
+const accAnonHits = new Map();
+
+function memHit(map, ip, limit) {
+  const key = ipKey(ip);
+  if (!key) return true;
+  const now = Date.now();
+  const r = map.get(key) || { n: 0, t: now };
+  if (now - r.t > WS_WINDOW_MS) { r.n = 0; r.t = now; }
+  r.n++;
+  map.set(key, r);
+  if (map.size > 5000) {
+    for (const [k, v] of map) if (now - v.t > WS_WINDOW_MS) map.delete(k);
+    while (map.size > 5000) map.delete(map.keys().next().value);
+  }
+  return r.n <= limit;
+}
+
+function allowAccountBurst(ip) { return memHit(accBurstHits, ip, ACC_BURST_LIMIT); }
+function allowAccountAnon(ip)  { return memHit(accAnonHits,  ip, ACC_ANON_LIMIT); }
+
+/* اللوحة الإدارية لها خريطتها: لولا ذلك لأمكن أن يقفل سيلٌ على
+   /account/* الطريقَ أمام المشرف وقت ما يحتاج اللوحة بالضبط.
+   مئة وعشرون في الدقيقة تكفي لوحةً تُطلق نداءً لكل تبويب، وتخنق التخمين. */
+const admHits = new Map();
+function allowAdminBurst(ip) { return memHit(admHits, ip, 120); }
+
+/* ═══════════ حارس حجم الجسم لمسارات الغرف (v145) ═══════════
+   `readBody` تقصّ عند ٤ كيلوبايت، لكن مسارات الحساب وحدها تستعملها؛
+   غرف الألعاب تنادي request.json()/text() مباشرة بلا أي سقف. الإنشاء
+   محميّ بالخانق قبل القراءة، لكن مسار حركات لودو يسمح ٤٠٠ طلب/دقيقة
+   لكل بادئة وكل واحد بجسم بأي حجم.
+   ثمانية كيلوبايت سخيّة: أكبر جسم حقيقي هنا {name, public, note} —
+   ودَكّات «خمّن من؟» الكبيرة تمرّ على السوكِت لا على HTTP. */
+const ROOM_BODY_MAX = 8192;
+function bodyTooBig(request) {
+  const n = Number(request.headers.get('Content-Length') || 0);
+  return isFinite(n) && n > ROOM_BODY_MAX;
+}
+
 /* كان العدّاد يزيد **قبل** المقارنة، فكل محاولة مرفوضة تُحسب هي كمان —
    واللاعب اللي يعيد المحاولة يعمّق الحفرة على نفسه بلا ما يدري. الآن
    فصلنا الفحص عن العدّ: allowCreate يفحص فقط، وnoteCreate تُنادى بعد
@@ -9495,6 +9557,15 @@ export default {
       return handleAccount(request, env, url, ctx);
     }
 
+    /* ── سقف حجم الجسم لكل مسارات الغرف ──
+       مسارات الحساب تمرّ على readBody (٤ كيلوبايت)، أما الغرف فتنادي
+       request.json()/text() مباشرة. مسار حركات لودو وحده يسمح ٤٠٠
+       طلب/دقيقة لكل بادئة، فجسم ضخم في كل واحد يعني نقلًا ومعالجةً بلا
+       سقف. هنا قبل أي قراءة أو توجيه — الردّ يخرج بلا لمس الجسم أصلًا. */
+    if (request.method === 'POST' && /\/room\//.test(url.pathname) && bodyTooBig(request)) {
+      return withCors(new Response('body-too-large', { status: 413 }), origin);
+    }
+
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
     // حتى الانضمام لاحقًا بنفس الكود يوصل لنفس الغرفة دائمًا
     // ── لودو: HTTP بدل WebSocket ──
@@ -9687,7 +9758,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v131';
+const WORKER_VERSION = 'v145';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -9710,6 +9781,7 @@ const GAME_NAMES = {
   baloot: 'بلوت',
   mafia: 'مافيا', khawana: 'لمن العرش؟', mawwih: 'مَوِّه', daqash: 'داقش',
   dakhil: 'مين الدخيل', walima: 'وَليمة', ludo: 'لودو الخداع', btaqati: 'خمّن من؟',
+  kirm: 'الكِيرَم', shifra: 'الشفرة',
   fatin: 'فَطِن', liar: 'الكذّاب', kalimat: 'كلمات', fateel: 'فتيل',
   throne: 'عرش الذئب', westeros: 'ويستروس', island: 'الجزيرة',
   'blocked-road': 'الطريق المسدود', guest13: 'الضيف الثالث عشر', juraa: 'جرعة',
@@ -10992,6 +11064,11 @@ async function rateLimit(env, key, limit, windowMs, failClosed = false) {
     return !row || row.n <= limit;
   } catch { return !failClosed; }
 }
+/* failClosed: المسارات التي **تكتب صفًّا دائمًا** (تسجيل، بلاغ، اشتراك
+   إشعارات، طلب صداقة، دعوة، استرجاع) تفشل مقفلة — لأن الفشل المفتوح
+   يرفع كل الحدود في اللحظة التي تكون فيها D1 متعثّرة أصلًا، أي أسوأ
+   لحظة ممكنة. مسارات القراءة والاستطلاع تبقى مفتوحة عمدًا: قفلها يعني
+   أن تعثّرًا عابرًا في القاعدة يعطّل صفحة الحساب على الجميع. */
 
 function clientKey(request) {
   const ip = request.headers.get('CF-Connecting-IP') || '';
@@ -11149,6 +11226,15 @@ async function handleAccountInner(request, env, url, ctx) {
 
   const path = url.pathname.slice('/account/'.length).replace(/\/+$/, '');
   const ip = clientKey(request);
+
+  /* ── الخانق في الذاكرة أولًا ──
+     قبل readBody وقبل maybeCleanup وقبل أي نداء لـ rateLimit: الهدف كله
+     أن الطلب المكرّر لا يلمس D1 إطلاقًا. الترتيب هنا هو الميزة نفسها —
+     أي سطر يمسّ القاعدة فوق هذا الفحص يُلغيه. */
+  if (!allowAccountBurst(ip)) return fail(request, 'rate');
+  const OPEN_PATHS = new Set(['check', 'register', 'recover']);
+  if (OPEN_PATHS.has(path) && !allowAccountAnon(ip)) return fail(request, 'rate');
+
   const now = Date.now();
   await maybeCleanup(env, ctx);
 
@@ -11172,7 +11258,14 @@ async function handleAccountInner(request, env, url, ctx) {
 
   /* ---------- إنشاء حساب: هوية + يوزر + رمز استرجاع في خطوة واحدة ---------- */
   if (path === 'register') {
-    if (!await rateLimit(env, 'reg:' + ip, 6, 60 * 60 * 1000))
+    /* حدّ الـIP وحده لا يكفي: بادئة /64 تُبدَّل، وشبكة عناوين موزّعة
+       تنفخ جدول players بلا سقف. check وrecover عندهما سقف عالمي من
+       قبل — والتسجيل، وهو المسار الوحيد الذي يخلق صفًّا دائمًا، كان
+       بلا واحد. ومقفلٌ عند الفشل: لو تعثّرت D1 فالإدراج نفسه سيفشل
+       بعد سطور، فالمرور هنا يعني عمل ضائع في أسوأ لحظة. */
+    if (!await rateLimit(env, 'reg:' + ip, 6, 60 * 60 * 1000, true))
+      return fail(request, 'rate');
+    if (!await rateLimit(env, 'reg:global', 300, 60 * 60 * 1000, true))
       return fail(request, 'rate');
 
     const v = await checkUsername(env, body.username);
@@ -11378,7 +11471,7 @@ async function handleAccountInner(request, env, url, ctx) {
   if (path === 'contact') {
     const me = await authFromBody(env, body);
     if (!me) return fail(request, 'auth');
-    if (!await rateLimit(env, 'cont:' + me.device_id, 10, 60 * 60 * 1000))
+    if (!await rateLimit(env, 'cont:' + me.device_id, 10, 60 * 60 * 1000, true))
       return fail(request, 'rate');
 
     const c = String(body.contact || '').trim().slice(0, 120);
@@ -11458,7 +11551,7 @@ async function handleAccountInner(request, env, url, ctx) {
     const auth = String((s.keys || {}).auth || '');
     if (!/^https:\/\//.test(endpoint) || !p256dh || !auth)
       return fail(request, 'bad-sub');
-    if (!await rateLimit(env, 'push:' + me.device_id, 10, 60 * 60 * 1000))
+    if (!await rateLimit(env, 'push:' + me.device_id, 10, 60 * 60 * 1000, true))
       return fail(request, 'rate');
     try {
       await env.DB.prepare(
@@ -11485,7 +11578,7 @@ async function handleAccountInner(request, env, url, ctx) {
   if (path === 'friends/add') {
     const me = await authFromBody(env, body);
     if (!me) return fail(request, 'auth');
-    if (!await rateLimit(env, 'fra:' + me.device_id, 20, 60 * 60 * 1000))
+    if (!await rateLimit(env, 'fra:' + me.device_id, 20, 60 * 60 * 1000, true))
       return fail(request, 'rate', 'طلبات كثيرة، جرّب بعد شوي');
 
     const norm = lookupNorm(body.username);
@@ -11609,7 +11702,7 @@ async function handleAccountInner(request, env, url, ctx) {
   if (path === 'invites/send') {
     const me = await authFromBody(env, body);
     if (!me) return fail(request, 'auth');
-    if (!await rateLimit(env, 'invs:' + me.device_id, 40, 60 * 60 * 1000))
+    if (!await rateLimit(env, 'invs:' + me.device_id, 40, 60 * 60 * 1000, true))
       return fail(request, 'rate', 'دعوات كثيرة، جرّب بعد شوي');
 
     const game = String(body.game || '').toLowerCase();
@@ -11673,7 +11766,7 @@ async function handleAccountInner(request, env, url, ctx) {
     const me = await authFromBody(env, body);
     if (!me) return fail(request, 'auth');
     /* سقف يومي: البلاغ سلاح، وبلا حدّ يصير أداة مضايقة بنفسه */
-    if (!await rateLimit(env, 'rep:' + me.device_id, 10, 24 * 60 * 60 * 1000))
+    if (!await rateLimit(env, 'rep:' + me.device_id, 10, 24 * 60 * 60 * 1000, true))
       return fail(request, 'rate', 'بلاغات كثيرة اليوم، جرّب بكرة');
 
     const reason = String(body.reason || '');
@@ -11818,6 +11911,9 @@ function withAnyCors(res) {
 async function handleReports(request, env, url) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
   if (request.method !== 'POST') return new Response('method', { status: 405 });
+  /* قبل D1: تخمين التوكن كان يكلّف كتابةً في rate_limits لكل محاولة */
+  if (!allowAdminBurst(request.headers.get('CF-Connecting-IP') || ''))
+    return Response.json({ ok: false, error: 'rate' }, { status: 429 });
   if (!env.DB || !env.ADMIN_TOKEN) return Response.json({ ok: false, error: 'binding-missing' });
 
   const body = await readBody(request);
@@ -11830,7 +11926,7 @@ async function handleReports(request, env, url) {
   /* خانق المحاولات الفاشلة — كان في /admin/panel وحده، فصار تخمين
      نفس التوكن أرخص ٢٤ مرة من هذا الباب. نفس السقف بالضبط. */
   if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN))) {
-    if (!await rateLimit(env, 'admf:' + ip, 10, 10 * 60 * 1000))
+    if (!await rateLimit(env, 'admf:' + ip, 10, 10 * 60 * 1000, true))
       return Response.json({ ok: false, error: 'rate' }, { status: 429 });
     return Response.json({ ok: false, error: 'auth' }, { status: 401 });
   }
@@ -11893,6 +11989,8 @@ async function handleReports(request, env, url) {
 async function handleAdminPanel(request, env, url) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
   if (request.method !== 'POST') return new Response('method', { status: 405 });
+  if (!allowAdminBurst(request.headers.get('CF-Connecting-IP') || ''))
+    return Response.json({ ok: false, error: 'rate' }, { status: 429 });
   if (!env.DB || !env.ADMIN_TOKEN) return Response.json({ ok: false, error: 'binding-missing' });
 
   const body = await readBody(request);
@@ -11905,7 +12003,7 @@ async function handleAdminPanel(request, env, url) {
   if (!await rateLimit(env, 'adm:' + ip, 240, 10 * 60 * 1000))
     return Response.json({ ok: false, error: 'rate' }, { status: 429 });
   if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN))) {
-    if (!await rateLimit(env, 'admf:' + ip, 10, 10 * 60 * 1000))
+    if (!await rateLimit(env, 'admf:' + ip, 10, 10 * 60 * 1000, true))
       return Response.json({ ok: false, error: 'rate' }, { status: 429 });
     return Response.json({ ok: false, error: 'auth' }, { status: 401 });
   }
@@ -13299,12 +13397,41 @@ applyRoomCommon(BalootRoom, 'baloot');
 
 /* ============================ Durable Object ============================ */
 export class ShifraRoom {
-  constructor(state) {
+  /* env كان ناقصًا: بدونه لا DB ولا تسجيل نتائج. الشفرة لا تمرّ على
+     applyRoomCommon لأن حالتها في this.g لا this.room، فالمشترَك كله
+     (recordResults/touchRoom/alarm) يفترض شكلًا مختلفًا. ما تحتاجه
+     منه مكتوب هنا صراحةً بدل خلط الشكلين. */
+  constructor(state, env) {
     this.state = state;
+    this.env = env;
+    this.GAME = 'shifra';
     this.sockets = new Map();       // playerId -> WebSocket
     this.kicked = new Set();        // معرّفات مطرودة — لا تُقبل إعادة اتصالها
     this.g = null;                  // حالة اللعبة
     this.turnTimer = null;
+    this._rate = new Map();         // خنق الرسائل لكل لاعب
+  }
+
+  /* خنق الرسائل — نسخة RoomCommon.allowMsg نفسها (لا تعتمد على this.room) */
+  allowMsg(playerId) {
+    const now = Date.now();
+    const r = this._rate.get(playerId) || { n: 0, t: now };
+    if (now - r.t > 1000) { r.n = 0; r.t = now; }
+    r.n++;
+    this._rate.set(playerId, r);
+    return r.n <= MSG_PER_SEC;
+  }
+
+  /* تسجيل نتيجة المباراة: الفريق الفائز يقرره الخادم من مجريات اللعب.
+     من يلعب بلا حساب يُتجاوز، وكل حساب يُحسب مرة واحدة. */
+  async recordShifra() {
+    if (!this.env || !this.env.DB || !this.g || !this.g.winner) return;
+    const done = new Set();
+    for (const p of this.g.players) {
+      if (!p || !p.did || done.has(p.did)) continue;
+      done.add(p.did);
+      try { await recordResult(this.env, p.did, p.team === this.g.winner, this.GAME); } catch {}
+    }
   }
 
   async fetch(request) {
@@ -13313,6 +13440,9 @@ export class ShifraRoom {
     const code = m ? m[1].toUpperCase() : '';
     const name = cleanName(url.searchParams.get('name'));
     let pid = url.searchParams.get('pid') || null;
+    const tok = url.searchParams.get('tok') || '';
+    /* الراوتر تحقّق من توكن الحساب واستبدله بـ did موثوق قبل أن يصل هنا */
+    const did = url.searchParams.get('did') || '';
 
     if (request.headers.get('Upgrade') !== 'websocket')
       return new Response('expected websocket', { status: 426 });
@@ -13329,10 +13459,17 @@ export class ShifraRoom {
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
 
-    let p = pid ? this.g.players.find(x => x.id === pid) : null;
+    /* ── العودة لمقعد قائم ──
+       المعرّف وحده لا يكفي: الحالة المبثوثة تحمل معرّفات كل اللاعبين،
+       فمن يقرأها يعرف معرّف سيّد شفرة الخصم ويعود باسمه فيستلم نسخته
+       من اللوح — أي مفاتيح الكلمات كاملة. التوكن سرّي لا يُبثّ إطلاقًا.
+       ومن جاء بتوكن لا يطابق يُعامَل لاعبًا جديدًا، لا يُطرد: العميل
+       القديم قبل هذي النسخة لا يملك توكنًا أصلًا. */
+    let p = (pid && tok) ? this.g.players.find(x => x.id === pid && x.tok && x.tok === tok) : null;
     if (p) {
       p.connected = true;
       p.name = name || p.name;
+      if (did) p.did = String(did).slice(0, 64);
     } else {
       if (this.g.phase !== 'lobby' && this.g.phase !== 'end') {
         ws.send(JSON.stringify({ t: 'err', m: 'الجولة بدأت — انتظر انتهاءها.' }));
@@ -13345,16 +13482,24 @@ export class ShifraRoom {
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
       pid = crypto.randomUUID();
-      p = { id: pid, name, team: null, spymaster: false, connected: true };
+      p = {
+        id: pid, name, team: null, spymaster: false, connected: true,
+        tok: crypto.randomUUID().replace(/-/g, ''),
+        did: did ? String(did).slice(0, 64) : null,
+      };
       this.g.players.push(p);
       if (!this.g.hostId) this.g.hostId = pid;
     }
 
     this.sockets.set(pid, ws);
-    ws.send(JSON.stringify({ t: 'you', pid }));
+    ws.send(JSON.stringify({ t: 'you', pid, tok: p.tok }));
 
     ws.addEventListener('message', ev => {
       let m2; try { m2 = JSON.parse(ev.data); } catch { return; }
+      /* النبضة لا تُعالَج ولا تُبَثّ: بثّ الحالة كاملة لكل لاعب كل ٢٥
+         ثانية لكل لاعب هو ما كنا نتفاداه أصلًا بجعل النوع hb لا ping. */
+      if (m2 && m2.t === 'hb') return;
+      if (!this.allowMsg(pid)) return;
       try { this.onMsg(pid, m2); } catch (e) { ws.send(JSON.stringify({ t: 'err', m: String(e.message || e) })); }
       this.broadcast();
     });
@@ -13631,6 +13776,10 @@ export class ShifraRoom {
   finish() {
     this.clearTimer();
     this.g.phase = "end";
+    /* لا ننتظرها: البثّ يمشي فورًا والكتابة تكمل في الخلفية */
+    this.state.waitUntil
+      ? this.state.waitUntil(this.recordShifra())
+      : this.recordShifra().catch(() => {});
   }
 
   nameOf(id) { const p = this.g.players.find(x => x.id === id); return p ? p.name : "—"; }
