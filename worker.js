@@ -5410,7 +5410,67 @@ const WL_SCENES = [
     "crime": "عُثر على تهديدٍ مكتوبٍ تحت طبقِ أحدِهم.",
     "detail": "الورقةُ كُتبت بخطٍّ مُتعمَّدِ التغيير، وطُويت بعنايةٍ ووُضعت تحتَ الطبقِ قبل الجلوسِ بقليل — أي أثناءَ ترتيبِ المائدةِ تحديداً.",
     "confession": "أنتَ من كتب التهديد. كتبتَه بيدِك اليسرى ليتغيّرَ خطُّك، وطويتَه ودسستَه تحت الطبقِ حين تطوّعتَ بترتيبِ المائدة. تقصدُ صاحبَ الطبقِ تحديداً — رسالةٌ يفهمها هو وحدَه، وقد فهمها."
-  }
+  },
+  {
+    "occ": "ليلةُ الحنّاء",
+    "crime": "اختفى صندوقُ النقوطِ من غرفةِ العروس.",
+    "detail": "الصندوقُ كان تحتَ الطاولةِ في الغرفةِ الداخليّة، ولم يدخلها إلا من له عذرٌ يدخلُ به. اختفى بين رقصتين، والبابُ لم يُكسَر — أي أنّ الفاعلَ دخل ومعه سببٌ يقوله لو سُئل.",
+    "confession": "أنتَ من أخذ الصندوق. دخلتَ بحجّةِ إحضارِ شالِ العروس، أفرغتَ ما فيه في حقيبتِك وأعدتَ الصندوقَ فارغاً تحتَ الطاولةِ ليتأخّرَ اكتشافُه. الحقيبةُ ما زالت في سيّارتِك، ومفتاحُها معك الآن.",
+  },
+  {
+    "occ": "فطورُ العيد",
+    "crime": "نُشرت صورةٌ عائليّةٌ خاصّةٌ في مجموعةٍ عامّة.",
+    "detail": "الصورةُ من داخلِ البيتِ ولم تُرسل لأحدٍ خارجَ العائلة. رُفعت في السادسةِ صباحاً — قبل أن يستيقظَ أكثرُ الحاضرين — من جهازٍ متّصلٍ بشبكةِ البيت.",
+    "confession": "أنتَ من نشرها. أخذتَها من هاتفِ أخيك حين تركه يشحن في المجلس، ورفعتَها من حسابٍ ثانٍ لا يعرفه أحد. أردتَ أن تُحرِجَ من في الصورةِ تحديداً — وقد حصل. امسحِ الحسابَ لاحقاً، لكن ليس الآن.",
+  },
+  {
+    "occ": "غداءُ التخرّج",
+    "crime": "تبيّن أنّ خطابَ توصيةٍ في ملفِّ المتخرّجِ مكتوبٌ بتوقيعٍ مقلَّد.",
+    "detail": "الخطابُ طُبع من طابعةِ البيتِ نفسِها، والتوقيعُ منقولٌ عن ورقةٍ قديمةٍ في دُرجِ المكتب. من فعلها يعرف أينَ تُحفظ الأوراقُ الرسميّة.",
+    "confession": "أنتَ من قلّد التوقيع. نقلتَه من عقدٍ قديمٍ في الدُّرجِ الأسفل، وطبعتَ الخطابَ ليلةَ الأربعاء حين نام البيت. فعلتَها لتُنقِذَ الملفَّ من التأخير — نيّتُك عندك سليمة، لكنّ ما فعلتَه تزوير، وأنتَ تعرف ذلك.",
+  },
+  {
+    "occ": "كَشتةُ نهايةِ الأسبوع",
+    "crime": "عُطِّلت سيّارةُ أحدِهم فتأخّر عن موعدٍ لا يُعوَّض.",
+    "detail": "الإطارُ فُرِّغ من الهواءِ تفريغاً، لا ثقبَ فيه. حصل ذلك بعد المغرب حين تفرّق الجميعُ للصلاةِ وحطبِ النار، والسيّاراتُ واقفةٌ بعيداً عن الضوء.",
+    "confession": "أنتَ من فرّغ الإطار. أخرجتَ صِمامَ الهواءِ بمفكٍّ صغيرٍ من حقيبةِ سيّارتِك، ثم عدتَ إلى النارِ قبل أن يعودَ أحد. أردتَ أن يفوتَه ذلك الموعدُ تحديداً — تعرف ما فيه، ويكفي أنّك تعرف.",
+  },
+  {
+    "occ": "مجلسُ ما بعدَ العشاء",
+    "crime": "فُقدت ساعةُ الوالدِ التي لا تُقدَّر بثمن.",
+    "detail": "الساعةُ كانت في علبتِها فوق الرفّ، تُخرَج للضيوفِ ثم تُعاد. آخرُ من رآها رآها في مكانِها بعد القهوة، واختفت قبل أن ينفضَّ المجلس بساعة.",
+    "confession": "أنتَ من أخذ الساعة. مددتَ يدَك إليها حين انشغل الجميعُ بمكالمةٍ رفعَ أحدُهم صوتَه فيها، ووضعتَها في جيبِ ثوبِك الداخليّ. لا تنوي بيعَها — تنوي أن يُقال إنّها ضاعت، ليُعادَ فتحُ حديثٍ قديمٍ عن من يستحقُّها.",
+  },
+  {
+    "occ": "عقيقةُ المولود",
+    "crime": "اكتُشف أنّ الذهبَ المُهدى للمولودِ مُقلَّد.",
+    "detail": "الهديّةُ سُلِّمت مغلَّفةً ووُضعت مع البقيّة على طاولةِ المدخل، وفُتحت بعد انصرافِ نصفِ الضيوف. الغلافُ الأصليُّ سليمٌ — أي أنّ التبديلَ تمَّ قبل أن يُغلَّف، أو بغلافٍ مطابق.",
+    "confession": "أنتَ من بدّل الذهب. اشتريتَ المُقلَّدَ قبل أسبوع، وبعتَ الأصليَّ وسدّدتَ به ما كان يلاحقُك. غلّفتَه بغلافٍ مطابقٍ من المحلِّ نفسِه ليمرَّ بلا سؤال. الإيصالُ ما زال في محفظتِك — لم تجرؤ على رميه.",
+  },
+  {
+    "occ": "اجتماعُ قسمةِ الميراث",
+    "crime": "غاب صكُّ الأرضِ عن الملفِّ ساعةَ فتحِه أمام الجميع.",
+    "detail": "الملفُّ خرج من الخزنةِ صباحاً ومرَّ على يدين قبل أن يُوضع على الطاولة. الصكُّ وحده ناقص، وبقيّةُ الأوراقِ مرتّبةٌ كما هي — أي أنّ من أخذه كان يعرف أيَّ ورقةٍ يريد.",
+    "confession": "أنتَ من سحب الصك. سحبتَه حين حملتَ الملفَّ من الخزنةِ إلى المجلس، وخبّأتَه بين أوراقٍ في سيّارتِك. لا تريد إلغاءَ القسمة — تريد تأجيلَها حتى ينتهيَ ما بدأتَه على تلك الأرضِ بلا علمِ أحد.",
+  },
+  {
+    "occ": "حفلُ تقاعدِ الوالد",
+    "crime": "وصلت جهةَ عملِه شكوى مجهولةٌ قبل يومين من تكريمِه.",
+    "detail": "الشكوى مكتوبةٌ بلغةِ من يعرف الداخل، وفيها تواريخُ صحيحةٌ لا تخرج إلا من البيت. أُرسلت من بريدٍ أُنشئ في اليومِ نفسِه ثم أُهمل.",
+    "confession": "أنتَ من أرسل الشكوى. جمعتَ التواريخَ من أوراقٍ رآها الجميعُ ولم ينتبه لها أحدٌ غيرُك، وأنشأتَ بريداً وأرسلتَ ثم أغلقتَه. ما كتبتَه صحيحٌ في أكثرِه — وهذا بالضبط ما يجعلك تخاف أن يُعرَف أنّك أنت.",
+  },
+  {
+    "occ": "عشاءُ استقبالِ ضيفٍ من بعيد",
+    "crime": "اختفى جوازُ الضيفِ ليلةَ سفرِه.",
+    "detail": "الجوازُ كان في الحقيبةِ الصغيرةِ عند المدخل، والحقيبةُ لم تتحرّك من مكانِها. من أخذه فتحها ثم أعادَ سحّابَها إلى آخرِه — تفصيلٌ لا يفعلُه المستعجل.",
+    "confession": "أنتَ من أخفى الجواز. أخذتَه ووضعتَه خلفَ كتبِ الرفِّ العُلويّ في المجلس. لا تريد سرقتَه، تريد أن يتأخّرَ سفرُه أسبوعاً واحداً — لأنّ سفرَه الآن يُنهي أمراً لم تُرتّبه بعد.",
+  },
+  {
+    "occ": "وليمةُ الشُّكرِ بعد الشفاء",
+    "crime": "تبيّن أنّ دواءَ المريضِ استُبدل بعلبةٍ فارغةٍ منذ أيّام.",
+    "detail": "العلبةُ في مكانِها المعتاد فوقَ الثلّاجة، وشريطُها مقصوصٌ بعناية لا بعجلة. لم يقترب منها إلا من يدخل المطبخَ بلا أن يلفتَ نظرَ أحد.",
+    "confession": "أنتَ من أفرغ العلبة. لم ترد أذًى — أردتَ أن يظلَّ محتاجاً للرعايةِ في البيتِ بدلَ أن يعودَ إلى ما كان ينوي العودةَ إليه. الشريطُ المقصوصُ رميتَه في كيسِ المطبخِ الصغير، ولعلّه ما زال هناك.",
+  },
 ];
 
 const WL_CLUES = [
@@ -5420,7 +5480,13 @@ const WL_CLUES = [
   "كان أحدُهم يرتجف حين طُرح الأمرُ أوّلَ مرّة.",
   "اختفى شيءٌ صغيرٌ من مكانه، لم ينتبه له إلا القليل.",
   "تناقَضَ ما قيل عن توقيتِ الحادثةِ مرّتين.",
-  "رائحةٌ لا تخصّ المكان عَلِقت بالهواء."
+  "رائحةٌ لا تخصّ المكان عَلِقت بالهواء.",
+  "لاحظ أحدُهم أنّ يداً كانت ترتجف وهي تصبُّ القهوة.",
+  "بابٌ يُغلَق عادةً وُجد مواربًا في غيرِ وقتِه.",
+  "أحدُهم ردَّ على سؤالٍ لم يُوجَّه إليه.",
+  "ذُكِر اسمٌ مرّتين ثم لم يُذكر بعدها أبداً.",
+  "هاتفٌ رنَّ فأُسكِت بسرعةٍ غيرِ معتادة.",
+  "كان مقعدٌ خالياً حين احتاجه صاحبُه.",
 ];
 
 const WL_ALIBIS = [
@@ -5433,7 +5499,11 @@ const WL_ALIBIS = [
   "كنتَ تُصوّرُ المائدةَ والضيوفَ بهاتفِك.",
   "كنتَ نائماً في الغرفةِ الجانبيّةِ من التعب.",
   "كنتَ تبحثُ عن شاحنٍ لهاتفِك في أرجاءِ البيت.",
-  "كنتَ واقفاً عندَ البابِ تستقبلُ ضيفاً متأخّراً."
+  "كنتَ واقفاً عندَ البابِ تستقبلُ ضيفاً متأخّراً.",
+  "كنتَ تُبدّل ملابسَ الصغيرِ في الغرفةِ الأخيرة.",
+  "كنتَ تُرتّبُ الأحذيةَ عند المدخلِ بعد أن تناثرت.",
+  "كنتَ تُكلّمُ والدتَك على الهاتفِ في السطح.",
+  "كنتَ تُحضّرُ الشايَ في المطبخِ الخلفيّ وحدَك.",
 ];
 
 const WL_ROLES = [
@@ -5521,6 +5591,18 @@ const WL_DISPOSITIONS = [
     "target": true,
     "text": "تحبّ {target} في قرارةِ نفسك وتميل لحمايته؛ يصعُب عليك توجيهُ الاتّهامِ إليه."
   }
+];
+
+/* أسئلةُ استجوابٍ احتياطيّة: لو لم يُرجع المحقّقُ سؤالاً (أو تعطّل
+   المزوّد) لا نُسقط الميزةَ بصمت — نختار أكثرَ المشكوكِ فيهم وسؤالاً
+   من هنا. نسخةُ الجهازِ الواحد تفعل الشيءَ نفسَه ببنكِها OFF_ASKS. */
+const WL_ASKS = [
+  "أعِد عليّ أين كنتَ بالضبط — وبالتفصيل هذه المرّة.",
+  "لماذا تسارعتَ إلى اتّهام غيرِك قبل أن يُسألَ أحد؟",
+  "من يشهد لك؟ سَمِّ واحداً ممّن على هذه المائدة.",
+  "قلتَ شيئاً وفعلتَ غيرَه — أيُّهما أصدق؟",
+  "ما الذي كنتَ تحمله حين خرجتَ من الغرفة؟",
+  "لو كنتَ بريئاً، فمن تظنُّه الفاعل؟ ولماذا هو دون سواه؟",
 ];
 
 const WL_ROUNDS = 2;
@@ -5682,6 +5764,14 @@ export class WalimaRoom {
       transcript: this.room.transcript,
       hostSays: this.room.hostSays, lastSus: this.room.lastSus, thinking: !!this.room.thinking,
       verdict: this.room.verdict,
+      /* الاستجوابُ عامٌّ عمداً: نصفُ متعتِه أن يرى الباقون على من وقع.
+         الهمسةُ عكسُه — لا يخرج منها هنا إلا أنّ صاحبَها استهلكها. */
+      ask: this.room.ask || null,
+      whisperUsed: this.room.players.filter(p => p.whisperUsed).map(p => p.id),
+      /* في طورِ التصويت نبثّ «من صوّت» لا «لِمن» — الوجهةُ تُكشف مع الحكم */
+      voted: this.room.phase === 'voting'
+        ? this.room.players.filter(p => this.room.votes && this.room.votes[p.id]).map(p => p.id)
+        : [],
     };
     this.broadcastPublic(pub);
   }
@@ -5720,10 +5810,13 @@ export class WalimaRoom {
       }
       return;
     }
-    if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame();
+    if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame(msg.rounds);
     if (msg.type === 'statement' && this.room.phase === 'writing') await this.handleStatement(playerId, msg.text);
     if (msg.type === 'nextRound' && playerId === this.room.hostId && this.room.phase === 'beat') await this.nextRound();
     if (msg.type === 'hostForce' && playerId === this.room.hostId && this.room.phase === 'writing') await this.forceRound();
+    if (msg.type === 'whisper') await this.handleWhisper(playerId, msg.toId, msg.text);
+    if (msg.type === 'vote' && this.room.phase === 'voting') await this.handleVote(playerId, msg.targetId);
+    if (msg.type === 'hostForce' && playerId === this.room.hostId && this.room.phase === 'voting') await this.runHost(true);
   }
 
   async onClose(playerId, ws){
@@ -5746,8 +5839,14 @@ export class WalimaRoom {
     if (this.room.phase === 'writing' && this.allIn()) await this.runHost(false);
   }
 
-  async startGame(){
+  /* عددُ الجولات: كان مثبَّتًا على WL_ROUNDS بينما نسخةُ الجهاز الواحد
+     تعطي ٢-٥ — وقاعدتُنا أنّ شاشةَ إعداداتِ الأونلاين تطابق نظيرتَها.
+     القيمةُ تصل من المضيفِ وحدَه (الشرطُ في المُرسِل)، وتُحصَر هنا لا في
+     العميل: ٢-٥ صحيحًا، وأيُّ شيءٍ آخر يسقط إلى الافتراضيّ. */
+  async startGame(rounds){
     if (this.room.phase !== 'lobby' && this.room.phase !== 'over') return;
+    const _r = Math.floor(Number(rounds));
+    this._rounds = (isFinite(_r) && _r >= 2 && _r <= 5) ? _r : WL_ROUNDS;
     const seated = this.room.players.filter(p => p.connected);
     if (seated.length < 3) {
       this.sendPrivate(this.room.hostId, { type: 'error', message: 'محتاج ٣ ضيوف على الأقل' });
@@ -5786,9 +5885,13 @@ export class WalimaRoom {
     if (disp.target) disp._target = wlPick(this.room.players).name;
     this.room.disposition = disp;
 
-    this.room.round = 1; this.room.rounds = WL_ROUNDS;
+    this.room.round = 1; this.room.rounds = this._rounds || WL_ROUNDS;
     this.room.transcript = []; this.room.hostSays = ''; this.room.lastSus = {};
     this.room.verdict = null; this.room.thinking = false;
+    /* مباراةٌ جديدة في الغرفة نفسِها: الهمسةُ تعود لكلِّ ضيف، ولا
+       يُورَّث استجوابٌ ولا صوتٌ من المباراة السابقة. */
+    this.room.ask = null; this.room.votes = {};
+    this.room.players.forEach(p => { p.whisperUsed = false; });
     this.room.phase = 'writing';
     await this.persist();
 
@@ -5801,6 +5904,75 @@ export class WalimaRoom {
     return live.length > 0 && live.every(p => p.submitted);
   }
 
+  /* ══════════ الهمس ══════════
+     همسةٌ واحدةٌ لكلِّ ضيفٍ في المباراة كلِّها، تصل المقصودَ وحدَه.
+     السرّيّةُ هنا مسؤوليّةُ الخادم بالكامل: النصُّ لا يدخل this.room
+     ولا الحالةَ المبثوثة ولا نصَّ المحقّق — يُرسَل مباشرةً للمستقبِل
+     ثم يُنسى. لا يخرج للعلن إلا أنّ فلاناً استهلك همستَه. */
+  async handleWhisper(playerId, toId, text){
+    const from = this.findPlayer(playerId);
+    if (!from || from.whisperUsed) return;
+    if (this.room.phase === 'lobby' || this.room.phase === 'over') return;
+    const to = this.findPlayer(toId);
+    if (!to || to.id === from.id) { this.sendPrivate(from.id, { type:'error', message:'اختر ضيفاً غير نفسك' }); return; }
+    const clean = cleanText(text, WL_MAX_STATEMENT);
+    if (clean.length < 2) { this.sendPrivate(from.id, { type:'error', message:'اكتب همستك أولاً' }); return; }
+    from.whisperUsed = true;
+    await this.persist();
+    this.sendPrivate(to.id, { type: 'whisper', from: from.name, text: clean });
+    this.sendPrivate(from.id, { type: 'whisperSent', to: to.name });
+    this.broadcastState();
+  }
+
+  /* ══════════ تصويت الضيوف ══════════
+     يسبق الحكمَ لا يستبدله: الأصواتُ تصل المحقّقَ رأياً يُؤخذ به أو
+     يُترك، وقرارُ الاتّهامِ يبقى له وحدَه — وإلا لصارت اللعبةُ تصويتاً
+     مكشوفاً وسقط دورُ المتواطئِ ومن معه. */
+  async startVoting(){
+    this.room.phase = 'voting';
+    this.room.votes = {};
+    this.room.hostSays = '';
+    await this.persist();
+    this.broadcastState();
+  }
+
+  async handleVote(playerId, targetId){
+    const me = this.findPlayer(playerId);
+    const target = this.findPlayer(targetId);
+    if (!me || !target) return;
+    this.room.votes = this.room.votes || {};
+    this.room.votes[me.id] = target.id;
+    await this.persist();
+    this.broadcastState();
+    const live = this.room.players.filter(p => p.connected);
+    if (live.length && live.every(p => this.room.votes[p.id])) await this.runHost(true);
+  }
+
+  /* أصواتُ الضيوف مجموعةً بالاسم — تدخل نصَّ المحقّقِ في الحكم فقط */
+  voteTally(){
+    const t = {};
+    for (const voter of Object.keys(this.room.votes || {})) {
+      const target = this.findPlayer(this.room.votes[voter]);
+      if (target) t[target.name] = (t[target.name] || 0) + 1;
+    }
+    return t;
+  }
+
+  /* ══════════ الاستجواب ══════════
+     المحقّقُ يوجّه سؤالاً لضيفٍ بعينه، فيصير عليه أن يجيبه في الجولة
+     التالية. لو لم يُرجع المحقّقُ شيئاً لا نُسقط الميزة: نختار أثقلَهم
+     ريبةً وسؤالاً من البنك — تماماً كما تفعل نسخةُ الجهازِ الواحد. */
+  applyAsk(out){
+    let who = out && out.askWho ? this.matchName(out.askWho) : null;
+    let q = out && out.askQ ? String(out.askQ).trim().slice(0, 200) : '';
+    if (!who) {
+      const top = [...this.room.players].sort((a, b) => (b.sus || 0) - (a.sus || 0))[0];
+      who = top ? top.name : null;
+    }
+    if (!q) q = wlPick(WL_ASKS);
+    this.room.ask = who ? { who, q } : null;
+  }
+
   async handleStatement(playerId, text){
     const p = this.findPlayer(playerId);
     if (!p || p.submitted) return;
@@ -5810,7 +5982,13 @@ export class WalimaRoom {
     this.room.transcript.push({ round: this.room.round, name: p.name, text: clean });
     await this.persist();
     this.broadcastState();
-    if (this.allIn()) await this.runHost(this.room.round >= this.room.rounds);
+    if (this.allIn()) await this.endOfRound();
+  }
+
+  /* الجولةُ الأخيرة لا تذهب للحكم مباشرةً: يتخلّلها تصويتُ الضيوف */
+  async endOfRound(){
+    if (this.room.round >= this.room.rounds) await this.startVoting();
+    else await this.runHost(false);
   }
 
   // من لم يتكلّم يُسجَّل صمته — أفضل من تجميد المائدة
@@ -5822,7 +6000,7 @@ export class WalimaRoom {
       }
     }
     await this.persist();
-    await this.runHost(this.room.round >= this.room.rounds);
+    await this.endOfRound();
   }
 
   buildPrompt(final){
@@ -5838,15 +6016,28 @@ export class WalimaRoom {
       + '\nما صرّح به كلُّ ضيفٍ عن مكانه وقتَ الحادثة (قد يكون بعضُها كذباً):\n'
       + this.room.players.map(p => '- ' + p.name + ': ' + (p.alibi || 'لم يُصرِّح بمكانه')).join('\n')
       + '\nأنت لا تعرف يقيناً من الفاعل؛ تستنتج من كلامهم وتناقضاتهم وارتباكهم. تتكلّم بالعربية الفصحى بإيجازٍ مهيب.'
+      + (this.room.ask ? '\nفي الجولة الماضية استجوبتَ ' + this.room.ask.who + ' بسؤالك: «' + this.room.ask.q + '»' : '')
+      + (final ? this.tallyText() : '')
       + '\n\nما قيل حتى الآن:\n' + said;
     const tail = !final
       ? 'ردَّ على المائدة برسالةٍ واحدةٍ موجزة (لا تتجاوز 55 كلمة): علّق على ما لفتك، اضغط على من بدا متلعثماً أو متناقضاً، واطرح في آخرها سؤالاً أو تحدّياً جديداً للجولة القادمة.\n'
         + 'ثم أعطِ تقديرَ شكّك السرّيّ: لكلِّ ضيفٍ رقمٌ من -3 إلى +3 (الموجبُ يعني ازدادت ريبتُك فيه).\n'
+        + 'ثم اختر ضيفاً واحداً تستجوبه، ووجِّه له سؤالاً محدّداً يجيب عنه في الجولة القادمة.\n'
         + 'أعد ردّك بهذا الشكل حصراً:\n<مضيف>كلامك هنا</مضيف>\n<شك>{'
-        + this.room.players.map(p => '"' + p.name + '":0').join(',') + '}</شك>'
-      : 'انتهى التحقيق. حان وقتُ الحكم. تكلّم كلمةً أخيرةً موجزةً بليغة (لا تتجاوز 55 كلمة) تبني فيها قرارك، ثم اتّهم ضيفاً واحداً بأنّه الفاعل (اسمٌ واحدٌ من القائمة فقط)، وسبباً مختصراً.\n'
+        + this.room.players.map(p => '"' + p.name + '":0').join(',') + '}</شك>\n'
+        + '<لمن>اسم من تستجوبه</لمن>\n<سؤال>سؤالك له</سؤال>'
+      : 'انتهى التحقيق، وقد صوّت الضيوف. الأصواتُ رأيٌ تستأنس به ولا يُلزمك — القرارُ قرارُك. حان وقتُ الحكم. تكلّم كلمةً أخيرةً موجزةً بليغة (لا تتجاوز 55 كلمة) تبني فيها قرارك، ثم اتّهم ضيفاً واحداً بأنّه الفاعل (اسمٌ واحدٌ من القائمة فقط)، وسبباً مختصراً.\n'
         + 'أعد ردّك بهذا الشكل حصراً:\n<مضيف>كلمتك الأخيرة هنا</مضيف>\n<تهمة>اسم المتّهم</تهمة>\n<تعليل>سببك في جملة</تعليل>';
     return head + '\n\n' + tail;
+  }
+
+  tallyText(){
+    const t = this.voteTally();
+    const names = Object.keys(t);
+    if (!names.length) return '\nلم يصوّت الضيوف.';
+    names.sort((a, b) => t[b] - t[a]);
+    return '\nتصويتُ الضيوف (رأيٌ لا يُلزمك): '
+      + names.map(n => n + ' — ' + t[n] + ' صوت').join('، ');
   }
 
   matchName(raw){
@@ -5900,7 +6091,10 @@ export class WalimaRoom {
       const raw = await this.askAI(this.buildPrompt(final));
       const says = wlGrab(raw, 'مضيف') || String(raw).replace(/<[^>]+>/g, '').trim().slice(0, 400);
       if (!final) {
-        out = { says, sus: wlSafeJSON(wlGrab(raw, 'شك')) || {} };
+        out = {
+          says, sus: wlSafeJSON(wlGrab(raw, 'شك')) || {},
+          askWho: wlGrab(raw, 'لمن'), askQ: wlGrab(raw, 'سؤال'),
+        };
       } else {
         out = {
           says,
@@ -5923,6 +6117,7 @@ export class WalimaRoom {
       }
       this.room.hostSays = out.says;
       this.room.lastSus = deltas;
+      this.applyAsk(out);
       this.room.phase = 'beat';
       await this.persist();
       this.broadcastState();
@@ -5935,7 +6130,13 @@ export class WalimaRoom {
         target: p.target, enemy: p.enemy,
         won: this.didWin(p, accused, culprit ? culprit.name : null),
       }));
-      this.room.verdict = { accused, reason: out.reason, says: out.says, culprit: culprit ? culprit.name : null, results };
+      /* الأصواتُ تُكشف مع الحكم لا قبله — ونعرضها بجانبَ قرارِ المحقّق
+         ليرى الجميعُ هل وافقهم أم خالفهم. */
+      this.room.verdict = {
+        accused, reason: out.reason, says: out.says,
+        culprit: culprit ? culprit.name : null, results,
+        tally: this.voteTally(),
+      };
       this.room.phase = 'over';
       await this.recordResults(results.filter(x => x.won).map(x => x.id));
       await this.persist();
@@ -9716,10 +9917,10 @@ export default {
       }), origin);
     }
 
-    const match = url.pathname.match(/^\/(baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra|mutarada)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='baloot' ? env.BALOOT_ROOM : g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : g==='shifra' ? env.SHIFRA_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='baloot' ? env.BALOOT_ROOM : g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : g==='shifra' ? env.SHIFRA_ROOM : g==='mutarada' ? env.HUNT_ROOM : env.MAFIA_ROOM;
       if (!gameNS) {
         return withCors(new Response(
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
@@ -9743,7 +9944,7 @@ export default {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، لودو، والشفرة أونلاين — استوديو يا٧ · /health للفحص',
+      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، لودو، الشفرة، والمطاردة أونلاين — استوديو يا٧ · /health للفحص',
       { status: 200 }), origin);
   },
 };
@@ -9758,7 +9959,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v145';
+const WORKER_VERSION = 'v148';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -9781,7 +9982,7 @@ const GAME_NAMES = {
   baloot: 'بلوت',
   mafia: 'مافيا', khawana: 'لمن العرش؟', mawwih: 'مَوِّه', daqash: 'داقش',
   dakhil: 'مين الدخيل', walima: 'وَليمة', ludo: 'لودو الخداع', btaqati: 'خمّن من؟',
-  kirm: 'الكِيرَم', shifra: 'الشفرة',
+  kirm: 'الكِيرَم', shifra: 'الشفرة', mutarada: 'المطاردة',
   fatin: 'فَطِن', liar: 'الكذّاب', kalimat: 'كلمات', fateel: 'فتيل',
   throne: 'عرش الذئب', westeros: 'ويستروس', island: 'الجزيرة',
   'blocked-road': 'الطريق المسدود', guest13: 'الضيف الثالث عشر', juraa: 'جرعة',
@@ -13857,3 +14058,569 @@ export class ShifraRoom {
 
 function shifraShuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0;[a[i], a[j]] = [a[j], a[i]]; } return a; }
 function shifraAr(t) { return t === "red" ? "الأحمر" : "الأزرق"; }
+
+/* ══════════════════════ المطاردة أونلاين (HuntRoom) ══════════════════════
+   لعبة استنتاج على خريطة أماكن. كل لاعب على جواله، وتحرّكه الليلي سرّ لا
+   يعرفه غيره — ولذلك **الخادم هو من يقرّر**، لا الأجهزة:
+
+   - الأدوار تُوزَّع هنا بـrandInt (crypto)، ولا تُبَثّ أبدًا. كل لاعب يستلم
+     دوره وحده في نسخته من الحالة.
+   - مواقع اللاعبين لا تدخل الحالة العامة إطلاقًا. اللاعب يعرف مكانه هو،
+     ومن كان معه في نهاية الليلة — لا أكثر.
+   - القتل والفخاخ تُحسَب هنا. لا يستطيع جهاز أن يعلن ضحيةً أو ينفي قتلًا.
+
+   الخريطة نفسها (الأماكن وجيرانها) يرسلها المضيف مرّة واحدة عند البدء:
+   هي معلومة عامّة يراها الجميع على أي حال، فلا سرّ فيها يُحمى، والاكتفاء
+   بها يمنع ازدواج بيانات المدن بين الصفحة والخادم — ومعها يمنع أن تختلف
+   نسختاهما فتصير الحركة صحيحة في الجهاز مرفوضة في الخادم. وما يهمّ:
+   الخادم يتحقّق من كل حركة أمام هذي الخريطة، فلا أحد يقفز مكانين.       */
+
+const HUNT_MAX_PLAYERS = 12;
+const HUNT_TRAPS = { kill: 1, watch: 1, hold: 1 };
+
+export class HuntRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.GAME = 'mutarada';
+    this.sockets = new Map();     // playerId -> WebSocket
+    this.kicked = new Set();
+    this.g = null;
+    this._rate = new Map();
+  }
+
+  allowMsg(playerId) {
+    const now = Date.now();
+    const r = this._rate.get(playerId) || { n: 0, t: now };
+    if (now - r.t > 1000) { r.n = 0; r.t = now; }
+    r.n++;
+    this._rate.set(playerId, r);
+    return r.n <= MSG_PER_SEC;
+  }
+
+  /* الفائز يقرّره الخادم. من يلعب بلا حساب يُتجاوَز، وكل حساب مرّة واحدة. */
+  async recordHunt() {
+    if (!this.env || !this.env.DB || !this.g || !this.g.winner) return;
+    const done = new Set();
+    for (const p of this.g.players) {
+      if (!p || !p.did || done.has(p.did)) continue;
+      done.add(p.did);
+      const won = (p.role === 'killer') === (this.g.winner === 'killers');
+      try { await recordResult(this.env, p.did, won, this.GAME); } catch {}
+    }
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const m = url.pathname.match(/\/room\/([A-Z0-9]{6})\/ws$/i);
+    const code = m ? m[1].toUpperCase() : '';
+    const name = cleanName(url.searchParams.get('name'));
+    let pid = url.searchParams.get('pid') || null;
+    const tok = url.searchParams.get('tok') || '';
+    const did = url.searchParams.get('did') || '';
+
+    if (request.headers.get('Upgrade') !== 'websocket')
+      return new Response('expected websocket', { status: 426 });
+
+    const pair = new WebSocketPair();
+    const ws = pair[1];
+    ws.accept();
+
+    if (!this.g) this.init(code);
+
+    if (pid && this.kicked.has(pid)) {
+      ws.send(JSON.stringify({ t: 'kicked' }));
+      ws.close(1000);
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
+    /* العودة لمقعد قائم: المعرّف وحده لا يكفي — معرّفات اللاعبين تُبَثّ،
+       ومن يعرف معرّف غيره كان يفتح اتصالًا باسمه فيستلم دوره وموقعه.
+       التوكن سرّي لا يُبَثّ إطلاقًا. */
+    let p = (pid && tok) ? this.g.players.find(x => x.id === pid && x.tok && x.tok === tok) : null;
+    if (p) {
+      p.connected = true;
+      p.name = name || p.name;
+      if (did) p.did = String(did).slice(0, 64);
+    } else {
+      if (this.g.phase !== 'lobby' && this.g.phase !== 'over') {
+        ws.send(JSON.stringify({ t: 'err', m: 'المطاردة بدأت — انتظر انتهاءها.' }));
+        ws.close(1000);
+        return new Response(null, { status: 101, webSocket: pair[0] });
+      }
+      if (this.g.players.length >= HUNT_MAX_PLAYERS) {
+        ws.send(JSON.stringify({ t: 'err', m: 'الغرفة ممتلئة.' }));
+        ws.close(1000);
+        return new Response(null, { status: 101, webSocket: pair[0] });
+      }
+      pid = crypto.randomUUID();
+      p = this.blankPlayer(pid, name, did);
+      this.g.players.push(p);
+      if (!this.g.hostId) this.g.hostId = pid;
+    }
+
+    this.sockets.set(pid, ws);
+    ws.send(JSON.stringify({ t: 'you', pid, tok: p.tok }));
+
+    ws.addEventListener('message', ev => {
+      let m2; try { m2 = JSON.parse(ev.data); } catch { return; }
+      if (m2 && m2.t === 'hb') return;
+      if (!this.allowMsg(pid)) return;
+      try { this.onMsg(pid, m2); }
+      catch (e) { try { ws.send(JSON.stringify({ t: 'err', m: String(e.message || e) })); } catch {} }
+      this.broadcast();
+    });
+    const bye = () => {
+      const q = this.g.players.find(x => x.id === pid);
+      if (q) q.connected = false;
+      this.sockets.delete(pid);
+      /* في الردهة فقط يُحذف المنقطع. بعد البدء يبقى مقعده — انقطاع
+         الشبكة لحظةً لا يخرج لاعبًا من مطاردة جارية، ودوره محفوظ. */
+      if (this.g.phase === 'lobby') this.g.players = this.g.players.filter(x => x.connected);
+      const wasHost = this.g.hostId === pid;
+      this.ensureHost();
+      if (wasHost && this.g.hostId) this.g.log.unshift(`انتقلت الاستضافة إلى ${this.nameOf(this.g.hostId)}`);
+      this.broadcast();
+    };
+    ws.addEventListener('close', bye);
+    ws.addEventListener('error', bye);
+
+    this.broadcast();
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  blankPlayer(pid, name, did) {
+    return {
+      id: pid, name, connected: true,
+      tok: crypto.randomUUID().replace(/-/g, ''),
+      did: did ? String(did).slice(0, 64) : null,
+      role: null, dist: null, alive: true, stuck: false, trapUsed: false,
+      move: null, intent: false, trap: null, submitted: false,
+      report: null, vote: undefined,
+    };
+  }
+
+  init(code) {
+    this.g = {
+      code,
+      hostId: null,
+      players: [],
+      phase: 'lobby',          // lobby | night | dawn | vote | expel | over
+      round: 0,
+      city: 'جدة',
+      unit: { s: 'حي', p: 'أحياء' },
+      killers: 1,
+      districts: [],
+      adj: {},
+      news: '',
+      dawnList: [],
+      expel: null,
+      activeTraps: [],
+      pendingTraps: [],
+      winner: null,
+      log: [],
+    };
+  }
+
+  /* -------------------- الرسائل -------------------- */
+  onMsg(pid, m) {
+    const g = this.g;
+    if (!m || typeof m !== 'object') return;
+    const me = g.players.find(x => x.id === pid);
+    if (!me) return;
+    const isHost = g.hostId === pid;
+
+    switch (m.t) {
+      case 'opts': {
+        if (!isHost || (g.phase !== 'lobby' && g.phase !== 'over')) return;
+        if (typeof m.city === 'string') g.city = cleanText(m.city, 20) || g.city;
+        if (m.unit && typeof m.unit === 'object') {
+          g.unit = {
+            s: cleanText(m.unit.s, 10) || 'حي',
+            p: cleanText(m.unit.p, 10) || 'أحياء',
+          };
+        }
+        if (Number.isInteger(m.killers)) g.killers = Math.max(1, Math.min(3, m.killers));
+        return;
+      }
+
+      case 'start': {
+        if (!isHost) return;
+        if (g.phase !== 'lobby' && g.phase !== 'over') return;
+        this.startGame(m);
+        return;
+      }
+
+      case 'kick': {
+        if (!isHost) return;
+        if (g.phase !== 'lobby' && g.phase !== 'over') return;
+        if (m.target === pid) return;
+        const t = g.players.find(p => p.id === m.target);
+        if (!t) return;
+        g.players = g.players.filter(p => p.id !== m.target);
+        g.log.unshift(`طُرد ${t.name} من الغرفة`);
+        const sock = this.sockets.get(m.target);
+        if (sock) {
+          try { sock.send(JSON.stringify({ t: 'kicked' })); sock.close(1000); } catch (e) {}
+          this.sockets.delete(m.target);
+        }
+        this.kicked.add(m.target);
+        this.ensureHost();
+        return;
+      }
+
+      case 'move': {
+        if (g.phase !== 'night' || !me.alive) return;
+        const opts = this.moveOpts(me);
+        const want = typeof m.dist === 'string' ? m.dist : '';
+        if (!opts.includes(want)) throw new Error('وجهة غير مجاورة.');
+        me.move = want;
+        me.intent = me.role === 'killer' ? !!m.intent : false;
+        /* الفخّ للسفّاح وحده ومرّة واحدة في المباراة. ويُزرع في المكان
+           الذي تنتهي فيه ليلته هو — لا في مكان يختاره من بعيد. */
+        let trap = null;
+        if (me.role === 'killer' && !me.trapUsed && typeof m.trap === 'string' && HUNT_TRAPS[m.trap]) trap = m.trap;
+        me.trap = trap;
+        if (trap) me.intent = false;      // زرع فخًّا الليلة = لا ينفّذ بيده
+        me.submitted = true;
+        if (g.players.filter(p => p.alive && p.connected).every(p => p.submitted)) this.resolveNight();
+        return;
+      }
+
+      case 'force': {                      // المضيف يتجاوز من تأخّر
+        if (!isHost || g.phase !== 'night') return;
+        this.resolveNight();
+        return;
+      }
+
+      case 'toVote': {
+        if (!isHost || g.phase !== 'dawn') return;
+        g.phase = 'vote';
+        for (const p of g.players) p.vote = undefined;
+        return;
+      }
+
+      case 'vote': {
+        if (g.phase !== 'vote' || !me.alive) return;
+        const tgt = typeof m.target === 'string' ? m.target : '';
+        if (tgt && !g.players.some(p => p.id === tgt && p.alive)) return;
+        me.vote = tgt || '';             // '' = امتناع
+        if (g.players.filter(p => p.alive && p.connected).every(p => p.vote !== undefined)) this.tally();
+        return;
+      }
+
+      case 'forceVote': {
+        if (!isHost || g.phase !== 'vote') return;
+        this.tally();
+        return;
+      }
+
+      case 'next': {
+        if (!isHost || g.phase !== 'expel') return;
+        const w = this.checkWin();
+        if (w) return this.finish(w);
+        this.startNight();
+        return;
+      }
+
+      case 'again': {
+        if (!isHost || g.phase !== 'over') return;
+        g.phase = 'lobby';
+        g.round = 0; g.winner = null; g.news = ''; g.expel = null;
+        g.dawnList = []; g.activeTraps = []; g.pendingTraps = []; g.log = [];
+        for (const p of g.players) {
+          const fresh = this.blankPlayer(p.id, p.name, p.did);
+          fresh.tok = p.tok; fresh.connected = p.connected;
+          Object.assign(p, fresh);
+        }
+        return;
+      }
+    }
+  }
+
+  /* -------------------- البدء -------------------- */
+  startGame(m) {
+    const g = this.g;
+    const alive = g.players.filter(p => p.connected);
+    if (alive.length < 3) throw new Error('تحتاجون ٣ لاعبين على الأقل.');
+
+    /* الخريطة من المضيف — تُنقّى بالكامل قبل الاعتماد عليها */
+    const names = Array.isArray(m.districts) ? m.districts : [];
+    const clean = [];
+    for (const n of names) {
+      const s = cleanText(n, 24);
+      if (s && !clean.includes(s)) clean.push(s);
+      if (clean.length >= 40) break;
+    }
+    if (clean.length < 6) throw new Error('الخريطة ناقصة — أعد اختيار الأماكن.');
+
+    const adj = {};
+    for (const n of clean) adj[n] = [];
+    const raw = (m.adj && typeof m.adj === 'object') ? m.adj : {};
+    for (const a of clean) {
+      const list = Array.isArray(raw[a]) ? raw[a] : [];
+      for (const b of list) {
+        const s = cleanText(b, 24);
+        if (!s || s === a || !adj[s]) continue;
+        if (!adj[a].includes(s)) adj[a].push(s);
+        if (!adj[s].includes(a)) adj[s].push(a);   // الجوار متبادل دائمًا
+      }
+    }
+    if (clean.some(n => adj[n].length === 0)) throw new Error('في الخريطة مكان معزول.');
+
+    const nk = Math.max(1, Math.min(3, g.killers | 0));
+    if (nk * 2 >= alive.length) throw new Error('عدد السفّاحين كبير على عدد اللاعبين.');
+
+    g.districts = clean;
+    g.adj = adj;
+    g.killers = nk;
+
+    // الأدوار: عشوائية الخادم لا عشوائية الجهاز
+    const idx = alive.map((_, i) => i);
+    for (let i = idx.length - 1; i > 0; i--) { const j = randInt(i + 1); const t = idx[i]; idx[i] = idx[j]; idx[j] = t; }
+    const killerSet = new Set(idx.slice(0, nk));
+
+    g.players = alive;
+    alive.forEach((p, i) => {
+      p.role = killerSet.has(i) ? 'killer' : 'citizen';
+      p.alive = true; p.stuck = false; p.trapUsed = false;
+      p.dist = clean[randInt(clean.length)];
+      p.report = null; p.vote = undefined;
+    });
+
+    g.round = 1;
+    g.winner = null; g.expel = null; g.news = '';
+    g.activeTraps = []; g.pendingTraps = [];
+    g.log.unshift(`بدأت المطاردة في ${g.city}`);
+    this.startNight();
+  }
+
+  startNight() {
+    const g = this.g;
+    g.phase = 'night';
+    g.expel = null;
+    for (const p of g.players) {
+      p.move = null; p.intent = false; p.trap = null;
+      p.submitted = false; p.vote = undefined;
+    }
+  }
+
+  moveOpts(p) {
+    const g = this.g;
+    if (!p.dist || !g.adj[p.dist]) return p.dist ? [p.dist] : [];
+    return p.stuck ? [p.dist] : [p.dist].concat(g.adj[p.dist]);
+  }
+
+  /* -------------------- حلّ الليلة (نفس منطق نسخة الجهاز الواحد) -------- */
+  resolveNight() {
+    const g = this.g;
+    const occ = {};
+    for (const p of g.players) {
+      if (!p.alive) continue;
+      const want = p.move;
+      if (p.stuck) p.stuck = false;                     // محبوس: يبقى ثم يتحرّر
+      else if (want && this.moveOpts(p).includes(want)) p.dist = want;
+      (occ[p.dist] = occ[p.dist] || []).push(p.id);
+    }
+
+    const byHand = [];
+    for (const d in occ) {
+      const here = occ[d].map(i => g.players.find(p => p.id === i));
+      const killers = here.filter(p => p.role === 'killer' && p.intent);
+      const prey = here.filter(p => p.role !== 'killer');
+      if (killers.length > 0 && prey.length === 1) byHand.push(prey[0].id);
+    }
+
+    const byTrap = [], watched = {}, stuck = [];
+    for (const t of g.activeTraps) {
+      if (!t || !HUNT_TRAPS[t.type] || !g.adj[t.dist]) continue;
+      const here = (occ[t.dist] || []).map(i => g.players.find(p => p.id === i))
+        .filter(p => p && !byHand.includes(p.id));
+      const prey = here.filter(p => p.role !== 'killer');
+      if (t.type === 'kill') {
+        if (here.length === 1 && prey.length === 1 && !byTrap.includes(prey[0].id)) byTrap.push(prey[0].id);
+      } else if (t.type === 'watch') {
+        watched[t.ownerId] = here.filter(p => p.id !== t.ownerId).map(p => p.name);
+      } else if (t.type === 'hold') {
+        for (const v of prey) if (!stuck.includes(v.id)) stuck.push(v.id);
+      }
+    }
+
+    const deaths = byHand.concat(byTrap);
+    for (const id of deaths) { const p = g.players.find(x => x.id === id); if (p) p.alive = false; }
+    for (const id of stuck) { const p = g.players.find(x => x.id === id); if (p && p.alive) p.stuck = true; }
+
+    // فخاخ هذي الليلة تصير فعّالة في الليلة الجاية
+    g.activeTraps = [];
+    for (const p of g.players) {
+      if (p.trap && !p.trapUsed && p.role === 'killer') {
+        p.trapUsed = true;
+        g.activeTraps.push({ type: p.trap, dist: p.dist, ownerId: p.id });
+      }
+    }
+
+    // التقرير الخاص بكل لاعب — لا يخرج منه شيء للحالة العامة
+    for (const p of g.players) {
+      const mates = (occ[p.dist] || []).filter(i => i !== p.id)
+        .map(i => g.players.find(x => x.id === i)).filter(Boolean);
+      p.report = {
+        dist: p.dist,
+        with: mates.filter(x => x.alive).map(x => x.name),
+        dead: mates.filter(x => !x.alive).map(x => x.name),
+        watch: watched[p.id] || null,
+        stuck: !!p.stuck,
+        died: deaths.includes(p.id),
+      };
+    }
+
+    const victims = deaths.map(id => {
+      const p = g.players.find(x => x.id === id);
+      return p ? { name: p.name, district: p.dist, byTrap: byTrap.includes(id) } : null;
+    }).filter(Boolean);
+    const busy = [];
+    for (const d in occ) if (occ[d].length >= 2) busy.push(d);
+
+    g.news = this.dawnNews({
+      round: g.round,
+      victims,
+      aliveCount: g.players.filter(p => p.alive).length,
+      crowded: busy,
+      quiet: victims.length === 0,
+    });
+    g.dawnList = g.players.map(p => ({
+      name: p.name, alive: p.alive,
+      how: p.alive ? '' : (byTrap.includes(p.id) ? 'وُجد بلا أثر مواجهة' : (deaths.includes(p.id) ? 'اغتيل' : 'خرج بالتصويت')),
+    }));
+    g.phase = 'dawn';
+
+    const w = this.checkWin();
+    if (w) this.finish(w);
+  }
+
+  dawnNews(f) {
+    const ar = huntAr;
+    if (f.quiet) {
+      const where = f.crowded.length
+        ? `في ${f.crowded[0]} كان فيه ناس أكثر من العادة`
+        : 'الطرقات كانت فاضية بشكل غريب';
+      return `ليلة ${ar(f.round)} مرّت بلا دم. ما لقوا شي — بس أحد يقول إن ${where}. باقي ${ar(f.aliveCount)}.`;
+    }
+    const parts = f.victims.map(v => v.byTrap
+      ? `${v.name} في ${v.district} — بلا أي أثر مواجهة، كأن المكان نفسه كان ينتظره`
+      : `${v.name} في ${v.district} — لا صراخ ولا شاهد`);
+    return `في فجر ${ar(f.round)} لقوا ${parts.join('، ولقوا ')}. باقي ${ar(f.aliveCount)}.`;
+  }
+
+  /* -------------------- التصويت -------------------- */
+  tally() {
+    const g = this.g;
+    const count = {};
+    for (const p of g.players) {
+      if (!p.alive || !p.vote) continue;
+      count[p.vote] = (count[p.vote] || 0) + 1;
+    }
+    let top = null, topN = 0, tie = false;
+    for (const id in count) {
+      if (count[id] > topN) { top = id; topN = count[id]; tie = false; }
+      else if (count[id] === topN) tie = true;
+    }
+    /* التعادل لا يطرد أحدًا: أغلبيةٌ غير حاسمة تُنهي النهار بلا دم —
+       وهذا مقصود، فالطرد بالقرعة يفسد اللعبة أكثر مما يحرّكها. */
+    if (!top || tie) {
+      g.expel = { name: null, role: null, tie: !!tie, votes: this.voteTable() };
+    } else {
+      const p = g.players.find(x => x.id === top);
+      p.alive = false;
+      p.report = null;
+      g.expel = { name: p.name, role: p.role, tie: false, votes: this.voteTable() };
+      g.log.unshift(`خرج ${p.name} بالتصويت`);
+    }
+    g.phase = 'expel';
+    const w = this.checkWin();
+    if (w) this.finish(w);
+  }
+
+  voteTable() {
+    const g = this.g;
+    return g.players.filter(p => p.vote !== undefined).map(p => ({
+      from: p.name,
+      to: p.vote ? this.nameOf(p.vote) : '—',
+    }));
+  }
+
+  checkWin() {
+    const g = this.g;
+    const k = g.players.filter(p => p.alive && p.role === 'killer').length;
+    const c = g.players.filter(p => p.alive && p.role !== 'killer').length;
+    if (k === 0) return 'citizens';
+    if (k >= c) return 'killers';
+    return null;
+  }
+
+  finish(w) {
+    const g = this.g;
+    g.winner = w;
+    g.phase = 'over';
+    this.state.waitUntil
+      ? this.state.waitUntil(this.recordHunt())
+      : this.recordHunt().catch(() => {});
+  }
+
+  ensureHost() {
+    const g = this.g;
+    if (g.hostId && g.players.some(p => p.id === g.hostId && p.connected)) return;
+    const nxt = g.players.find(p => p.connected);
+    g.hostId = nxt ? nxt.id : null;
+  }
+
+  nameOf(id) { const p = this.g.players.find(x => x.id === id); return p ? p.name : '—'; }
+
+  /* -------------------- البثّ: لكل لاعب نسخته -------------------- */
+  viewFor(pid) {
+    const g = this.g;
+    const me = g.players.find(p => p.id === pid);
+    const over = g.phase === 'over';
+
+    const v = {
+      t: 'state',
+      code: g.code,
+      phase: g.phase,
+      round: g.round,
+      hostId: g.hostId,
+      city: g.city,
+      unit: g.unit,
+      killers: g.killers,
+      districts: g.districts,
+      adj: g.adj,
+      news: g.news,
+      dawnList: g.dawnList,
+      expel: g.expel,
+      winner: g.winner,
+      log: g.log.slice(0, 5),
+      /* لا موقع ولا دور لأحد هنا. «submitted» و«voted» تُبَثّ لأنها
+         تُرى في الواقع (الكل ينتظر المتأخّر)، وليست معلومة سرّية. */
+      players: g.players.map(p => ({
+        id: p.id, name: p.name, alive: p.alive, connected: p.connected,
+        submitted: g.phase === 'night' ? !!p.submitted : false,
+        voted: g.phase === 'vote' ? p.vote !== undefined : false,
+        role: over ? p.role : null,
+      })),
+      me: me ? {
+        id: me.id, name: me.name, alive: me.alive, role: me.role,
+        dist: me.dist, stuck: me.stuck, trapUsed: me.trapUsed,
+        submitted: !!me.submitted, voted: me.vote !== undefined,
+        opts: (g.phase === 'night' && me.alive) ? this.moveOpts(me) : [],
+        report: (g.phase === 'dawn' || g.phase === 'vote') ? me.report : null,
+      } : null,
+    };
+    return v;
+  }
+
+  broadcast() {
+    for (const [pid, ws] of this.sockets) {
+      try { ws.send(JSON.stringify(this.viewFor(pid))); } catch { this.sockets.delete(pid); }
+    }
+  }
+}
+
+function huntAr(n) { return String(n).replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]); }

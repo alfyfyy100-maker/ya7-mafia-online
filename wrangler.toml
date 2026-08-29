@@ -75,6 +75,11 @@ class_name = "ShifraRoom"
 name = "BALOOT_ROOM"
 class_name = "BalootRoom"
 
+# ── جديد في v148: غرفة المطاردة ──
+[[durable_objects.bindings]]
+name = "HUNT_ROOM"
+class_name = "HuntRoom"
+
 ## ── قاعدة D1 ──
 [[d1_databases]]
 binding = "DB"
@@ -123,6 +128,13 @@ new_sqlite_classes = ["ShifraRoom"]
 [[migrations]]
 tag = "v15"
 new_sqlite_classes = ["BalootRoom"]
+
+# ── جديد في v148: المطاردة ──
+# v15 محجوز للبلوت، فالمطاردة تأخذ v16. الوسوم تُضاف فقط ولا تُعدَّل —
+# تعديل وسم قديم أو تكراره يفشل النشر كله (خطأ 10074).
+[[migrations]]
+tag = "v16"
+new_sqlite_classes = ["HuntRoom"]
 
 ## ════════════════════════════════════════════════════════════════
 ##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:
