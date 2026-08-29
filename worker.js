@@ -9973,6 +9973,7 @@ const LOBBY_GAMES = {
   ludo:    { name: 'لودو الخداع', path: '/ludo/' },
   btaqati: { name: 'خمّن من؟',      path: '/btaqati/' },
   bilyardo:{ name: 'بلياردو',       path: '/bilyardo/' },
+  mutarada:{ name: 'مطاردة الحواري', path: '/mutarada/' },
 };
 
 /* أسماء كل الألعاب للعرض، لا الأونلاين وحدها: سجل اللاعب يشمل ما لعبه
@@ -14083,6 +14084,7 @@ export class HuntRoom {
     this.state = state;
     this.env = env;
     this.GAME = 'mutarada';
+    this.listed = false;          // هل الغرفة مدرجة في «الغرف المفتوحة»
     this.sockets = new Map();     // playerId -> WebSocket
     this.kicked = new Set();
     this.g = null;
@@ -14110,6 +14112,30 @@ export class HuntRoom {
     }
   }
 
+  /* ── الإدراج في «الغرف المفتوحة» ──
+     الغرفة تُدرج نفسها لأنها تُنشأ عبر WebSocket لا عبر مسار /create،
+     فما فيه لحظة إنشاء يلتقطها الراوتر. والإدراج مشروط بطلب المضيف
+     صراحةً (pub=1) — بدونه تبقى الغرفة خاصة ولا يدخلها إلا من معه الكود. */
+  async lobbySync(op) {
+    if (!this.env || !this.env.PUBLIC_LOBBY || !this.g || !this.g.pub) return;
+    if (op !== 'add' && !this.listed) return;
+    try {
+      const lob = this.env.PUBLIC_LOBBY.get(this.env.PUBLIC_LOBBY.idFromName('global'));
+      const here = this.g.players.filter(p => p.connected !== false).length;
+      await lob.fetch(new Request('https://ya7.internal/lobby/' + op, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Ya7-Internal': '1' },
+        body: JSON.stringify({
+          game: this.GAME, code: this.g.code,
+          host: this.nameOf(this.g.hostId) || 'لاعب',
+          players: Math.max(1, here), max: HUNT_MAX_PLAYERS,
+          note: this.g.city || '',
+        }),
+      }));
+      this.listed = (op !== 'remove');
+    } catch (e) {}
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
     const m = url.pathname.match(/\/room\/([A-Z0-9]{6})\/ws$/i);
@@ -14118,6 +14144,7 @@ export class HuntRoom {
     let pid = url.searchParams.get('pid') || null;
     const tok = url.searchParams.get('tok') || '';
     const did = url.searchParams.get('did') || '';
+    const wantsPublic = url.searchParams.get('pub') === '1';
 
     if (request.headers.get('Upgrade') !== 'websocket')
       return new Response('expected websocket', { status: 426 });
@@ -14126,7 +14153,10 @@ export class HuntRoom {
     const ws = pair[1];
     ws.accept();
 
+    const brandNew = !this.g;
     if (!this.g) this.init(code);
+    // أول من يفتح الغرفة يقرّر نوعها؛ ومن يجي بعده ما يقدر يغيّرها
+    if (brandNew) this.g.pub = wantsPublic;
 
     if (pid && this.kicked.has(pid)) {
       ws.send(JSON.stringify({ t: 'kicked' }));
@@ -14160,7 +14190,9 @@ export class HuntRoom {
     }
 
     this.sockets.set(pid, ws);
-    ws.send(JSON.stringify({ t: 'you', pid, tok: p.tok }));
+    ws.send(JSON.stringify({ t: 'you', pid, tok: p.tok, pub: !!this.g.pub }));
+    // تُدرَج مرة عند فتحها، ويُحدَّث عدد الحاضرين مع كل دخول
+    this.lobbySync(this.listed ? 'ping' : 'add');
 
     ws.addEventListener('message', ev => {
       let m2; try { m2 = JSON.parse(ev.data); } catch { return; }
@@ -14180,6 +14212,9 @@ export class HuntRoom {
       const wasHost = this.g.hostId === pid;
       this.ensureHost();
       if (wasHost && this.g.hostId) this.g.log.unshift(`انتقلت الاستضافة إلى ${this.nameOf(this.g.hostId)}`);
+      // غرفة فرغت ما لها مكان في «الغرف المفتوحة»
+      const here = this.g.players.filter(x => x.connected !== false).length;
+      this.lobbySync(here === 0 ? 'remove' : 'ping');
       this.broadcast();
     };
     ws.addEventListener('close', bye);
@@ -14203,6 +14238,7 @@ export class HuntRoom {
   init(code) {
     this.g = {
       code,
+      pub: false,              // مفتوحة تظهر للجميع، أو خاصة بالكود وحده
       hostId: null,
       players: [],
       phase: 'lobby',          // lobby | night | dawn | vote | expel | over
@@ -14248,6 +14284,8 @@ export class HuntRoom {
         if (!isHost) return;
         if (g.phase !== 'lobby' && g.phase !== 'over') return;
         this.startGame(m);
+        // بدأت المطاردة: ما عاد ينفع أحد ينضم، فتُشطب من الغرف المفتوحة
+        this.lobbySync('remove');
         return;
       }
 
