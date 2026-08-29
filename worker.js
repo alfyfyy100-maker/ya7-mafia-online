@@ -9959,7 +9959,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v148';
+const WORKER_VERSION = 'v149';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -14321,7 +14321,10 @@ export class HuntRoom {
         me.trap = trap;
         if (trap) me.intent = false;      // زرع فخًّا الليلة = لا ينفّذ بيده
         me.submitted = true;
-        if (g.players.filter(p => p.alive && p.connected).every(p => p.submitted)) this.resolveNight();
+        /* «الكل ثبّت» على قائمة فارغة تعني «نعم» — ولو انقطع آخر متصل
+           للحظة لانتهت الليلة بلا أحد. فنشترط وجود مشارك فعلي. */
+        const waiting = g.players.filter(p => p.alive && p.connected);
+        if (waiting.length && waiting.every(p => p.submitted)) this.resolveNight();
         return;
       }
 
@@ -14343,7 +14346,8 @@ export class HuntRoom {
         const tgt = typeof m.target === 'string' ? m.target : '';
         if (tgt && !g.players.some(p => p.id === tgt && p.alive)) return;
         me.vote = tgt || '';             // '' = امتناع
-        if (g.players.filter(p => p.alive && p.connected).every(p => p.vote !== undefined)) this.tally();
+        const voters = g.players.filter(p => p.alive && p.connected);
+        if (voters.length && voters.every(p => p.vote !== undefined)) this.tally();
         return;
       }
 
@@ -14645,6 +14649,12 @@ export class HuntRoom {
       })),
       me: me ? {
         id: me.id, name: me.name, alive: me.alive, role: me.role,
+        /* السفّاح يعرف شركاءه — بدونها يطارد بعضُهم بعضًا في مباراة
+           بسفّاحَين. تُرسل لمن هو سفّاح فقط، ولا تدخل الحالة العامّة. */
+        partners: me.role === 'killer'
+          ? g.players.filter(x => x.role === 'killer' && x.id !== me.id)
+                     .map(x => ({ name: x.name, alive: x.alive }))
+          : [],
         dist: me.dist, stuck: me.stuck, trapUsed: me.trapUsed,
         submitted: !!me.submitted, voted: me.vote !== undefined,
         opts: (g.phase === 'night' && me.alive) ? this.moveOpts(me) : [],
