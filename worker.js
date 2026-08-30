@@ -10055,7 +10055,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v152';
+const WORKER_VERSION = 'v153';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -12481,6 +12481,31 @@ async function adminPanelInner(request, env, url, body) {
     });
   }
 
+  /* ── من متصل الآن ──
+     نفس عتبة «متصل الآن» في نظرة عامة (٥ دقائق)، هنا كأسماء لا رقم. */
+  if (sub === '/online') {
+    const rows = await admAll(env,
+      `SELECT ${ADM_PCOLS} FROM players WHERE last_seen > ?1 ORDER BY last_seen DESC LIMIT 100`,
+      [now - ACC.ONLINE_MS]);
+    return Response.json({ ok: true, players: rows });
+  }
+
+  /* ── الصداقات: من طرف لطرف بالأسماء لا بالعدّ فقط ──
+     friends.a/b معرّفات أجهزة؛ الانضمام مرتين للحصول على يوزر كل طرف. */
+  if (sub === '/friends') {
+    const status = ['accepted', 'pending', 'blocked'].includes(body.status) ? body.status : 'accepted';
+    const rows = await admAll(env,
+      `SELECT f.requested_by, f.created_at, f.updated_at,
+              pa.username AS a_user, pa.display_name AS a_name, pa.banned AS a_banned,
+              pb.username AS b_user, pb.display_name AS b_name, pb.banned AS b_banned
+         FROM friends f
+         JOIN players pa ON pa.device_id = f.a
+         JOIN players pb ON pb.device_id = f.b
+        WHERE f.status = ?1
+        ORDER BY f.updated_at DESC LIMIT 150`, [status]);
+    return Response.json({ ok: true, status, rows });
+  }
+
   /* ── قائمة اللاعبين: بحث + ترتيب + صفحات ── */
   if (sub === '/players') {
     const SORTS = {
@@ -12517,6 +12542,18 @@ async function adminPanelInner(request, env, url, body) {
       'SELECT status, COUNT(*) AS n FROM friends WHERE a = ?1 OR b = ?1 GROUP BY status', [did])) {
       if (r.status in fr) fr[r.status] = r.n;
     }
+    /* الأسماء لا العدّ وحده: JOIN على الطرف الآخر مباشرة أوضح من
+       CASE WHEN داخل شرط JOIN، وأسرع قراءة لمن يعدّل هذا لاحقًا. */
+    const friendsList = [
+      ...(await admAll(env,
+        `SELECT p.username, p.display_name, p.avatar, p.banned, f.updated_at
+           FROM friends f JOIN players p ON p.device_id = f.b
+          WHERE f.a = ?1 AND f.status = 'accepted'`, [did])),
+      ...(await admAll(env,
+        `SELECT p.username, p.display_name, p.avatar, p.banned, f.updated_at
+           FROM friends f JOIN players p ON p.device_id = f.a
+          WHERE f.b = ?1 AND f.status = 'accepted'`, [did])),
+    ].sort((x, y) => (y.updated_at || 0) - (x.updated_at || 0));
     const from = await admFirst(env, 'SELECT COUNT(*) AS n FROM reports WHERE from_did = ?1', [did]);
     const about = (await admAll(env,
       `SELECT r.id, r.reason, r.note, r.game, r.code, r.status, r.created_at,
@@ -12533,10 +12570,16 @@ async function adminPanelInner(request, env, url, body) {
     const games = (await admAll(env,
       `SELECT game, mode, plays, wins, best, last_at FROM game_stats
         WHERE device_id = ?1 ORDER BY mode, wins DESC, plays DESC`, [did]))
-      .map(g => Object.assign({}, g, { name: GAME_NAMES[g.game] || g.game }));
+      .map(g => Object.assign({}, g, {
+        name: GAME_NAMES[g.game] || g.game,
+        /* الخسارة تُشتق لا تُخزَّن: أونلاين محكوم من الخادم فالطرح
+           صحيح دائمًا (لا تعادل في هذي الألعاب). أوفلاين بلا فوز أصلًا
+           (مفروض ٠ دائمًا)، فلا معنى لخسارة مشتقة منه. */
+        losses: g.mode === 'online' ? Math.max(0, (g.plays || 0) - (g.wins || 0)) : null,
+      }));
 
     return Response.json({
-      ok: true, player: pl, friends: fr, games,
+      ok: true, player: pl, friends: fr, friendsList, games,
       reports: { from: (from && from.n) || 0, about },
     });
   }
