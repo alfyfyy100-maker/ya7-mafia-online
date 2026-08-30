@@ -9644,6 +9644,52 @@ export default {
        D1 كامل مقابل رقم لا يتغيّر في الدقيقة. ولذلك أيضًا صوت اللاعب
        نفسه قد يتأخر دقيقة في المعدّل العام — العميل يعرض صوته فورًا
        من ردّ /account/rate فلا يلاحظ شيئًا. */
+    /* ── تعليقات لعبة واحدة: قراءة عامة كذلك ──
+       منفصلة عن /rate/all عمدًا: المجاميع تُطلب في كل فتحة للرئيسية،
+       أما التعليقات فلا تُطلب إلا حين يفتح أحدٌ ورقة لعبة بعينها. دمجهما
+       كان يعني حمل نصوص كل الألعاب على كل زائر بلا سبب. */
+    if (url.pathname === '/rate/notes') {
+      if (request.method !== 'GET') {
+        return withCors(new Response('method', { status: 405 }), origin);
+      }
+      if (!env.DB) return withCors(new Response('binding-missing: DB', { status: 501 }), origin);
+      const game = String(url.searchParams.get('game') || '');
+      if (!GAME_NAMES[game]) return withCors(new Response('bad-game', { status: 400 }), origin);
+      const cache = caches.default;
+      const cacheKey = new Request(url.origin + '/rate/notes?game=' + encodeURIComponent(game));
+      let hit = await cache.match(cacheKey);
+      if (!hit) {
+        let notes = [];
+        try {
+          /* المحظور لا يظهر تعليقه: الحظر عقوبة على المحتوى غالبًا،
+             وبقاء نصّه معروضًا بعده يُفرغ العقوبة من معناها. */
+          const r = await env.DB.prepare(
+            `SELECT r.note, r.v, r.at, p.display_name, p.username, p.avatar
+               FROM ratings r JOIN players p ON p.device_id = r.device_id
+              WHERE r.game = ?1 AND r.note IS NOT NULL AND r.note <> ''
+                AND COALESCE(p.banned, 0) = 0
+              ORDER BY r.at DESC LIMIT 20`).bind(game).all();
+          notes = ((r && r.results) || []).map(x => ({
+            note: x.note, v: Number(x.v) || 0, at: x.at,
+            name: x.display_name || x.username || 'لاعب',
+            user: x.username || '', avatar: x.avatar || '',
+          }));
+        } catch (e) {
+          const msg = String((e && e.message) || e);
+          const schema = /no such table|no such column/i.test(msg);
+          return withCors(Response.json({ ok: false, error: schema ? 'schema' : 'server' }, { status: 500 }), origin);
+        }
+        hit = new Response(JSON.stringify({ ok: true, game, notes }), {
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=60',
+          },
+        });
+        if (ctx && ctx.waitUntil) ctx.waitUntil(cache.put(cacheKey, hit.clone()));
+      }
+      return withCors(hit, origin);
+    }
+
     if (url.pathname === '/rate/all') {
       if (request.method !== 'GET') {
         return withCors(new Response('method', { status: 405 }), origin);
@@ -10009,7 +10055,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v150';
+const WORKER_VERSION = 'v152';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10033,6 +10079,22 @@ const LOBBY_GAMES = {
    الزائر رقمًا نهائيًا («٠٪ إعجاب») وهو ليس كذلك، والضرر على لعبة
    جديدة أكبر من فائدة الرقم. تحت هذا الحد تُعرض «جديدة» فقط. */
 const RATE_MIN_SHOW = 3;
+
+/* نصّ التعليق الاختياري مع التقييم. يُعرض للجميع، فالتنقية هنا لا في
+   العميل: نفس منطق cleanName أعلاه (حقن + محارف تحكّم + محارف الاتجاه
+   التي تقلب شكل السطر) مع سماح بسطرٍ واحد فقط — التعليق سطران أو ثلاثة
+   لا مقال، والأسطر الكثيرة تكسر تخطيط البطاقة. */
+const RATE_NOTE_MAX = 240;
+function cleanNote(raw) {
+  if (raw == null) return '';
+  return String(raw)
+    .replace(/[<>&"'`\\]/g, '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, RATE_NOTE_MAX);
+}
 
 const GAME_NAMES = {
   baloot: 'بلوت',
@@ -11635,23 +11697,43 @@ async function handleAccountInner(request, env, url, ctx) {
     if (!await rateLimit(env, 'rate:' + me.device_id, 120, 60 * 60 * 1000, true))
       return fail(request, 'rate', 'تقييمات كثيرة، جرّب بعدين');
 
+    /* التعليق اختياري بثلاث حالات مقصودة:
+       - الحقل غائب تمامًا  → لا نلمس التعليق القديم (تبديل 👍/👎 وحده)
+       - نصّ                → يُستبدل
+       - سلسلة فارغة        → يُمسح (زر «امسح تعليقي») */
+    const hasNote = Object.prototype.hasOwnProperty.call(body, 'note');
+    const note = hasNote ? cleanNote(body.note) : null;
+
     if (v === 0) {
+      /* سحب التقييم يسحب التعليق معه: تعليق بلا 👍/👎 يعرضه الموقع بلا
+         سياق، والزائر يقرأ نصًّا لا يدري أمدحٌ هو أم ذم. */
       await env.DB.prepare('DELETE FROM ratings WHERE game = ?1 AND device_id = ?2')
         .bind(game, me.device_id).run();
+    } else if (hasNote) {
+      await env.DB.prepare(
+        `INSERT INTO ratings (game, device_id, v, at, note) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(game, device_id) DO UPDATE SET v = ?3, at = ?4, note = ?5`
+      ).bind(game, me.device_id, v, now, note).run();
     } else {
       await env.DB.prepare(
         `INSERT INTO ratings (game, device_id, v, at) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(game, device_id) DO UPDATE SET v = ?3, at = ?4`
       ).bind(game, me.device_id, v, now).run();
     }
+    /* الكاش يحمل نسخة عمرها دقيقة، والتعليق الجديد يجب أن يظهر لصاحبه
+       فورًا وإلا حسبه ضاع وأعاد كتابته. */
+    if (ctx && ctx.waitUntil) {
+      ctx.waitUntil(caches.default.delete(
+        new Request(url.origin + '/rate/notes?game=' + encodeURIComponent(game))).catch(() => {}));
+    }
     const agg = await env.DB.prepare(
       `SELECT SUM(CASE WHEN v > 0 THEN 1 ELSE 0 END) AS up,
               SUM(CASE WHEN v < 0 THEN 1 ELSE 0 END) AS down
          FROM ratings WHERE game = ?1`).bind(game).first();
     return J(request, {
-      ok: true, game, mine: v,
+      ok: true, game, mine: v, note: (v === 0 ? '' : (hasNote ? note : undefined)),
       up: Number((agg && agg.up) || 0), down: Number((agg && agg.down) || 0),
-      min: RATE_MIN_SHOW,
+      min: RATE_MIN_SHOW, note_max: RATE_NOTE_MAX,
     });
   }
 
@@ -11659,13 +11741,16 @@ async function handleAccountInner(request, env, url, ctx) {
   if (path === 'rated') {
     const me = await authFromBody(env, body);
     if (!me) return fail(request, 'auth');
-    let mine = {};
+    let mine = {}, notes = {};
     try {
-      const r = await env.DB.prepare('SELECT game, v FROM ratings WHERE device_id = ?1')
+      const r = await env.DB.prepare('SELECT game, v, note FROM ratings WHERE device_id = ?1')
         .bind(me.device_id).all();
-      for (const x of ((r && r.results) || [])) mine[x.game] = Number(x.v);
+      for (const x of ((r && r.results) || [])) {
+        mine[x.game] = Number(x.v);
+        if (x.note) notes[x.game] = x.note;
+      }
     } catch {}
-    return J(request, { ok: true, mine });
+    return J(request, { ok: true, mine, notes, note_max: RATE_NOTE_MAX });
   }
 
   if (path === 'me') {
@@ -12508,6 +12593,36 @@ async function adminPanelInner(request, env, url, body) {
         .bind(did, nm).run();
       return Response.json({ ok: true });
     }
+    /* ── إصدار كود استرجاع جديد ──
+       الطريق الوحيد إذا ضاع الكود القديم ولا بريد احتياطي مسجَّل. يُبطل
+       الكود القديم تمامًا (لا يبقى صالحًا لأحد وجده) ويرفع token_ver
+       فيُخرج أي جهاز موصول حاليًا — نفس أثر «تسجيل الخروج من كل مكان»،
+       وهو مقصود: كود جديد بمعرفة القديم يعني القديم مخترَق افتراضًا.
+       الكود الجديد يُعرض هنا مرة واحدة بالضبط، كما في التسجيل — لا يُخزَّن
+       صريحًا ولا يمكن استرجاعه من اللوحة بعد هذا الردّ. */
+    if (action === 'recode') {
+      let code = null, saved = false;
+      for (let attempt = 0; attempt < 5 && !saved; attempt++) {
+        code = makeCode();
+        const flat = code.replace('-', '');
+        try {
+          await env.DB.prepare(
+            `UPDATE players SET code_cipher = ?2, code_lookup = ?3, token_ver = token_ver + 1
+               WHERE device_id = ?1`
+          ).bind(did,
+            await encryptText(env.ACCOUNT_CODE_KEY, flat),
+            await blindIndex(env.ACCOUNT_CODE_KEY, flat)
+          ).run();
+          saved = true;
+        } catch (e) {
+          const msg = String((e && e.message) || '').toUpperCase();
+          if (!msg.includes('UNIQUE') && !msg.includes('CONSTRAINT')) throw e;
+          // تصادم نادر جدًا على code_lookup — أعد المحاولة بكود آخر
+        }
+      }
+      if (!saved) return Response.json({ ok: false, error: 'db' });
+      return Response.json({ ok: true, recovery_code: code });
+    }
     if (action === 'resetstats') {
       await env.DB.prepare(
         `UPDATE players SET games_played = 0, wins = 0, losses = 0,
@@ -12585,6 +12700,50 @@ async function adminPanelInner(request, env, url, body) {
     const id = Number(body.rowid) || 0;
     if (!id) return Response.json({ ok: false, error: 'bad-action' });
     await env.DB.prepare('DELETE FROM scores WHERE rowid = ?1').bind(id).run();
+    return Response.json({ ok: true });
+  }
+
+  /* ── التقييمات والتعليقات ──
+     التعليق نصّ حرّ يظهر لكل زائر، فلا بد من طريق حذف. الحذف هنا يمسح
+     النصّ ويُبقي 👍/👎: التعليق المسيء لا يُلغي رأي صاحبه في اللعبة. */
+  if (sub === '/notes') {
+    let rows = [], stats = [];
+    try {
+      const r = await env.DB.prepare(
+        `SELECT r.rowid AS _rowid, r.game, r.note, r.v, r.at, r.device_id,
+                p.username, p.display_name, p.banned
+           FROM ratings r LEFT JOIN players p ON p.device_id = r.device_id
+          WHERE r.note IS NOT NULL AND r.note <> ''
+          ORDER BY r.at DESC LIMIT 100`).all();
+      rows = ((r && r.results) || []).map(x =>
+        Object.assign({}, x, { gameName: GAME_NAMES[x.game] || x.game }));
+      const g = await env.DB.prepare(
+        `SELECT game,
+                SUM(CASE WHEN v > 0 THEN 1 ELSE 0 END) AS up,
+                SUM(CASE WHEN v < 0 THEN 1 ELSE 0 END) AS down,
+                SUM(CASE WHEN note IS NOT NULL AND note <> '' THEN 1 ELSE 0 END) AS notes
+           FROM ratings GROUP BY game ORDER BY (up + down) DESC`).all();
+      stats = ((g && g.results) || []).map(x =>
+        Object.assign({}, x, { gameName: GAME_NAMES[x.game] || x.game }));
+    } catch (e) {
+      if (/no such table|no such column/i.test(String(e && e.message)))
+        return Response.json({ ok: true, missing: true, notes: [], stats: [] });
+      throw e;
+    }
+    return Response.json({ ok: true, notes: rows, stats });
+  }
+  if (sub === '/notes/delete') {
+    const id = Number(body.rowid) || 0;
+    if (!id) return Response.json({ ok: false, error: 'bad-action' });
+    const row = await admFirst(env, 'SELECT game FROM ratings WHERE rowid = ?1', [id]);
+    await env.DB.prepare("UPDATE ratings SET note = '' WHERE rowid = ?1").bind(id).run();
+    /* الكاش العام يحمل النصّ دقيقة بعد الحذف — نُبطله فورًا */
+    if (row && row.game) {
+      try {
+        await caches.default.delete(new Request(
+          new URL(request.url).origin + '/rate/notes?game=' + encodeURIComponent(row.game)));
+      } catch {}
+    }
     return Response.json({ ok: true });
   }
 
