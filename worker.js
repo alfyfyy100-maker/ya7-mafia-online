@@ -10055,7 +10055,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v153';
+const WORKER_VERSION = 'v154';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -12488,6 +12488,41 @@ async function adminPanelInner(request, env, url, body) {
       `SELECT ${ADM_PCOLS} FROM players WHERE last_seen > ?1 ORDER BY last_seen DESC LIMIT 100`,
       [now - ACC.ONLINE_MS]);
     return Response.json({ ok: true, players: rows });
+  }
+
+  /* ── القائمة خلف أي رقم في «نظرة عامة» ──
+     كل شريحة هناك كانت عدًّا صامتًا. هنا شرط SQL واحد لكل شريحة، بمفتاح
+     مغلق (لا يُبنى الشرط من جسم الطلب أبدًا — وإلا صار حقن SQL من اللوحة).
+     الترتيب لكل مفتاح يخدم سؤاله: «الأكثر فوزًا» تُرتَّب بالفوز، «جديد
+     اليوم» بتاريخ التسجيل، وهكذا. */
+  const PLAYER_VIEWS = {
+    total:    { where: 'username IS NOT NULL',        order: 'last_seen DESC',  ar: 'كل المسجّلين' },
+    new24:    { where: 'created_at > ?1',             order: 'created_at DESC', ar: 'جديد اليوم', bind: [D24] },
+    new7:     { where: 'created_at > ?1',             order: 'created_at DESC', ar: 'جديد ٧ أيام', bind: [D7] },
+    act24:    { where: 'last_seen > ?1',              order: 'last_seen DESC',  ar: 'نشط اليوم', bind: [D24] },
+    act7:     { where: 'last_seen > ?1',              order: 'last_seen DESC',  ar: 'نشط ٧ أيام', bind: [D7] },
+    banned:   { where: 'banned = 1',                  order: 'last_seen DESC',  ar: 'المحظورون' },
+    games:    { where: 'games_played > 0',            order: 'games_played DESC', ar: 'من لعب مباريات' },
+    wins:     { where: 'wins > 0',                    order: 'wins DESC',       ar: 'من عنده انتصارات' },
+    withmail: { where: 'contact_cipher IS NOT NULL',  order: 'created_at DESC',  ar: 'عنده بريد احتياطي' },
+  };
+  if (sub === '/players-view') {
+    const v = PLAYER_VIEWS[String(body.view || '')];
+    if (!v) return Response.json({ ok: false, error: 'bad-view' });
+    const rows = await admAll(env,
+      `SELECT ${ADM_PCOLS} FROM players WHERE ${v.where} ORDER BY ${v.order} LIMIT 100`,
+      v.bind || []);
+    return Response.json({ ok: true, title: v.ar, players: rows });
+  }
+
+  /* ── الغرف المفتوحة الآن، بالتفصيل لا بالعدّ ── */
+  if (sub === '/rooms-open') {
+    const lob = await admLobbyRooms(env, url.origin);
+    return Response.json({
+      ok: true,
+      error: lob.error || null,
+      rooms: lob.rooms || [],
+    });
   }
 
   /* ── الصداقات: من طرف لطرف بالأسماء لا بالعدّ فقط ──
