@@ -9634,6 +9634,56 @@ export default {
     }
 
 
+    /* ── تقييمات الألعاب والقصص: قراءة عامة ──
+       صوت واحد لكل حساب لكل لعبة (👍/👎). الكتابة تمر على /account/rate
+       لأنها تحتاج توكنًا؛ أما القراءة فمفتوحة لكل زائر — وهي الهدف كله:
+       التقييم يشوفه الجميع لا صاحبه وحده.
+
+       مخزَّنة في كاش الحافة ٦٠ ثانية: الصفحة الرئيسية تطلبها عند كل
+       فتحة، والتجميع مسح كامل للجدول. بلا الكاش يصير كل زائر استعلام
+       D1 كامل مقابل رقم لا يتغيّر في الدقيقة. ولذلك أيضًا صوت اللاعب
+       نفسه قد يتأخر دقيقة في المعدّل العام — العميل يعرض صوته فورًا
+       من ردّ /account/rate فلا يلاحظ شيئًا. */
+    if (url.pathname === '/rate/all') {
+      if (request.method !== 'GET') {
+        return withCors(new Response('method', { status: 405 }), origin);
+      }
+      if (!env.DB) {
+        return withCors(new Response('binding-missing: DB', { status: 501 }), origin);
+      }
+      const cache = caches.default;
+      const cacheKey = new Request(url.origin + '/rate/all');
+      let hit = await cache.match(cacheKey);
+      if (!hit) {
+        let items = {};
+        try {
+          const r = await env.DB.prepare(
+            `SELECT game,
+                    SUM(CASE WHEN v > 0 THEN 1 ELSE 0 END) AS up,
+                    SUM(CASE WHEN v < 0 THEN 1 ELSE 0 END) AS down
+               FROM ratings GROUP BY game`).all();
+          for (const x of ((r && r.results) || [])) {
+            items[x.game] = { up: Number(x.up) || 0, down: Number(x.down) || 0 };
+          }
+        } catch (e) {
+          /* الجدول لم يُنشأ بعد في D1: نقولها صراحةً بدل خطأ شبكة كاذب،
+             ولا نخزّنها في الكاش حتى لا تعلق دقيقة بعد إنشاء الجدول. */
+          const msg = String((e && e.message) || e);
+          const schema = /no such table|no such column/i.test(msg);
+          return withCors(Response.json(
+            { ok: false, error: schema ? 'schema' : 'server' }, { status: schema ? 500 : 500 }), origin);
+        }
+        hit = new Response(JSON.stringify({ ok: true, min: RATE_MIN_SHOW, items }), {
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'public, max-age=60',
+          },
+        });
+        if (ctx && ctx.waitUntil) ctx.waitUntil(cache.put(cacheKey, hit.clone()));
+      }
+      return withCors(hit, origin);
+    }
+
     // ── دردشة الغرف: كائن مستقل لكل (لعبة + رمز) ──
     if (url.pathname.startsWith('/chat/')) {
       const m = url.pathname.match(/^\/chat\/([a-z]+)\/([A-Za-z0-9]{4,8})\/ws$/);
@@ -9959,7 +10009,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v149';
+const WORKER_VERSION = 'v150';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -9979,6 +10029,11 @@ const LOBBY_GAMES = {
 /* أسماء كل الألعاب للعرض، لا الأونلاين وحدها: سجل اللاعب يشمل ما لعبه
    بلا نت أيضًا. وهي كذلك قائمة السماح لما يُرسله العميل في /account/played
    فلا تُخزَّن مفاتيح ملفَّقة. */
+/* أقل عدد أصوات قبل إظهار النسبة. تقييم مبني على صوت أو صوتين يقرأه
+   الزائر رقمًا نهائيًا («٠٪ إعجاب») وهو ليس كذلك، والضرر على لعبة
+   جديدة أكبر من فائدة الرقم. تحت هذا الحد تُعرض «جديدة» فقط. */
+const RATE_MIN_SHOW = 3;
+
 const GAME_NAMES = {
   baloot: 'بلوت',
   mafia: 'مافيا', khawana: 'لمن العرش؟', mawwih: 'مَوِّه', daqash: 'داقش',
@@ -11565,6 +11620,54 @@ async function handleAccountInner(request, env, url, ctx) {
     return J(request, { ok: true });
   }
 
+  /* ---------- تقييم لعبة أو قصة (👍/👎) ---------- */
+  /* لماذا الحساب شرط: التقييم بلا حساب يعني صوتًا لكل تفريغ تخزين، أي
+     رقمًا يستطيع أي أحد تحريكه في دقيقة. المفتاح المركّب (game, device_id)
+     يجعل الصوت الثاني تحديثًا للأول لا صفًّا جديدًا — والتراجع (v=0) حذف. */
+  if (path === 'rate') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth', 'سجّل دخولك عشان تقيّم');
+    const game = String(body.game || '');
+    if (!GAME_NAMES[game]) return fail(request, 'bad-game', 'لعبة غير معروفة');
+    const v = Number(body.v);
+    if (!(v === 1 || v === -1 || v === 0)) return fail(request, 'bad-vote');
+    /* يفشل مقفلًا: مسار كتابة، وفتحه وقت تعثّر D1 يرفع الحدّ في أسوأ لحظة */
+    if (!await rateLimit(env, 'rate:' + me.device_id, 120, 60 * 60 * 1000, true))
+      return fail(request, 'rate', 'تقييمات كثيرة، جرّب بعدين');
+
+    if (v === 0) {
+      await env.DB.prepare('DELETE FROM ratings WHERE game = ?1 AND device_id = ?2')
+        .bind(game, me.device_id).run();
+    } else {
+      await env.DB.prepare(
+        `INSERT INTO ratings (game, device_id, v, at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(game, device_id) DO UPDATE SET v = ?3, at = ?4`
+      ).bind(game, me.device_id, v, now).run();
+    }
+    const agg = await env.DB.prepare(
+      `SELECT SUM(CASE WHEN v > 0 THEN 1 ELSE 0 END) AS up,
+              SUM(CASE WHEN v < 0 THEN 1 ELSE 0 END) AS down
+         FROM ratings WHERE game = ?1`).bind(game).first();
+    return J(request, {
+      ok: true, game, mine: v,
+      up: Number((agg && agg.up) || 0), down: Number((agg && agg.down) || 0),
+      min: RATE_MIN_SHOW,
+    });
+  }
+
+  /* ---------- أصوات هذا الحساب (لتلوين الأزرار في كل الصفحات) ---------- */
+  if (path === 'rated') {
+    const me = await authFromBody(env, body);
+    if (!me) return fail(request, 'auth');
+    let mine = {};
+    try {
+      const r = await env.DB.prepare('SELECT game, v FROM ratings WHERE device_id = ?1')
+        .bind(me.device_id).all();
+      for (const x of ((r && r.results) || [])) mine[x.game] = Number(x.v);
+    } catch {}
+    return J(request, { ok: true, mine });
+  }
+
   if (path === 'me') {
     const me = await authFromBody(env, body);
     if (!me) return fail(request, 'auth');
@@ -12511,7 +12614,7 @@ async function adminPanelInner(request, env, url, body) {
       const c = await admFirst(env, 'SELECT COUNT(*) AS n FROM "' + t.name.replace(/"/g, '') + '"');
       out.push({ name: t.name, rows: (c && c.n) || 0 });
     }
-    const want = ['players', 'friends', 'invites', 'reports', 'username_holds', 'rate_limits', 'game_stats'];
+    const want = ['players', 'friends', 'invites', 'reports', 'username_holds', 'rate_limits', 'game_stats', 'ratings'];
     return Response.json({
       ok: true,
       version: WORKER_VERSION,
