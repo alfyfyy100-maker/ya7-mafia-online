@@ -10055,7 +10055,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v160';
+const WORKER_VERSION = 'v161';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -14888,8 +14888,18 @@ export class HuntRoom {
         for (const p of g.players) {
           const fresh = this.blankPlayer(p.id, p.name, p.did);
           fresh.tok = p.tok; fresh.connected = p.connected;
+          /* هوية المقعد لا تُصفَّر مع الجولة الجديدة. blankPlayer صار
+             يحمل حقول الهوية، فكان Object.assign يمسح cid فيرجع اللاعب
+             بمقعد ثانٍ باسمه في الجولة الثانية، ويمسح sid (فيصير صفرًا)
+             فيُهمَل كل إغلاق بعدها — أي لا انقطاع يُرصد ولا استضافة
+             تنتقل لبقيّة السهرة. */
+          fresh.cid = p.cid; fresh.sid = p.sid; fresh.hb = p.hb;
+          fresh.lastSeen = p.lastSeen; fresh.quit = p.quit; fresh.left = p.left;
           Object.assign(p, fresh);
         }
+        /* الغرفة العامة شُطبت من «الغرف المفتوحة» عند البدء — ورجعت
+           الآن ردهةً تقبل الدخول، فتُدرج من جديد. */
+        this.lobbySync('add');
         return;
       }
     }
