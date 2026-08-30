@@ -10055,7 +10055,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v154';
+const WORKER_VERSION = 'v160';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -13985,6 +13985,7 @@ export class ShifraRoom {
     const tok = url.searchParams.get('tok') || '';
     /* الراوتر تحقّق من توكن الحساب واستبدله بـ did موثوق قبل أن يصل هنا */
     const did = url.searchParams.get('did') || '';
+    const cid = seatCid(url.searchParams.get('cid'));
 
     if (request.headers.get('Upgrade') !== 'websocket')
       return new Response('expected websocket', { status: 426 });
@@ -13994,8 +13995,9 @@ export class ShifraRoom {
     ws.accept();
 
     if (!this.g) this.init(code);
+    seatSweep(this.g, this.sockets);
 
-    if (pid && this.kicked.has(pid)) {
+    if ((pid && this.kicked.has(pid)) || (cid && this.kicked.has(cid))) {
       ws.send(JSON.stringify({ t: 'kicked' }));
       ws.close(1000);
       return new Response(null, { status: 101, webSocket: pair[0] });
@@ -14007,10 +14009,14 @@ export class ShifraRoom {
        من اللوح — أي مفاتيح الكلمات كاملة. التوكن سرّي لا يُبثّ إطلاقًا.
        ومن جاء بتوكن لا يطابق يُعامَل لاعبًا جديدًا، لا يُطرد: العميل
        القديم قبل هذي النسخة لا يملك توكنًا أصلًا. */
-    let p = (pid && tok) ? this.g.players.find(x => x.id === pid && x.tok && x.tok === tok) : null;
+    let p = seatFind(this.g, pid, tok, cid);
     if (p) {
+      pid = p.id;
       p.connected = true;
+      p.quit = false;
+      p.left = 0;
       p.name = name || p.name;
+      if (cid) p.cid = cid;
       if (did) p.did = String(did).slice(0, 64);
     } else {
       if (this.g.phase !== 'lobby' && this.g.phase !== 'end') {
@@ -14025,37 +14031,56 @@ export class ShifraRoom {
       }
       pid = crypto.randomUUID();
       p = {
-        id: pid, name, team: null, spymaster: false, connected: true,
+        id: pid, name: uniqueName(this.g, name), team: null, spymaster: false, connected: true,
         tok: crypto.randomUUID().replace(/-/g, ''),
+        cid: cid || '', sid: 0, lastSeen: 0, hb: false, quit: false, left: 0,
         did: did ? String(did).slice(0, 64) : null,
       };
       this.g.players.push(p);
       if (!this.g.hostId) this.g.hostId = pid;
     }
 
-    this.sockets.set(pid, ws);
+    const sid = (this._sid = (this._sid || 0) + 1);
+    p.sid = sid;
+    p.lastSeen = Date.now();
+    seatTakeover(this.sockets, pid, ws);
     ws.send(JSON.stringify({ t: 'you', pid, tok: p.tok }));
+    this.hostCheck();
 
     ws.addEventListener('message', ev => {
       let m2; try { m2 = JSON.parse(ev.data); } catch { return; }
-      /* النبضة لا تُعالَج ولا تُبَثّ: بثّ الحالة كاملة لكل لاعب كل ٢٥
-         ثانية لكل لاعب هو ما كنا نتفاداه أصلًا بجعل النوع hb لا ping. */
-      if (m2 && m2.t === 'hb') return;
+      const q0 = this.g.players.find(x => x.id === pid);
+      if (q0) { q0.lastSeen = Date.now(); q0.hb = q0.hb || (m2 && m2.t === 'hb'); }
+      /* النبضة لا تُردّ عليها الحالة كاملة — بثّها لكل لاعب كل ٢٥ ثانية
+         هو ما تفاديناه بجعل النوع hb لا ping. لكن يُردّ عليها بنبضة
+         مثلها: بها وحدها يعرف العميل أن مقبسه حيّ لا نصف مفتوح. */
+      if (m2 && m2.t === 'hb') {
+        try { ws.send('{"t":"hb"}'); } catch {}
+        if (seatSweep(this.g, this.sockets)) { this.hostCheck(); this.broadcast(); }
+        return;
+      }
+      if (m2 && m2.t === 'bye') {
+        if (q0) q0.quit = true;
+        try { ws.close(1000); } catch {}
+        return;
+      }
       if (!this.allowMsg(pid)) return;
       try { this.onMsg(pid, m2); } catch (e) { ws.send(JSON.stringify({ t: 'err', m: String(e.message || e) })); }
       this.broadcast();
     });
     const bye = () => {
       const q = this.g.players.find(x => x.id === pid);
-      if (q) q.connected = false;
-      this.sockets.delete(pid);
-      if (this.g.phase === 'lobby') this.g.players = this.g.players.filter(x => x.connected);
-      // الاستضافة تنتقل لأقدم لاعب متصل (ترتيب المصفوفة = ترتيب الدخول)
-      const wasHost = this.g.hostId === pid;
-      this.ensureHost();
-      if (wasHost && this.g.hostId) {
-        this.g.log.unshift(`انتقلت الاستضافة إلى ${this.nameOf(this.g.hostId)}`);
+      if (!q || q.sid !== sid) return;      // إغلاق مقبس قديم بعد رجوع ناجح
+      q.connected = false;
+      q.left = Date.now();
+      q.sid = 0;
+      if (this.sockets.get(pid) === ws) this.sockets.delete(pid);
+      if (this.g.phase === 'lobby' && q.quit) {
+        this.g.players = this.g.players.filter(x => x !== q);
       }
+      seatSweep(this.g, this.sockets);
+      // الاستضافة تنتقل لأقدم لاعب متصل (ترتيب المصفوفة = ترتيب الدخول)
+      this.hostCheck();
       this.broadcast();
     };
     ws.addEventListener('close', bye);
@@ -14137,7 +14162,8 @@ export class ShifraRoom {
           this.sockets.delete(m.target);
         }
         this.kicked.add(m.target);
-        this.ensureHost();
+        if (t.cid) this.kicked.add(t.cid);
+        this.hostCheck();
         return;
       }
       case "hint": {
@@ -14177,6 +14203,18 @@ export class ShifraRoom {
     if (g.hostId && g.players.some(p => p.id === g.hostId && p.connected)) return;
     const nxt = g.players.find(p => p.connected);
     g.hostId = nxt ? nxt.id : null;
+  }
+
+  /* انتقال الاستضافة لأقدم لاعب متصل، مع سطر في السجلّ وإشعار للمضيف
+     الجديد وحده. ترتيب المصفوفة = ترتيب الدخول، فالتالي هو الثاني. */
+  hostCheck() {
+    const g = this.g;
+    const before = g.hostId;
+    this.ensureHost();
+    if (!g.hostId || g.hostId === before) return;
+    g.log.unshift(`انتقلت الاستضافة إلى ${this.nameOf(g.hostId)}`);
+    const s = this.sockets.get(g.hostId);
+    if (s) { try { s.send(JSON.stringify({ t: 'host' })); } catch {} }
   }
 
   validate() {
@@ -14400,6 +14438,97 @@ export class ShifraRoom {
 function shifraShuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0;[a[i], a[j]] = [a[j], a[i]]; } return a; }
 function shifraAr(t) { return t === "red" ? "الأحمر" : "الأزرق"; }
 
+/* ═════════════ عقد المقعد المشترك (لغرف نمط this.g) ═════════════
+   يخدم المطاردة والشفرة وأي لعبة قادمة تحفظ حالتها في this.g.
+
+   «أدخل الغرفة فيطلع اسمي مرّتين وثلاث» له ثلاثة أسباب، وكلٌّ منها
+   يحتاج علاجه:
+
+   ١) ضغطتان على «ادخل»/«أنشئ» قبل أن يستيقظ الـDurable Object (ثانية
+      إلى ثلاث بلا أي ردّ فعل على الزر) → سوكِتان، وكلاهما بلا توكن
+      لأن التوكن ما يصل إلا مع أول ردّ → مقعدان باسم واحد.
+   ٢) المقبس الأول half-open: مات العميل (تبديل شبكة، إغلاق التبويب)
+      ولم يصل FIN إلى الوركر. الخادم يراه readyState===1 فيحسبه لاعبًا
+      حيًّا آخر يحمل نفس الاسم. وإن كان هو المضيف تجمّدت الغرفة كلّها:
+      لا أحد يقدر يبدأ.
+   ٣) حدث close القديم يصل بعد أن نجحت إعادة الاتصال، فيشطب المقعد
+      الجديد لأنه يبحث عنه بالمعرّف نفسه.
+
+   العلاج ثلاثة أجزاء متلازمة:
+   - **cid**: هوية تبويب ثابتة (sessionStorage) تُرسل مع أول اتصال —
+     قبل وجود التوكن — فيُستعاد بها المقعد يقينًا. سرّيّتها كسرّيّة
+     التوكن: لا تُبَثّ في الحالة أبدًا.
+   - **sid**: رقم تسلسلي لكل اتصال. المقعد يحمل رقم اتصاله الحيّ، وأي
+     معالج إغلاق برقم أقدم يُهمَل.
+   - **الكنس بالنبضة**: مقعد لم تصل نبضته منذ SEAT_DEAD_MS يُعدّ منقطعًا
+     ولو بقي مقبسه مفتوحًا — وهذا وحده ما يكشف half-open.               */
+
+const SEAT_DEAD_MS  = 70000;   // النبضة كل ٢٥ث، فثلاث نبضات ضائعة = ميت
+const SEAT_GRACE_MS = 60000;   // مهلة رجوع المنقطع قبل شطب مقعده من الردهة
+
+function seatCid(raw) {
+  return (typeof raw === 'string' && /^[a-f0-9]{16,64}$/.test(raw)) ? raw : '';
+}
+
+/* المقعد الذي يعود إليه هذا الاتصال، أو null إن كان لاعبًا جديدًا.
+   الترتيب مقصود: التوكن أوّلًا (أقوى)، ثم cid (ينقذ ما قبل التوكن). */
+function seatFind(g, pid, tok, cid) {
+  if (!g || !Array.isArray(g.players)) return null;
+  if (pid && tok) {
+    const byTok = g.players.find(x => x.id === pid && x.tok && x.tok === tok);
+    if (byTok) return byTok;
+  }
+  if (cid) {
+    const byCid = g.players.find(x => x.cid && x.cid === cid);
+    if (byCid) return byCid;
+  }
+  return null;
+}
+
+/* الاتصال الجديد يأخذ المقعد ويُغلق سابقه فورًا: لا نسأل readyState،
+   لأن المقبس نصف المفتوح يكذب فيها. */
+function seatTakeover(sockets, id, ws) {
+  const prev = sockets.get(id);
+  if (prev && prev !== ws) { try { prev.close(4000, 'replaced'); } catch {} }
+  sockets.set(id, ws);
+}
+
+/* كنس المقاعد: يُنادى مع كل نبضة وكل اتصال. يرجع true إن تغيّر شيء
+   يستحقّ بثًّا. */
+function seatSweep(g, sockets, now) {
+  if (!g || !Array.isArray(g.players)) return false;
+  now = now || Date.now();
+  let changed = false;
+
+  for (const p of g.players) {
+    /* لا يُحكم بالموت على من لم ينبض قط: صفحة قديمة محفوظة في ذاكرة
+       المتصفّح لا ترسل نبضة، وطردها بالكنس يخرج لاعبًا سليمًا. */
+    if (p.connected && p.hb && now - (p.lastSeen || 0) > SEAT_DEAD_MS) {
+      p.connected = false;
+      p.left = now;
+      p.sid = 0;                                   // يُبطل معالج إغلاقه المتأخر
+      const s = sockets.get(p.id);
+      if (s) { try { s.close(4001, 'stale'); } catch {} }
+      sockets.delete(p.id);
+      changed = true;
+    }
+  }
+
+  /* في الردهة وحدها يُشطب المقعد — وبمهلة، لا فورًا: انقطاعُ ثوانٍ في
+     شبكة جوال كان يشطب المقعد، فيرجع صاحبه بمقعد جديد بجانب اسمه
+     القديم إن بقي. بعد بدء المباراة لا يُشطب أحد أبدًا: دوره محفوظ. */
+  if (g.phase === 'lobby') {
+    const keep = g.players.filter(p =>
+      p.connected || (!p.quit && p.left && now - p.left < SEAT_GRACE_MS));
+    if (keep.length !== g.players.length) {
+      for (const p of g.players) if (!keep.includes(p)) sockets.delete(p.id);
+      g.players = keep;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /* ══════════════════════ المطاردة أونلاين (HuntRoom) ══════════════════════
    لعبة استنتاج على خريطة أماكن. كل لاعب على جواله، وتحرّكه الليلي سرّ لا
    يعرفه غيره — ولذلك **الخادم هو من يقرّر**، لا الأجهزة:
@@ -14484,6 +14613,7 @@ export class HuntRoom {
     let pid = url.searchParams.get('pid') || null;
     const tok = url.searchParams.get('tok') || '';
     const did = url.searchParams.get('did') || '';
+    const cid = seatCid(url.searchParams.get('cid'));
     const wantsPublic = url.searchParams.get('pub') === '1';
 
     if (request.headers.get('Upgrade') !== 'websocket')
@@ -14498,7 +14628,11 @@ export class HuntRoom {
     // أول من يفتح الغرفة يقرّر نوعها؛ ومن يجي بعده ما يقدر يغيّرها
     if (brandNew) this.g.pub = wantsPublic;
 
-    if (pid && this.kicked.has(pid)) {
+    /* الكنس قبل أي شيء: لو كان الداخل قد مات مقبسه ولم يصل FIN، فهذي
+       هي اللحظة التي يُكتشف فيها — قبل أن نقرّر أهو عائد أم جديد. */
+    seatSweep(this.g, this.sockets);
+
+    if ((pid && this.kicked.has(pid)) || (cid && this.kicked.has(cid))) {
       ws.send(JSON.stringify({ t: 'kicked' }));
       ws.close(1000);
       return new Response(null, { status: 101, webSocket: pair[0] });
@@ -14506,11 +14640,15 @@ export class HuntRoom {
 
     /* العودة لمقعد قائم: المعرّف وحده لا يكفي — معرّفات اللاعبين تُبَثّ،
        ومن يعرف معرّف غيره كان يفتح اتصالًا باسمه فيستلم دوره وموقعه.
-       التوكن سرّي لا يُبَثّ إطلاقًا. */
-    let p = (pid && tok) ? this.g.players.find(x => x.id === pid && x.tok && x.tok === tok) : null;
+       التوكن و cid سرّيّان لا يُبَثّان إطلاقًا. */
+    let p = seatFind(this.g, pid, tok, cid);
     if (p) {
+      pid = p.id;                       // العائد بـcid وحده لا يحمل معرّفه بعد
       p.connected = true;
+      p.quit = false;
+      p.left = 0;
       p.name = name || p.name;
+      if (cid) p.cid = cid;
       if (did) p.did = String(did).slice(0, 64);
     } else {
       if (this.g.phase !== 'lobby' && this.g.phase !== 'over') {
@@ -14524,19 +14662,44 @@ export class HuntRoom {
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
       pid = crypto.randomUUID();
-      p = this.blankPlayer(pid, name, did);
+      /* اسمان متطابقان لشخصين مختلفين يربكان التصويت أكثر من أي شيء —
+         والتمييز هنا لا يخفي عطلًا: من كان عائدًا فعلًا استعاد مقعده
+         قبل هذي النقطة بالتوكن أو بـcid. */
+      p = this.blankPlayer(pid, uniqueName(this.g, name), did);
+      p.cid = cid || '';
       this.g.players.push(p);
       if (!this.g.hostId) this.g.hostId = pid;
     }
 
-    this.sockets.set(pid, ws);
+    const sid = (this._sid = (this._sid || 0) + 1);
+    p.sid = sid;
+    p.lastSeen = Date.now();
+    seatTakeover(this.sockets, pid, ws);
     ws.send(JSON.stringify({ t: 'you', pid, tok: p.tok, pub: !!this.g.pub }));
+    this.hostCheck();
     // تُدرَج مرة عند فتحها، ويُحدَّث عدد الحاضرين مع كل دخول
     this.lobbySync(this.listed ? 'ping' : 'add');
 
     ws.addEventListener('message', ev => {
       let m2; try { m2 = JSON.parse(ev.data); } catch { return; }
-      if (m2 && m2.t === 'hb') return;
+      const q0 = this.g.players.find(x => x.id === pid);
+      if (q0) { q0.lastSeen = Date.now(); q0.hb = q0.hb || (m2 && m2.t === 'hb'); }
+
+      /* النبضة لا تُبَثّ ردًّا عليها حالةٌ كاملة — لكنها ترجع نبضةً
+         مثلها: بها يعرف العميل أن اتصاله حيّ فعلًا، وبدونها لا يميّز
+         الشبكةَ الصامتة من المقبس الميت فيبقى ينتظر إلى الأبد. */
+      if (m2 && m2.t === 'hb') {
+        try { ws.send('{"t":"hb"}'); } catch {}
+        if (seatSweep(this.g, this.sockets)) { this.hostCheck(); this.broadcast(); }
+        return;
+      }
+      /* خروج معلن: أفضل من انتظار المهلة — المقعد يُشطب في الردهة
+         حالًا، والاستضافة تنتقل قبل أن يشعر أحد بتوقّف. */
+      if (m2 && m2.t === 'bye') {
+        if (q0) q0.quit = true;
+        try { ws.close(1000); } catch {}
+        return;
+      }
       if (!this.allowMsg(pid)) return;
       try { this.onMsg(pid, m2); }
       catch (e) { try { ws.send(JSON.stringify({ t: 'err', m: String(e.message || e) })); } catch {} }
@@ -14544,14 +14707,20 @@ export class HuntRoom {
     });
     const bye = () => {
       const q = this.g.players.find(x => x.id === pid);
-      if (q) q.connected = false;
-      this.sockets.delete(pid);
-      /* في الردهة فقط يُحذف المنقطع. بعد البدء يبقى مقعده — انقطاع
-         الشبكة لحظةً لا يخرج لاعبًا من مطاردة جارية، ودوره محفوظ. */
-      if (this.g.phase === 'lobby') this.g.players = this.g.players.filter(x => x.connected);
-      const wasHost = this.g.hostId === pid;
-      this.ensureHost();
-      if (wasHost && this.g.hostId) this.g.log.unshift(`انتقلت الاستضافة إلى ${this.nameOf(this.g.hostId)}`);
+      /* إغلاق مقبسٍ قديم بعد أن نجحت إعادة الاتصال: لا يمسّ المقعد.
+         بدون هذا الحارس كان الرجوعُ الناجح يُلغى بحدثٍ متأخّر. */
+      if (!q || q.sid !== sid) return;
+      q.connected = false;
+      q.left = Date.now();
+      q.sid = 0;
+      if (this.sockets.get(pid) === ws) this.sockets.delete(pid);
+      /* في الردهة يُشطب المنقطع — لكن بعد مهلة رجوع، إلا من أعلن خروجه
+         فيُشطب حالًا. بعد البدء يبقى مقعده أبدًا ودوره محفوظ. */
+      if (this.g.phase === 'lobby' && q.quit) {
+        this.g.players = this.g.players.filter(x => x !== q);
+      }
+      seatSweep(this.g, this.sockets);
+      this.hostCheck();
       // غرفة فرغت ما لها مكان في «الغرف المفتوحة»
       const here = this.g.players.filter(x => x.connected !== false).length;
       this.lobbySync(here === 0 ? 'remove' : 'ping');
@@ -14568,6 +14737,10 @@ export class HuntRoom {
     return {
       id: pid, name, connected: true,
       tok: crypto.randomUUID().replace(/-/g, ''),
+      /* هوية المقعد: cid تبويبه، sid رقم اتصاله الحيّ، lastSeen آخر
+         نبضة، hb هل ينبض أصلًا، quit خروج معلن، left لحظة الانقطاع.
+         لا شيء منها يدخل viewFor. */
+      cid: '', sid: 0, lastSeen: 0, hb: false, quit: false, left: 0,
       did: did ? String(did).slice(0, 64) : null,
       role: null, dist: null, alive: true, stuck: false, trapUsed: false,
       move: null, intent: false, trap: null, submitted: false,
@@ -14643,7 +14816,9 @@ export class HuntRoom {
           this.sockets.delete(m.target);
         }
         this.kicked.add(m.target);
-        this.ensureHost();
+        /* المطرود يعود بمقعد جديد لو مُنع بمعرّفه وحده — فيُمنع تبويبه */
+        if (t.cid) this.kicked.add(t.cid);
+        this.hostCheck();
         return;
       }
 
@@ -14953,6 +15128,19 @@ export class HuntRoom {
     if (g.hostId && g.players.some(p => p.id === g.hostId && p.connected)) return;
     const nxt = g.players.find(p => p.connected);
     g.hostId = nxt ? nxt.id : null;
+  }
+
+  /* انتقال الاستضافة: ترتيب المصفوفة هو ترتيب الدخول، فالتالي هو اللاعب
+     الثاني. يُنادى من كل مكان يتغيّر فيه الحضور — الخروج، والكنس،
+     والدخول (لو رجعت الغرفة إلى الحياة وما فيها مضيف). */
+  hostCheck() {
+    const g = this.g;
+    const before = g.hostId;
+    this.ensureHost();
+    if (!g.hostId || g.hostId === before) return;
+    g.log.unshift(`انتقلت الاستضافة إلى ${this.nameOf(g.hostId)}`);
+    const s = this.sockets.get(g.hostId);
+    if (s) { try { s.send(JSON.stringify({ t: 'host' })); } catch {} }
   }
 
   nameOf(id) { const p = this.g.players.find(x => x.id === id); return p ? p.name : '—'; }
