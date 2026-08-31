@@ -10055,7 +10055,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v162';
+const WORKER_VERSION = 'v164';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -11439,6 +11439,38 @@ async function authFromBody(env, body) {
   return row;
 }
 
+/* ---------------------------- محو الحساب ----------------------------- */
+/* مكان واحد يعرف كل جدول فيه device_id. كان الحذف الإداري يعرف أربعة
+   جداول فقط، فتبقى بعده صفوف في ratings و game_stats و push_subs —
+   وأخطرها push_subs: اشتراك حيّ بلا صاحب يظل يستقبل إشعارات. أي جدول
+   جديد يحمل device_id يُضاف هنا وحده، فلا يتفرّع مساران للحذف.
+   كل عبارة في try خاصتها: جدول غير موجود (لم تُنفَّذ SQL بعد) يجب ألا
+   يمنع حذف البقية — الحذف الجزئي أفضل من الفشل الكامل. */
+const ACCOUNT_TABLES = [
+  'DELETE FROM players        WHERE device_id = ?1',
+  'DELETE FROM friends        WHERE a = ?1 OR b = ?1',
+  'DELETE FROM invites        WHERE from_did = ?1 OR to_did = ?1',
+  'DELETE FROM reports        WHERE from_did = ?1 OR about_did = ?1',
+  'DELETE FROM username_holds WHERE device_id = ?1',
+  'DELETE FROM ratings        WHERE device_id = ?1',
+  'DELETE FROM game_stats     WHERE device_id = ?1',
+  'DELETE FROM push_subs      WHERE device_id = ?1',
+  /* مفاتيح الخانق تحمل معرّف الجهاز (del: out: rep: fr*: …) وتبقى بعد
+     الحذف حتى تنتهي نافذتها. المطابقة على ما بعد أول ':' مطابقة تامة لا
+     LIKE: معرّف الجهاز يحوي '_' وهو محرف بدل في LIKE، فكان يشطب صفوف
+     غيره. ومفاتيح الـIPv6 فيها ':' فما بعد الأولى لا يساوي معرّف جهاز
+     أبدًا. جدول صغير ذاتيّ التنظيف، والعملية مرة واحدة في العمر. */
+  "DELETE FROM rate_limits    WHERE substr(k, instr(k, ':') + 1) = ?1",
+];
+
+async function purgeAccount(env, deviceId) {
+  let done = 0;
+  for (const sql of ACCOUNT_TABLES) {
+    try { await env.DB.prepare(sql).bind(deviceId).run(); done++; } catch {}
+  }
+  return done;
+}
+
 /* ------------------------------- الردود ------------------------------- */
 
 /* يعيد استخدام corsFor/isAllowedOrigin الموجودتين في الـ worker بدل قائمة
@@ -12185,6 +12217,35 @@ async function handleAccountInner(request, env, url, ctx) {
   }
 
   /* ---------- تسجيل الخروج: يبطل كل التوكنات لهذا الحساب ---------- */
+  /* ---------- حذف الحساب نهائيًا (بطلب صاحبه) ---------- */
+  /* شرط متجر Play منذ ٢٠٢٤: للمستخدم مسار حذف داخل التطبيق ومسار ويب.
+     التوكن وحده لا يكفي كتأكيد — جوال مفتوح بيد غيره يملك توكنًا صالحًا —
+     فنطلب كتابة اسم المستخدم حرفيًا. لا رجعة بعده: لا أرشفة ولا سلة
+     محذوفات، وهذا مقصود؛ «حذف» في نص السياسة يجب أن تعني حذفًا. */
+  if (path === 'delete') {
+    /* لا نمرّ على authFromBody هنا عمدًا: هي ترفض banned، فكان المحظور
+       ممنوعًا من حذف بياناته. والمنع بلا فائدة أمنية أصلًا — الحظر على
+       الحساب لا على الجهاز، ومعرّف الجهاز يولّده الخادم عشوائيًا، فأي
+       محظور يسجّل حسابًا جديدًا خلال ثانية. النتيجة الوحيدة كانت حرمان
+       صاحب البيانات من حقه في حذفها، وهو التزام صريح في سياستنا وشرط
+       في متجر Play. باقي الشروط (توقيع صحيح + إصدار توكن مطابق) كما هي. */
+    const parsed = await verifyToken(env, body && body.token);
+    const me = parsed
+      ? await env.DB.prepare('SELECT * FROM players WHERE device_id = ?1')
+          .bind(parsed.deviceId).first()
+      : null;
+    if (!me || Number(me.token_ver || 1) !== parsed.ver) return fail(request, 'auth');
+    const typed = String(body.confirm || '').trim().replace(/^@+/, '');
+    if (!typed || lookupNorm(typed) !== me.username_norm)
+      return fail(request, 'confirm', 'اكتب اسم المستخدم بالضبط عشان نتأكد');
+    /* حدّ منخفض: العملية تُنفَّذ مرة واحدة في العمر، وأي تكرار إما خطأ
+       عميل أو محاولة إنهاك للقاعدة بثمان كتابات لكل نداء. */
+    if (!await rateLimit(env, 'del:' + me.device_id, 5, 60 * 60 * 1000, true))
+      return fail(request, 'rate');
+    await purgeAccount(env, me.device_id);
+    return J(request, { ok: true });
+  }
+
   if (path === 'logout') {
     const me = await authFromBody(env, body);
     if (!me) return J(request, { ok: true });   // خروج من جلسة ميتة = نجاح
@@ -12717,18 +12778,10 @@ async function adminPanelInner(request, env, url, body) {
     }
     /* حذف نهائي: الحساب وكل ما يتعلّق به. لا استرجاع بعده. */
     if (action === 'delete') {
-      const stmts = [
-        env.DB.prepare('DELETE FROM players WHERE device_id = ?1').bind(did),
-      ];
-      for (const s of [
-        ['DELETE FROM friends WHERE a = ?1 OR b = ?1'],
-        ['DELETE FROM invites WHERE from_did = ?1 OR to_did = ?1'],
-        ['DELETE FROM reports WHERE from_did = ?1 OR about_did = ?1'],
-        ['DELETE FROM username_holds WHERE device_id = ?1'],
-      ]) {
-        try { stmts.push(env.DB.prepare(s[0]).bind(did)); } catch {}
-      }
-      for (const st of stmts) { try { await st.run(); } catch {} }
+      /* نفس الدالة التي يستعملها حذف المستخدم لنفسه — كانت هنا قائمة
+         جداول ثانية أقصر، فيبقى بعد الحذف الإداري صفوف في ratings
+         و game_stats و push_subs. */
+      await purgeAccount(env, did);
       return Response.json({ ok: true });
     }
     return Response.json({ ok: false, error: 'bad-action' });
@@ -12921,9 +12974,14 @@ async function logGame(env, deviceId, game, mode, won, score) {
   const now = Date.now();
   const s = (score == null || !isFinite(score)) ? null : Math.round(Number(score));
   try {
+    /* WHERE EXISTS: لاعب حذف حسابه وهو داخل غرفة كانت جولتها تُنشئ له
+       صفًّا جديدًا عند انتهائها — أي عودة بيانات بعد حذف يُفترض أنه
+       نهائي. الشرط داخل نفس العبارة فلا قراءة إضافية من D1.
+       (SELECT بدل VALUES لأن الشرط لا يجوز مع VALUES.) */
     await env.DB.prepare(
       `INSERT INTO game_stats (device_id, game, mode, plays, wins, best, last_at)
-            VALUES (?1, ?2, ?3, 1, ?4, ?5, ?6)
+            SELECT ?1, ?2, ?3, 1, ?4, ?5, ?6
+             WHERE EXISTS (SELECT 1 FROM players WHERE device_id = ?1)
        ON CONFLICT(device_id, game, mode) DO UPDATE SET
             plays   = plays + 1,
             wins    = wins + ?4,
