@@ -10055,7 +10055,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v161';
+const WORKER_VERSION = 'v162';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -14876,6 +14876,12 @@ export class HuntRoom {
         if (!isHost || g.phase !== 'expel') return;
         const w = this.checkWin();
         if (w) return this.finish(w);
+        /* هذا كان الخلل: startNight() تُصفّر حالة الليل لكنها لا تزيد
+           رقمه — الزيادة الوحيدة كانت في startGame() عند الليلة
+           الأولى. فكل ليلة بعدها تُعاد تسميتها «ليلة ١» رغم أن اللعب
+           فعليًّا يتقدّم. الأوفلاين يزيد G.round++ صراحةً قبل كل ليلة
+           جديدة (باستثناء الأولى) — نفس الشيء هنا. */
+        g.round++;
         this.startNight();
         return;
       }
