@@ -1,0 +1,1730 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#05090c">
+<title>الوباء — محاكي تفشٍّ عالمي</title>
+<style>
+:root{
+  --ink:#04080b; --deep:#071018; --panel:#0d1a21; --panel2:#101f27; --edge:#1b3038; --line:#2a4b56;
+  --txt:#dce9ec; --dim:#7a949c; --dim2:#546c74;
+  --virus:#e0353f; --hot:#ff6b53; --ember:#ff9d3c; --plasma:#2fd6a8; --serum:#4aa8ff;
+  --amber:#f2b23c; --dna:#ff9d20; --cure:#48b7ff;
+  --land:#b9b49a; --landdark:#8f8b74; --sea:#0a2033;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;height:100%;background:var(--ink);color:var(--txt);
+  font-family:"Noto Kufi Arabic","Segoe UI",Tahoma,system-ui,sans-serif;font-size:15px;line-height:1.5;
+  overscroll-behavior:none;-webkit-user-select:none;user-select:none}
+button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:none;padding:0}
+button:focus-visible{outline:2px solid var(--plasma);outline-offset:2px}
+.num{font-variant-numeric:tabular-nums;direction:ltr;display:inline-block}
+.hide{display:none!important}
+
+/* ─────────── التخطيط العام ─────────── */
+#stage{position:fixed;inset:0;display:flex;flex-direction:column;overflow:hidden}
+#mapwrap{position:relative;flex:1;min-height:0;background:
+  radial-gradient(1200px 700px at 50% 30%,#0d2b42 0%,#071a2a 55%,#04101a 100%)}
+#map{position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#fx{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none}
+
+/* ─────────── الشريط العلوي ─────────── */
+.hdr{position:absolute;top:0;inset-inline:0;z-index:20;padding:6px 8px 0;
+  background:linear-gradient(180deg,rgba(4,8,11,.92) 40%,rgba(4,8,11,0));pointer-events:none}
+.hdr>*{pointer-events:auto}
+.hrow{display:flex;align-items:center;gap:7px}
+.dnabtn{display:flex;align-items:center;gap:6px;background:linear-gradient(140deg,#3a2408,#1d1305);
+  border:1px solid #7a4d10;border-radius:999px;padding:5px 13px 5px 10px;position:relative;overflow:hidden;
+  box-shadow:0 3px 14px -6px #ff9d20}
+.dnabtn b{color:var(--dna);font-size:17px;font-weight:800}
+.dnabtn i{font-style:normal;font-size:9.5px;color:#b6874a}
+.dnabtn.flash::after{content:"";position:absolute;inset:0;background:var(--dna);opacity:.4;animation:fadeout .55s forwards}
+@keyframes fadeout{to{opacity:0}}
+.brand{flex:1;min-width:0;text-align:start}
+.brand b{font-size:15px;display:block;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.brand span{font-size:9.5px;color:var(--dim);display:block;line-height:1.2}
+.speeds{display:flex;gap:2px;background:rgba(8,18,24,.9);border:1px solid var(--edge);border-radius:10px;padding:3px}
+.speeds button{width:29px;height:26px;border-radius:7px;font-size:11px;color:var(--dim);font-weight:800}
+.speeds button.on{background:var(--line);color:#fff}
+.speeds button.pz{color:var(--amber)}
+
+.bars{display:flex;gap:6px;margin-top:6px}
+.bar{flex:1;background:rgba(8,18,24,.86);border:1px solid var(--edge);border-radius:10px;padding:4px 9px 6px}
+.bar .lab{display:flex;justify-content:space-between;font-size:9.5px;color:var(--dim);margin-bottom:4px}
+.bar .lab b{font-size:11.5px;color:var(--txt)}
+.track{height:5px;border-radius:5px;background:#06121a;overflow:hidden;position:relative}
+.track i{display:block;height:100%;border-radius:5px;transition:width .35s linear}
+.f-inf{background:linear-gradient(90deg,#7e1c24,var(--hot))}
+.f-dead{background:linear-gradient(90deg,#3a1013,#8c2b33)}
+.f-cure{background:linear-gradient(90deg,#1a5a94,var(--cure))}
+.f-cure::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);animation:shine 2.6s linear infinite}
+@keyframes shine{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+
+/* ─────────── شريط الأخبار ─────────── */
+.news{position:absolute;bottom:0;inset-inline:0;z-index:15;display:flex;align-items:center;gap:7px;
+  padding:6px 10px;background:linear-gradient(0deg,rgba(4,9,12,.96),rgba(4,9,12,.72));
+  border-top:1px solid var(--edge);font-size:11.5px;color:#a9c1c6;min-height:32px}
+.news em{font-style:normal;color:var(--virus);font-size:9.5px;flex:0 0 auto;font-weight:800;
+  border:1px solid #4d1f25;border-radius:4px;padding:1px 5px;background:#190b0d}
+.news span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* ─────────── أزرار القاعدة ─────────── */
+.dock{position:relative;z-index:25;display:flex;gap:6px;padding:7px 8px calc(7px + env(safe-area-inset-bottom));
+  background:linear-gradient(180deg,#0a141a,#050b0f);border-top:1px solid var(--edge)}
+.dockbtn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:7px 2px 6px;
+  border-radius:12px;background:var(--panel);border:1px solid var(--edge);position:relative}
+.dockbtn svg{width:20px;height:20px;stroke:var(--dim);fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.dockbtn span{font-size:10.5px;color:var(--dim);font-weight:700}
+.dockbtn.on{background:linear-gradient(180deg,#18303a,#0f2028);border-color:var(--line)}
+.dockbtn.on svg{stroke:var(--plasma)}
+.dockbtn.on span{color:#fff}
+.dockbtn .bdg{position:absolute;top:4px;inset-inline-end:6px;min-width:15px;height:15px;border-radius:8px;
+  background:var(--dna);color:#1a1002;font-size:9.5px;font-weight:800;display:grid;place-items:center;padding:0 3px}
+.dockbtn .bdg.cure{background:var(--cure);color:#04121e}
+
+/* ─────────── اللوحة المنسدلة ─────────── */
+.sheet{position:fixed;inset-inline:0;bottom:0;z-index:60;max-height:82vh;display:flex;flex-direction:column;
+  background:linear-gradient(180deg,#0e1c23,#080f14);border-top:1px solid var(--line);
+  border-radius:18px 18px 0 0;box-shadow:0 -14px 40px -10px #000;
+  transform:translateY(102%);transition:transform .26s cubic-bezier(.22,.7,.3,1)}
+.sheet.open{transform:none}
+.sheet .grab{height:22px;display:grid;place-items:center;flex:0 0 auto}
+.sheet .grab i{width:44px;height:4px;border-radius:3px;background:#2b4a55;display:block}
+.sheet .shead{display:flex;align-items:center;gap:8px;padding:0 14px 8px;flex:0 0 auto}
+.sheet .shead h2{margin:0;font-size:16px;flex:1}
+.sheet .shead .x{width:30px;height:30px;border-radius:9px;background:#12242c;border:1px solid var(--edge);
+  display:grid;place-items:center;font-size:15px;color:var(--dim)}
+.sheet .sbody{overflow:auto;-webkit-overflow-scrolling:touch;padding:0 12px 16px;flex:1}
+.subtabs{display:flex;gap:5px;margin-bottom:9px;position:sticky;top:0;z-index:2;
+  background:linear-gradient(180deg,#0e1c23 70%,rgba(14,28,35,0));padding-bottom:6px}
+.subtabs button{flex:1;padding:7px 0;border-radius:9px;font-size:11.5px;font-weight:800;color:var(--dim);
+  background:#0b1519;border:1px solid var(--edge)}
+.subtabs button.on{color:#04120e;background:var(--plasma);border-color:var(--plasma)}
+
+/* ─────────── بطاقات التطوير ─────────── */
+.tree{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:7px}
+.up{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:8px 9px;text-align:start;
+  display:flex;flex-direction:column;gap:5px;min-height:92px;position:relative;overflow:hidden}
+.up .nm{font-size:12.5px;font-weight:800;line-height:1.25}
+.up .ds{font-size:9.5px;color:var(--dim2);line-height:1.35;flex:1}
+.up .ef{display:flex;flex-wrap:wrap;gap:3px}
+.up .ef i{font-style:normal;font-size:9px;padding:1px 5px;border-radius:4px;background:#0a1d22;color:#84a8ae;border:1px solid #16303a}
+.up .ef i.p{color:var(--plasma);border-color:#1c5347}
+.up .ef i.s{color:var(--amber);border-color:#5a4318}
+.up .ef i.l{color:var(--virus);border-color:#5e222a}
+.up .cost{display:flex;justify-content:space-between;align-items:center;font-size:9.5px;color:var(--dim)}
+.up .cost b{color:var(--dna);font-size:13px}
+.up.owned{border-color:#1d5a4e;background:linear-gradient(180deg,#0d2622,#0a1a1c)}
+.up.owned .cost b{color:var(--plasma)}
+.up.locked{opacity:.4}
+.up.cant .cost b{color:#7a4a50}
+.up .badge{position:absolute;top:0;inset-inline-end:0;font-size:8.5px;padding:2px 6px;border-bottom-left-radius:8px;
+  background:#1d5a4e;color:#d8fff4;font-weight:700}
+.up .badge.rep{background:#5a3a10;color:#ffd9a0}
+.devbtn{width:100%;margin-top:8px;padding:9px;border-radius:10px;background:#1a1013;border:1px solid #4a2229;
+  color:#e08a92;font-size:11.5px;font-weight:700}
+.hint{font-size:11px;color:var(--dim2);margin-top:12px;line-height:1.7;padding:0 2px}
+
+/* ─────────── قوائم الدول ─────────── */
+.rows{display:flex;flex-direction:column;gap:6px}
+.row{background:var(--panel);border:1px solid var(--edge);border-radius:11px;padding:7px 10px;
+  display:flex;align-items:center;gap:8px;text-align:start;width:100%}
+.row .nm{flex:1;min-width:0}
+.row .nm b{font-size:12.5px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .nm span{font-size:9.5px;color:var(--dim)}
+.row .mini{width:46px;flex:0 0 auto}
+.row .mini .track{height:4px}
+.row .pct{width:40px;text-align:end;font-size:11.5px;font-weight:800}
+.flags{display:flex;gap:2px}
+.flags i{font-style:normal;font-size:9px;width:17px;height:17px;border-radius:4px;display:grid;place-items:center;
+  background:#0a1d22;border:1px solid #16303a;color:#7fa3aa}
+.flags i.hot{color:var(--virus);border-color:#4d1f25;background:#1a0d10}
+
+/* ─────────── بطاقة الدولة ─────────── */
+.cpop{position:absolute;z-index:30;width:236px;background:linear-gradient(180deg,rgba(14,30,38,.97),rgba(8,16,21,.97));
+  border:1px solid var(--line);border-radius:14px;padding:10px 12px 11px;box-shadow:0 12px 32px -10px #000;
+  backdrop-filter:blur(4px)}
+.cpop h3{margin:0 0 2px;font-size:14px}
+.cpop .sub{font-size:9.5px;color:var(--dim);margin-bottom:7px}
+.cpop .kv{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;font-size:10.5px}
+.cpop .kv div{display:flex;justify-content:space-between;gap:5px;border-bottom:1px dotted #1e3a44;padding-bottom:2px}
+.cpop .kv span{color:var(--dim)}
+.cpop .kv b{font-variant-numeric:tabular-nums}
+.cpop .tags{display:flex;flex-wrap:wrap;gap:3px;margin-top:7px}
+.cpop .tags i{font-style:normal;font-size:9px;padding:2px 6px;border-radius:5px;background:#0d2028;
+  border:1px solid #1c3b46;color:#87a9b1}
+.cpop .tags i.red{color:var(--hot);border-color:#4d1f25;background:#1a0d10}
+.cpop .tags i.blue{color:var(--cure);border-color:#1e4468;background:#0a1926}
+.cpop .close{position:absolute;top:6px;inset-inline-end:8px;font-size:14px;color:var(--dim2)}
+
+/* ─────────── إحصاءات ورسوم ─────────── */
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:10px}
+.stat{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:8px 10px}
+.stat span{font-size:9.5px;color:var(--dim);display:block}
+.stat b{font-size:18px;letter-spacing:-.4px}
+.chartbox{background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:9px}
+.legend{display:flex;gap:11px;font-size:10px;color:var(--dim);margin-bottom:5px;flex-wrap:wrap}
+.legend i{font-style:normal;display:inline-flex;align-items:center;gap:4px}
+.legend i::before{content:"";width:9px;height:3px;border-radius:2px;background:currentColor}
+canvas.chart{display:block;width:100%;height:140px}
+
+/* ─────────── سجل الأخبار ─────────── */
+.logs{display:flex;flex-direction:column;gap:5px}
+.log{background:var(--panel);border:1px solid var(--edge);border-radius:10px;padding:6px 9px;font-size:12px;
+  display:flex;gap:7px;align-items:flex-start}
+.log time{flex:0 0 auto;font-size:9.5px;color:var(--dim);padding-top:2px;min-width:44px}
+.log.warn{border-color:#5a4318}.log.warn time{color:var(--amber)}
+.log.bad{border-color:#2b5478}.log.bad time{color:var(--serum)}
+.log.good{border-color:#1d5a4e}.log.good time{color:var(--plasma)}
+
+/* ─────────── شاشات (بداية/نهاية) ─────────── */
+.veil{position:fixed;inset:0;z-index:90;background:rgba(3,6,9,.95);backdrop-filter:blur(8px);
+  display:flex;align-items:center;justify-content:center;padding:14px;overflow:auto}
+.card{width:100%;max-width:440px;background:linear-gradient(180deg,#102027,#0a1217);border:1px solid var(--line);
+  border-radius:20px;padding:18px 18px 20px;margin:auto}
+.card h1{margin:0;font-size:27px;letter-spacing:-1px;line-height:1.12}
+.card h1 small{display:block;font-size:11.5px;font-weight:400;color:var(--dim);letter-spacing:0;margin-top:5px;line-height:1.6}
+.field{margin-top:13px}
+.field label{font-size:11px;color:var(--dim);display:block;margin-bottom:5px}
+.field input{width:100%;background:#081317;border:1px solid var(--edge);border-radius:10px;padding:10px;
+  color:var(--txt);font-family:inherit;font-size:14px}
+.field input:focus{outline:none;border-color:var(--plasma)}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);gap:5px}
+.seg.c3{grid-template-columns:repeat(3,1fr)}
+.seg button{padding:9px 0;border-radius:10px;background:#081317;border:1px solid var(--edge);
+  font-size:11.5px;font-weight:800;color:var(--dim)}
+.seg button.on{background:var(--virus);border-color:var(--virus);color:#fff}
+.seg button.lock{opacity:.42}
+.typegrid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+.typebtn{background:#081317;border:1px solid var(--edge);border-radius:12px;padding:9px;text-align:start}
+.typebtn b{font-size:13px;display:block}
+.typebtn span{font-size:9.5px;color:var(--dim);display:block;line-height:1.4;margin-top:2px}
+.typebtn.on{border-color:var(--virus);background:linear-gradient(180deg,#261013,#150a0c)}
+.typebtn.lock{opacity:.4}
+.genes{display:flex;flex-direction:column;gap:6px}
+.gslot{display:flex;align-items:center;gap:8px;background:#081317;border:1px solid var(--edge);
+  border-radius:10px;padding:7px 10px}
+.gslot .gl{font-size:10px;color:var(--dim);width:52px;flex:0 0 auto}
+.gslot .gv{flex:1;font-size:11.5px;font-weight:700}
+.gslot .gv i{font-style:normal;display:block;font-size:9.5px;color:var(--dim2);font-weight:400}
+.go{width:100%;margin-top:16px;padding:13px;border-radius:12px;font-size:15px;font-weight:800;
+  background:linear-gradient(135deg,var(--virus),#a1202a);color:#fff;box-shadow:0 6px 22px -8px var(--virus)}
+.ghost{width:100%;margin-top:7px;padding:11px;border-radius:12px;font-size:12.5px;font-weight:700;
+  background:transparent;border:1px solid var(--edge);color:var(--dim)}
+.endstats{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:14px}
+.endstats div{background:#081317;border:1px solid var(--edge);border-radius:10px;padding:7px 9px}
+.endstats span{font-size:9.5px;color:var(--dim);display:block}
+.endstats b{font-size:16px}
+
+/* ─────────── متفرقات ─────────── */
+.pickbar{position:absolute;inset-inline:0;bottom:38px;z-index:22;text-align:center;pointer-events:none}
+.pickbar div{display:inline-block;background:rgba(6,14,18,.94);border:1px solid var(--line);border-radius:999px;
+  padding:8px 18px;font-size:12.5px;box-shadow:0 6px 20px -8px #000}
+.pickbar b{color:var(--virus)}
+.toast{position:fixed;bottom:88px;inset-inline:0;z-index:80;display:flex;justify-content:center;pointer-events:none}
+.toast div{background:#12262e;border:1px solid var(--line);border-radius:999px;padding:7px 16px;font-size:12.5px;
+  opacity:0;transform:translateY(8px);transition:.2s;box-shadow:0 6px 20px -8px #000;max-width:88vw;text-align:center}
+.toast.show div{opacity:1;transform:none}
+.popalert{position:fixed;inset-inline:8px;top:96px;z-index:70;pointer-events:none;display:flex;justify-content:center}
+.popalert div{background:linear-gradient(180deg,#2a1013,#180a0c);border:1px solid #6a2530;border-radius:14px;
+  padding:9px 15px;font-size:12.5px;color:#ffd9d9;opacity:0;transform:scale(.94);transition:.25s;
+  box-shadow:0 10px 30px -10px #000;text-align:center;max-width:92%}
+.popalert.show div{opacity:1;transform:none}
+.zoombtns{position:absolute;z-index:18;inset-inline-end:8px;bottom:44px;display:flex;flex-direction:column;gap:5px}
+.zoombtns button{width:32px;height:32px;border-radius:9px;background:rgba(8,18,24,.9);border:1px solid var(--edge);
+  color:var(--dim);font-size:16px;font-weight:700;display:grid;place-items:center}
+.cureline{display:flex;flex-direction:column;gap:5px}
+.cureline .cl{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--edge);
+  border-radius:10px;padding:6px 10px;font-size:11.5px}
+.cureline .cl .nm{flex:1}
+.cureline .cl .v{color:var(--cure);font-weight:800}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+@media (min-width:820px){
+  .sheet{inset-inline:auto 0;top:0;bottom:0;width:404px;max-height:none;border-radius:18px 0 0 18px;
+    transform:translateX(102%)}
+  html[dir=rtl] .sheet{border-radius:0 18px 18px 0;transform:translateX(-102%)}
+  .sheet.open{transform:none!important}
+  .sheet .grab{height:14px}
+}
+</style>
+</head>
+<body>
+<div id="stage" hidden>
+  <div id="mapwrap">
+    <canvas id="map"></canvas>
+    <canvas id="fx"></canvas>
+
+    <div class="hdr">
+      <div class="hrow">
+        <button class="dnabtn" id="dnabtn"><b class="num" id="dna">0</b><i>حمض نووي</i></button>
+        <div class="brand"><b id="vname">الوباء</b><span id="vsub">غير مكتشَف</span></div>
+        <div class="speeds" id="speeds">
+          <button data-s="0" class="pz">⏸</button>
+          <button data-s="1" class="on">▶</button>
+          <button data-s="2">▶▶</button>
+          <button data-s="3">▶▶▶</button>
+        </div>
+      </div>
+      <div class="bars">
+        <div class="bar"><div class="lab"><span>مصابون</span><b class="num" id="ginf">0</b></div>
+          <div class="track"><i class="f-inf" id="binf" style="width:0"></i></div></div>
+        <div class="bar"><div class="lab"><span>وفيات</span><b class="num" id="gdead">0</b></div>
+          <div class="track"><i class="f-dead" id="bdead" style="width:0"></i></div></div>
+        <div class="bar"><div class="lab"><span>اللقاح</span><b class="num" id="gcure">0%</b></div>
+          <div class="track"><i class="f-cure" id="bcure" style="width:0"></i></div></div>
+      </div>
+    </div>
+
+    <div class="zoombtns">
+      <button id="zin">＋</button><button id="zout">－</button><button id="zfit">⤢</button>
+    </div>
+
+    <div class="pickbar" id="pickbar" hidden><div>اختر <b>بلد المريض صفر</b> — اضغط على الخريطة</div></div>
+
+    <div class="news"><em>عاجل</em><span id="tick">الفيروس ساكن. لا أحد يعرف بوجوده بعد.</span></div>
+  </div>
+
+  <div class="dock" id="dock">
+    <button class="dockbtn on" data-t="dis">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4M5 5l3 3M16 16l3 3M19 5l-3 3M8 16l-3 3"/></svg>
+      <span>المرض</span><i class="bdg hide" id="bdgDis">0</i></button>
+    <button class="dockbtn" data-t="wld">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14 0 18M12 3c-3 3.5-3 14 0 18"/></svg>
+      <span>العالم</span></button>
+    <button class="dockbtn" data-t="cur">
+      <svg viewBox="0 0 24 24"><path d="M9 3h6M10 3v5l-5 9a3 3 0 0 0 3 4h8a3 3 0 0 0 3-4l-5-9V3"/><path d="M7 15h10"/></svg>
+      <span>اللقاح</span><i class="bdg cure hide" id="bdgCur">!</i></button>
+    <button class="dockbtn" data-t="new">
+      <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h6M7 13h10M7 17h10"/></svg>
+      <span>الأخبار</span></button>
+    <button class="dockbtn" data-t="sta">
+      <svg viewBox="0 0 24 24"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+      <span>الأرقام</span></button>
+  </div>
+</div>
+
+<div class="sheet" id="sheet">
+  <div class="grab" id="grab"><i></i></div>
+  <div class="shead"><h2 id="sheetTitle">—</h2><button class="x" id="sheetX">✕</button></div>
+  <div class="sbody" id="sheetBody"></div>
+</div>
+
+<div class="cpop hide" id="cpop"></div>
+<div class="toast" id="toast"><div></div></div>
+<div class="popalert" id="popalert"><div></div></div>
+<div class="veil" id="veil"><div class="card" id="veilcard"></div></div>
+
+<script>
+"use strict";
+/* ══════════════════════════════════════════════════════════════════════
+   الوباء — محاكي تفشٍّ عالمي على خريطة العالم الحقيقية
+   • الخريطة: Natural Earth 110m (public domain) — إسقاط ميلر الأسطواني
+   • ٦٨ منطقة حقيقية بحدودها، مطاراتها وموانئها ومدنها
+   • كل العشوائية عبر xorshift32 مبذور — نفس البذرة = نفس العالم
+   • ملف واحد، بدون شبكة، بدون صور خارجية
+   ══════════════════════════════════════════════════════════════════════ */
+/* ───── بيانات الخريطة: Natural Earth 110m (مجال عام) ───── */
+const MAPW=1000,MAPH=493,MAPS=4;
+const GEO={"usa":{"p":"M635 682l32 0l33 0l11 0l33 0l33 0l34 0l33 0l38 0l38 0l23 0l0 -6l3 0l2 8l4 2l8 1l11 2l11 5l9 -2l13 4l4 0l10 -4l10 5l11 5l9 5l9 4l1 4l3 1l-1 2l3 0l2 -1l1 3l2 2l3 0l2 2l-2 2l12 7l2 12l2 12l-3 8l-5 8l-3 4l0 2l1 2l4 2l3 0l13 -8l11 -2l15 -6l0 -2l-1 -4l-2 -2l5 -3l11 0l10 0l4 -5l1 -1l12 -10l5 -2l17 0l20 0l2 -4l3 -1l5 -2l4 -6l3 -11l9 -10l3 3l8 -2l5 4l0 19l7 8l2 4l-12 7l-11 5l-12 4l-6 8l-2 3l0 7l4 7l4 0l-1 -5l3 3l0 4l-8 2l-5 0l-8 2l-5 1l-7 1l-9 3l16 -2l4 3l-16 3l-7 0l0 -1l-3 4l3 0l-2 10l-8 10l-1 -4l-3 0l-3 -4l2 7l3 3l0 4l-4 6l-6 10l-1 -1l4 -8l-6 -5l-1 -11l-2 5l2 9l-7 -2l7 4l1 12l3 1l1 4l2 13l-7 9l-12 4l-7 7l-6 1l-5 5l-2 4l-12 8l-7 6l-5 7l-1 9l2 8l3 11l5 8l0 5l5 14l0 8l0 5l-3 7l-3 2l-6 -2l-2 -5l-4 -3l-6 -10l-5 -9l-2 -5l3 -8l-3 -6l-9 -10l-4 -2l-12 5l-2 0l-5 -6l-7 -3l-13 1l-9 -1l-9 1l-4 2l2 3l-1 5l3 2l-2 2l-5 -2l-4 2l-8 0l-8 -6l-10 1l-8 -3l-7 1l-9 3l-10 9l-11 5l-6 6l-3 5l0 9l1 5l2 4l-5 1l-8 -3l-8 -4l-3 -5l-3 -9l-6 -6l-4 -7l-6 -9l-8 -5l-9 1l-7 9l-9 -3l-6 -4l-2 -7l-4 -6l-7 -5l-5 -4l-4 -5l-20 0l0 5l-9 0l-22 0l-25 -8l-17 -6l1 -3l-14 2l-12 1l-2 -7l-7 -7l-6 -1l-1 -4l-6 -1l-4 -3l-10 -1l-3 -2l-2 -7l-10 -13l-10 -18l1 -2l-5 -5l-9 -11l-1 -10l-6 -7l2 -11l0 -12l-4 -10l5 -13l1 -12l1 -13l-2 -18l-3 -12l-3 -7l1 -3l16 5l6 14l3 -4l-2 -12l-4 -11zM433 337l0 71l0 99l11 1l11 4l8 8l10 10l11 -9l11 -5l6 8l7 7l10 7l7 12l12 18l18 10l1 10l-6 7l-7 -5l-9 -5l-3 -14l-15 -13l-6 -15l-10 -1l-18 0l-13 -5l-23 -17l-11 -3l-19 -6l-16 1l-21 -7l-14 -7l-12 3l2 12l-6 1l-13 3l-9 6l-13 3l-1 -9l5 -17l11 -5l-3 -4l-14 9l-7 11l-16 12l8 8l-11 12l-12 6l-11 5l-3 7l-17 9l-3 7l-13 7l-8 -2l-10 5l-12 5l-9 5l-19 5l-2 -3l12 -7l11 -5l12 -9l14 -1l5 -7l16 -9l2 -3l9 -6l1 -12l6 -10l-13 5l-3 -3l-6 6l-8 -8l-3 6l-4 -8l-11 6l-7 0l-1 -10l2 -6l-7 -5l-14 3l-10 -8l-7 -4l0 -10l-9 -7l5 -10l9 -9l4 -9l9 -2l7 3l9 -8l8 1l9 -5l-2 -8l-7 -3l9 -7l-7 0l-12 4l-3 4l-9 -4l-16 2l-16 -5l-5 -7l-14 -10l16 -8l25 -9l9 0l-2 9l24 0l-9 -12l-14 -7l-8 -10l-11 -8l-15 -6l6 -10l20 0l14 -9l3 -10l11 -9l11 -3l21 -9l10 2l17 -11l17 4l8 9l5 -4l19 2l-1 4l17 4l11 -2l24 6l21 2l9 2l15 -3l16 6l12 3zM297 546l8 1l5 5l-10 7l-11 6l-6 -4l-2 -7l11 -6l5 -2zM92 448l7 3l7 -2l9 5l11 2l-1 2l-9 4l-8 -4l-4 -3l-10 1l-3 -2l1 -6zM150 506l9 1l1 7l-7 2l-7 -3l-7 -4l11 -3zM273 1048l2 1l2 2l3 4l-5 3l-3 2l-2 2l-3 -2l1 -3l-2 -4l0 -2l2 -2l0 -2l0 -1l1 0l4 2zM267 1040l-1 2l-4 0l-2 -2l-1 -1l0 -1l1 -1l4 1l3 2zM244 1029l1 1l3 4l-1 0l-4 0l-1 -3l-1 0l3 -2zM229 1023l0 3l-1 1l-4 -2l1 -1l2 -1l2 0zM258 1035l0 2l-6 -1l1 -1l5 0z","c":[224.6,201.6],"a":[256.7,194.9],"s":[294.4,198.9],"d":[215,210,174,198,219,173.5,228,185,190.5,214,179,208,217,202.5,166.5,208.5,196,195.5,54,104,288,189,248,194.5,266,217,163,202.5,303,185.5,181,182,175,206,246,189.5,174.5,201,184.5,212.5,93,97,227,224.5,92,110,195,210.5,48,98,62.5,97.5,223.5,188.5,211,217.5,87,111.5,225,193.5,261,206,48,121.5,66,93,246.5,177.5,234.5,211,215.5,216,52,130.5,169.5,219.5,262.5,228,133.5,141.5,51.5,129.5,241,217,175,185,61,106,191.5,189.5,195.5,186.5,218,182,198,185,245.5,202.5,125,133,216.5,226.5,184,176,218,228,79.5,93.5,219.5,198.5,274.5,234,215,195.5,79.5,118.5,163,172.5,237.5,200,92,89.5,86.5,122,278,195,105,117.5,248,226,218,195.5,212,173.5,48,115,259,175.5,172,201,186,186.5,211.5,203.5,231,215.5,246,214,169,189.5,86.5,86.5,216.5,172,222,182.5,229,211,238,175.5],"n":["can","mex"],"bb":[22.8,76,314,265.4]},"can":{"p":"M635 682l-1 0l-22 -15l-8 -6l-20 -6l-6 -13l1 -9l-14 -6l-2 -13l-13 -11l0 -8l6 -7l-1 -10l-18 -10l-12 -18l-7 -12l-10 -7l-7 -7l-6 -8l-11 5l-11 9l-10 -10l-8 -8l-11 -4l-11 -1l0 -99l0 -71l21 5l18 9l11 2l10 -8l13 -6l17 2l17 -9l18 -5l7 9l9 -5l2 -9l8 2l19 18l14 -14l2 15l14 -3l4 -6l13 1l17 9l26 7l16 3l10 -1l15 10l-15 9l20 4l30 -2l9 -3l12 11l12 -10l-11 -8l7 -6l14 -1l9 -2l9 4l11 11l12 -2l20 9l17 -3l16 0l-1 -12l10 -3l17 7l0 18l7 -16l9 1l5 -19l-12 -13l-13 -8l1 -22l13 -15l15 4l11 9l15 22l-10 10l21 4l0 20l15 -15l13 12l-3 15l10 12l12 -13l8 -17l1 -21l16 1l16 3l15 10l1 9l-9 11l8 10l-1 9l-22 13l-16 3l-11 -6l-3 10l-11 15l-3 8l-13 12l-16 1l-9 8l-1 11l-12 2l-14 14l-12 19l-4 14l-1 19l16 2l5 16l5 12l16 -3l21 6l11 6l8 8l14 4l11 7l19 1l12 1l-2 13l3 16l9 16l16 15l9 -5l6 -16l-6 -23l-8 -9l18 -7l12 -11l7 -11l-1 -10l-8 -14l-13 -12l13 -17l-5 -15l-4 -27l8 -4l19 5l11 1l10 -4l10 6l14 10l3 6l20 2l-1 14l4 21l10 2l8 10l16 -9l11 -19l7 -7l9 15l15 20l12 20l-5 9l15 9l10 9l18 4l7 5l4 13l9 2l4 6l1 17l-8 5l-8 5l-18 6l-14 12l-19 2l-24 -3l-16 0l-12 1l-9 10l-14 7l-16 18l-13 13l9 -2l18 -18l24 -12l16 -2l10 7l-11 10l4 15l4 11l14 7l18 -2l12 -16l0 10l8 5l-14 9l-25 8l-11 6l-12 10l-9 -1l0 -12l19 -11l-18 0l-12 2l-7 -8l0 -19l-5 -4l-8 2l-3 -3l-9 10l-3 11l-4 6l-5 2l-3 1l-2 4l-20 0l-17 0l-5 2l-12 10l-1 1l-4 5l-10 0l-11 0l-5 3l2 2l1 4l0 2l-15 6l-11 2l-13 8l-3 0l-4 -2l-1 -2l0 -2l3 -4l5 -8l3 -8l-2 -12l-2 -12l-12 -7l2 -2l-2 -2l-3 0l-2 -2l-1 -3l-2 1l-3 0l1 -2l-3 -1l-1 -4l-9 -4l-9 -5l-11 -5l-10 -5l-10 4l-4 0l-13 -4l-9 2l-11 -5l-11 -2l-8 -1l-4 -2l-2 -8l-3 0l0 6l-23 0l-38 0l-38 0l-33 0l-34 0l-33 0l-33 0l-11 0l-33 0l-32 0zM982 58l17 -5l13 -1l22 -4l16 -10l14 1l12 8l8 -15l15 -4l20 -3l34 -2l6 3l32 -4l24 1l24 2l30 2l23 4l21 7l-1 8l-27 11l-27 6l-10 6l24 0l-26 16l-18 7l-19 21l-23 4l-7 5l-34 3l16 3l-8 4l9 12l-10 9l-17 6l-6 10l-15 7l1 5l19 -1l1 6l-30 14l-29 -7l-33 4l-16 -3l-21 -1l-2 -11l21 -5l-6 -18l7 -1l30 10l-15 -15l-18 -5l9 -9l19 -6l3 -9l-15 -10l-5 -13l30 1l9 3l18 -9l-25 -3l-39 2l-20 -9l-9 -11l-13 -8l-3 -9zM1125 283l10 -8l25 11l15 9l2 9l20 -4l12 13l27 8l9 8l11 18l-21 9l27 13l17 4l16 17l18 2l-4 13l-19 21l-14 -8l-17 -18l-15 3l-1 10l12 11l15 8l4 5l7 17l-3 13l-14 -5l-28 -14l15 15l12 11l2 6l-30 -7l-24 -10l-14 -9l4 -5l-16 -9l-17 -8l1 5l-32 3l-10 -6l7 -14l21 0l23 -2l-3 -7l3 -9l15 -18l-3 -9l-5 -6l-17 -9l-22 -7l7 -5l-12 -12l-10 -1l-8 -7l-6 6l-20 2l-41 -4l-23 -6l-18 -3l-10 -7l12 -9l-16 0l-3 -21l8 -19l12 -9l28 -6l-8 14l9 14l10 -18l28 -8l19 22l-1 13l22 -6zM816 268l13 9l7 20l3 14l19 10l20 10l-1 8l-18 2l7 8l-4 7l-20 -3l-19 -6l-13 2l-21 6l-28 3l-20 2l-6 -9l-15 -6l-10 3l-14 -16l8 -2l17 -3l15 0l15 -3l-22 -5l-23 2l-16 -1l-6 -7l26 -8l-17 0l-20 -5l10 -16l7 -8l30 -13l11 4l-5 10l25 -6l15 10l13 -11l10 7l9 21l5 -9l-7 -21l9 -3l11 3zM933 92l8 -8l11 -1l-5 -6l26 -2l14 14l19 6l18 5l9 16l13 8l-15 8l-20 18l-20 2l-23 -3l-12 -10l0 -9l9 -7l-20 0l-13 -8l-7 -11l8 -12zM1021 240l-18 -3l-30 -7l-4 -12l-1 -12l-11 -10l-23 -2l-13 -8l4 -9l23 1l12 8l22 0l10 7l-3 9l13 5l7 6l15 1l16 1l18 -4l23 -2l18 1l11 9l3 9l-7 6l-17 5l-14 -3l-32 3l-22 1zM650 238l15 5l29 1l11 6l12 10l-14 5l-28 15l-13 14l0 9l-30 10l-6 -9l-25 -11l5 -8l7 -16l10 -14l-11 -13l38 -4zM802 207l10 -4l12 1l1 12l-6 10l-38 4l-28 9l-17 1l-1 -8l23 -9l-50 2l-16 -4l15 -22l11 -6l31 8l20 13l19 2l-16 -22l10 -8l12 2l4 11l4 8zM1382 648l-6 9l-7 13l7 -5l8 3l-4 5l10 4l5 -3l11 4l-4 11l8 -3l2 8l3 8l-5 13l-5 0l-7 -2l2 -12l-3 -2l-13 13l-6 -1l8 -7l-11 -3l-12 1l-22 -1l-1 -4l7 -5l-5 -4l9 -8l12 -23l7 -9l9 -5l5 1l-2 4zM884 276l-12 -14l13 -10l13 4l20 -3l3 7l-10 10l16 9l-2 19l-18 8l-11 -2l-7 -8l-28 -16l0 -7l23 3zM950 245l23 1l21 5l-16 19l-14 4l-11 16l-13 -1l-7 -18l0 -11l6 -9l11 -6zM1068 424l12 6l13 6l1 8l8 -1l8 6l-10 5l-17 -4l-6 -8l-11 9l-16 9l-4 -10l-15 2l10 -9l1 -14l4 -17l8 2l2 8l6 -3l6 5zM635 201l19 -17l23 -15l17 0l15 -3l-2 18l-8 8l-11 1l-20 10l-18 3l-15 -5zM906 187l8 11l0 12l-5 16l-18 3l-12 -4l0 -13l-18 2l-1 -18l12 1l17 -8l16 1l1 -3zM828 125l22 4l30 9l8 11l5 10l-19 -2l-18 -8l-25 -1l11 -7l-13 -6l-1 -10zM1114 274l-13 -11l1 -8l5 -2l26 3l19 12l1 5l-12 0l-12 -1l-12 3l-3 -1zM628 689l-6 2l-18 -7l-4 -5l-9 -5l-2 -4l-12 -3l-4 -8l1 -3l11 3l7 2l11 2l3 5l6 7l11 6l5 8zM930 341l7 8l-7 7l-15 -6l-9 2l-15 -9l10 -6l8 -9l11 6l7 4l3 3zM925 138l13 9l-3 9l-16 5l-9 -6l-5 -9l-1 -10l14 1l7 1zM960 227l-6 8l-16 -1l-14 -6l6 -10l16 -6l10 8l4 7zM764 153l15 4l-3 7l-21 7l-16 -8l8 -7l17 -3zM1164 381l-7 5l-12 1l-3 -9l5 -11l10 -2l8 5l1 8l-2 3zM816 257l14 -1l9 5l-10 14l-17 -15l4 -3zM525 607l11 -1l-3 17l9 12l-4 0l-7 -7l-4 -7l-5 -4l-2 -7l0 -5l5 2zM767 138l15 4l-14 5l-18 0l0 -3l11 -8l6 2zM1067 471l8 -8l15 0l0 3l-13 10l-8 -1l-2 -4zM957 168l-5 1l-21 -1l-3 -7l23 0l8 5l-2 2zM1283 669l4 -1l15 3l11 6l0 3l-5 0l-15 -4l-10 -7zM1289 709l4 7l8 2l10 0l-6 5l-4 1l-14 -6l-2 -4l4 -5zM1108 477l4 -5l4 0l3 4l-4 9l-5 -2l-3 -5l1 -1z","c":[215.1,133.4],"a":[279.4,188.9],"s":[323.3,185.8],"d":[203.5,151.5,204.5,72.5,264.5,153.5,289.5,81,251,157.5,197.5,99,181.5,122,174,115.5,284.5,123.5,129,86.5,224.5,50,214.5,116.5,147,117,219.5,136.5,323,161,308.5,117,258,100,239.5,75,303,94.5,326,161.5,229.5,161.5,197.5,152.5,215.5,33.5,204,145.5,204.5,148.5,155,125,217,118,213,33,149,115.5,295,109,321,138,148,137,211,104.5,294.5,164.5,306.5,167,298,145.5,319,163.5,328,157.5,208.5,76.5,245,103,348,172,156,139,227,163,236,147.5,298.5,142,261,167,306,168,150,142.5,226.5,133.5,233,147.5,296.5,138.5,273,193.5,210.5,157,242,108.5,165,108.5,147.5,127.5,122.5,89.5,222,120.5,281,185,147,146,289,123,266.5,58,303.5,112.5,214,86.5,284,157,280,64,147,148,256,167,182.5,67.5,153.5,164.5,308,81.5,295,11,158.5,166,266.5,28,132.5,101,199,50.5,323,164.5,225,105.5,322.5,155,282.5,7.5],"n":["usa"],"bb":[108.3,5.4,353.8,195.7]},"grl":{"p":"M1480 38l38 -16l39 1l14 -10l39 -3l89 4l69 22l-20 10l-43 1l-59 3l5 5l39 -3l34 9l22 -8l9 10l-12 15l28 -10l54 -10l33 5l6 11l-45 19l-6 6l-36 4l26 1l-13 19l-9 16l0 27l14 15l-18 1l-18 7l21 13l2 19l-12 2l15 19l-25 1l13 9l-4 8l-15 3l-16 0l14 14l0 10l-22 -9l-5 6l15 5l14 13l4 16l-20 4l-8 -8l-14 -12l4 14l-13 11l29 1l16 1l-30 17l-30 15l-33 7l-12 0l-12 7l-15 20l-24 13l-8 1l-14 4l-16 5l-10 11l0 12l-6 12l-18 14l5 13l-5 14l-6 17l-16 1l-16 -14l-22 0l-11 -9l-7 -17l-20 -22l-5 -11l-2 -16l-15 -17l4 -14l-8 -6l11 -23l17 -7l4 -8l3 -15l-13 7l-6 3l-10 2l-14 -6l0 -14l4 -10l10 -1l23 6l-19 -13l-10 -7l-11 3l-9 -5l12 -20l-7 -7l-9 -15l-13 -23l-14 -9l0 -9l-30 -14l-23 -1l-30 1l-27 1l-13 -7l-19 -14l29 -8l22 -1l-47 -6l-25 -10l1 -9l42 -12l41 -12l4 -9l-30 -9l10 -10l38 -19l16 -2l-4 -12l26 -7l34 -5l34 0l13 9l29 -15l27 10l15 2l23 9l-26 -15l1 -12z","c":[384.9,52.3],"a":[356.4,110],"s":[354.2,108.7],"d":[414,86,374,18,358,102.5,373,63.5,401,87.5,425,45,308,44,433.5,26,355,16.5,395,4,389,90.5,359.5,112.5,436,82,412.5,10.5,391.5,73,427.5,31.5,360,90,408,25.5,445,36,396,63.5,361.5,65,407.5,70.5,432.5,59.5,371.5,17.5,393,37.5,400,62.5,334,44.5,439,39,360,106,443.5,22,391,64,330,33,408.5,54.5,337.5,20.5,361,68.5,374.5,97.5,410,68.5,404.5,62,407.5,14,406.5,90,423.5,40,378.5,39.5,432,55.5,362.5,51.5,358.5,59.5,338.5,54.5,408,16.5,324,37,350,57.5,387.5,93,397.5,25,340,28,304,41,369.5,32.5,412.5,37.5,383,98,403,44,363,12,404.5,68.5,421,30.5,439,46,313.5,24,385.5,23,380.5,27.5,387.5,86,320,28.5,421.5,70.5,414,55,417,45,435.5,35,426.5,80.5,381,62,431,16,436,33,396,78.5,394.5,89.5,375.5,16.5,392.5,47.5,438,22,364.5,38.5],"n":[],"bb":[296.4,2.5,466.1,127.9]},"mex":{"p":"M699 900l12 -1l14 -2l-1 3l17 6l25 8l22 0l9 0l0 -5l20 0l4 5l5 4l7 5l4 6l2 7l6 4l9 3l7 -9l9 -1l8 5l6 9l4 7l6 6l3 9l3 5l8 4l8 3l5 -1l-5 11l-2 8l0 16l-1 6l1 6l4 6l2 9l7 8l3 7l4 6l12 3l5 4l10 -3l8 -1l8 -2l7 -2l7 -5l3 -6l1 -10l2 -3l7 -4l12 -2l10 0l7 -1l2 3l0 5l-6 7l-3 7l2 2l-1 5l-3 9l-3 -3l-2 0l-2 1l-4 6l-2 -1l-2 1l1 1l-11 0l-10 0l0 7l-5 0l4 4l4 2l1 3l2 0l0 4l-14 0l-6 10l2 2l-1 2l-1 4l-12 -13l-6 -3l-9 -3l-6 1l-9 4l-6 1l-8 -3l-8 -2l-10 -5l-9 -2l-12 -5l-10 -6l-2 -3l-7 -1l-11 -3l-5 -5l-12 -7l-5 -7l-3 -6l4 -1l-1 -3l2 -3l0 -4l-3 -6l-1 -4l-4 -6l-10 -12l-11 -9l-5 -7l-10 -5l-2 -3l2 -7l-6 -3l-7 -6l-2 -8l-6 -1l-7 -7l-5 -6l0 -3l-6 -10l-4 -9l0 -5l-8 -4l-4 0l-6 -3l-2 5l2 6l1 9l4 5l8 8l2 3l1 1l2 4l2 0l2 8l3 3l3 4l7 6l3 11l4 5l3 6l0 6l6 0l4 6l4 5l0 2l-5 4l-2 0l-3 -7l-7 -7l-8 -5l-5 -3l0 -9l-2 -6l-5 -4l-8 -5l-1 1l-3 -3l-7 -3l-6 -7l0 -1l5 1l4 -4l1 -6l-9 -9l-7 -3l-4 -7l-4 -8l-5 -10l-4 -11z","c":[214.8,250.4],"a":[224.7,264],"s":[233.1,264.6],"d":[224,248,199,238.5,241,271,216,254,184.5,241,222.5,257.5,213.5,265.5,208,257.5,181.5,226.5,239.5,268.5,217,257.5,189.5,246,211.5,263.5,210.5,256.5,227,258.5,237,271,226,252.5,217.5,244,206,253,209,241.5,250,264,218,245.5,215,263,225.5,266.5],"n":["usa","cam"],"bb":[174.6,224.3,258.9,277.9]},"cam":{"p":"M999 1121l-6 -2l-7 0l-5 -3l-6 -4l1 -4l1 -2l-2 -2l6 -10l14 0l0 -4l-2 0l-1 -3l-4 -2l-4 -4l5 0l0 -7l10 0l11 0l-1 -1l2 -1l2 1l4 -6l2 -1l0 2l2 0l0 3l-2 5l1 2l-1 4l1 1l-2 6l-2 3l-2 0l-2 4l3 2l1 -1l4 1l1 1l2 -2l3 -1l2 1l1 0l5 1l6 -1l3 -1l1 -1l4 1l3 0l3 0l2 -1l5 2l2 0l3 2l3 3l4 1l3 3l-1 2l0 2l1 4l-3 4l-1 5l0 5l0 3l1 5l-2 1l-1 5l1 2l-3 3l1 3l1 2l3 6l5 5l5 5l4 4l0 2l4 1l1 -1l3 2l6 0l4 -3l7 -3l4 -3l6 1l0 1l6 0l5 2l3 4l5 3l-2 1l3 7l-2 3l-4 -1l-1 6l-4 -3l-2 -6l2 -3l-3 -1l-2 -4l-5 -3l-5 1l-2 4l-5 2l-2 1l-1 2l5 6l-3 2l-2 1l-5 1l-2 -7l-1 2l-4 -1l-2 -4l-5 -1l-2 -1l-5 0l-1 2l-1 -1l-6 -3l-2 -2l1 -2l0 -3l-3 -2l-5 -2l-4 -2l0 -3l-3 -2l1 3l-3 3l-2 -3l-4 -1l-1 -3l0 -3l1 -4l-3 -1l3 -2l-4 -4l-5 -5l-3 -3l-5 -4l-5 -5l1 -2l2 2l1 -1l-2 -3l-3 -1l-2 2l-6 0l-4 -1l-5 -2l-6 -1l-3 -2z","c":[261,281.6],"a":[248.6,277.7],"s":[278.1,293.5],"d":[264,286.5,267,291,265.5,282,265,286,263,277.5,252.5,277.5],"n":["mex","col"],"bb":[243.8,266.6,285.4,298.5]},"car":{"p":"M1086 1012l9 1l9 0l11 4l4 4l10 -1l4 3l10 7l7 5l3 0l7 2l-1 4l8 0l9 5l-2 3l-7 1l-7 1l-8 -1l-16 1l7 -7l-4 -3l-7 0l-4 -4l-3 -6l-6 0l-10 -3l-4 -3l-14 -1l-4 -3l4 -3l-11 0l-8 6l-4 0l-2 3l-5 1l-5 -1l6 -4l2 -4l5 -2l6 -3l8 -1l3 -1zM1203 1072l-7 -2l-5 0l-7 0l-5 2l-6 -4l1 -4l10 2l8 1l4 -3l-5 -5l0 -4l-7 -2l3 -3l7 1l9 1l2 -2l8 0l7 3l3 0l2 4l6 0l-1 3l5 1l6 4l-4 5l-6 -3l-5 1l-3 -1l-2 2l-5 1l-1 -3l-4 2l-4 8l-3 -2l-1 -3zM1138 1067l8 1l5 2l2 3l-7 1l-4 2l-6 -2l-6 -4l1 -3l5 -1l2 1zM1264 1066l5 1l2 3l-3 2l-8 0l-7 1l0 -5l1 -2l10 0zM1131 988l4 1l3 9l0 7l-2 1l-3 -7l-4 -3l2 -8zM1315 1154l6 -1l2 0l0 9l-9 1l-2 -1l3 -3l0 -5zM1122 969l6 -1l7 1l0 3l-12 2l-1 -5zM1136 966l8 6l-1 8l-3 -1l1 -6l-5 -5l0 -2z","c":[280.6,257.5],"a":[271.1,253.3],"s":[271.1,253.3],"d":[282.5,249,304.5,267.5,290.5,260.5,299,266.5,280,256,271.5,253.5],"n":[],"bb":[264,241.6,330.8,290.7]},"col":{"p":"M1257 1260l-2 2l-2 -7l-3 -3l-4 3l-22 0l0 7l7 1l0 5l-3 -2l-6 2l0 8l5 4l2 7l-1 5l-5 30l-5 -6l-3 0l7 -11l-9 -6l-6 1l-5 -2l-6 3l-8 -1l-6 -12l-6 -3l-3 -5l-8 -5l-2 1l-5 -3l-6 -3l-3 1l-9 -1l-3 -5l-2 0l-11 -6l-2 -4l4 0l0 -6l3 -4l5 -1l5 -7l4 -6l-4 -2l2 -7l-2 -10l2 -3l-2 -9l-4 -6l1 -6l4 1l2 -3l-3 -7l2 -1l5 0l9 -8l4 -1l0 -4l2 -9l7 -5l7 -1l1 -2l8 1l9 -6l4 -2l6 -6l4 1l3 3l-3 4l-7 2l-3 5l-4 4l-3 4l-1 8l-4 6l6 1l2 5l2 3l1 4l-1 4l0 3l3 1l2 3l15 -1l6 2l8 9l4 -1l8 1l7 -1l4 1l-2 6l-3 4l-1 8l3 8l3 3l0 2l-5 6l4 2l3 4l3 11z","c":[297,307.6],"a":[294.2,305.5],"s":[292.2,287.9],"d":[297,324.5,293.5,314.5,306,317,292.5,318.5,297.5,290,306,308.5,304,324,297,311,290,294.5,302.5,323.5,300.5,285,286.5,315],"n":["cam","bra","per","ven"],"bb":[280.6,283.8,314.2,330.5]},"ven":{"p":"M1426 1228l-7 10l-3 8l-4 5l-6 0l-1 -3l-3 0l-3 3l-5 -2l-6 -3l-5 1l-5 -1l-1 4l2 2l-1 2l-6 -1l-3 1l-6 -1l-4 3l-5 2l-3 0l-1 2l-6 0l-7 -6l-1 -5l-2 -5l1 -10l3 -4l-2 -5l-4 -2l2 -4l-3 -3l-6 0l2 4l-4 4l-13 4l-8 2l-3 2l-9 -2l-8 -2l-2 1l5 3l-1 8l2 7l9 0l1 3l-8 3l-1 5l-5 1l-8 3l-2 3l-9 1l-6 -6l-3 -11l-3 -4l-4 -2l5 -6l0 -2l-3 -3l-3 -8l1 -8l3 -4l2 -6l-4 -1l-7 1l-8 -1l-4 1l-8 -9l-6 -2l-15 1l-2 -3l-3 -1l0 -3l1 -4l-1 -4l-2 -3l-2 -5l-6 -1l4 -6l1 -8l3 -4l4 -4l3 -5l7 -2l0 2l-6 2l3 5l0 6l-5 6l4 9l5 -1l3 -8l-4 -4l0 -8l13 -5l-1 -5l4 -4l4 8l8 1l7 6l0 4l10 0l12 -1l6 5l9 1l6 -4l0 -2l14 -1l13 0l-9 3l4 5l9 1l8 6l2 9l6 -1l4 3l7 4l7 7l0 6l5 0l6 6l4 4l13 2l2 -2l9 -1l11 3l4 1l8 3l12 10l2 4z","c":[324.6,301.1],"a":[314.2,289.3],"s":[313.9,289],"d":[322,295,305,294,309.5,287.5,303.5,291,309,291,331.5,302,345,305,305,299,314.5,308,348.5,309.5,327.5,291,327.5,299,319.5,294,320,299],"n":["col","bra"],"bb":[296.4,284.6,356.5,316.6]},"per":{"p":"M1163 1276l2 -1l8 5l3 5l6 3l6 12l8 1l6 -3l5 2l6 -1l9 6l-7 11l3 0l5 6l-10 0l-1 1l-9 2l-13 8l-1 5l-3 4l2 6l-7 3l0 5l-3 2l5 10l6 7l-3 5l8 0l4 6l10 1l9 -7l-1 17l5 1l6 -2l10 19l-2 3l-1 8l0 10l-4 6l2 4l-3 4l5 9l-7 13l-3 5l-6 3l-11 -6l-1 -5l-22 -11l-20 -13l-9 -7l-4 -9l2 -3l-10 -15l-11 -21l-10 -22l-5 -5l-3 -9l-9 -7l-8 -4l4 -5l-6 -11l4 -8l9 -7l6 -8l-3 -5l-4 5l-7 -5l3 -3l-2 -10l4 -2l2 -7l4 -7l-1 -4l6 -3l8 -4l11 6l2 0l3 5l9 1l3 -1l6 3l5 3z","c":[291.6,340.9],"a":[286.1,352.1],"s":[285.8,352.3],"d":[287.5,353.5,305,362,278,336.5,283.5,330,305.5,351,277.5,320,296.5,325,295,326.5,288,346,300.5,355,278,328,297,329.5,293,325,277,323,292.5,337.5,303,357,288.5,356],"n":["col","bra","bol","chl"],"bb":[273.9,314.7,309.3,370.1]},"bra":{"p":"M1407 1664l-3 -7l5 -6l-7 -8l-8 -7l-12 -8l-4 1l-11 -10l-7 1l15 -16l12 -12l8 -5l9 -6l0 -10l-5 -7l-6 3l2 -7l2 -7l0 -7l-4 -2l-4 2l-5 0l-1 -5l-1 -11l-2 -3l-7 -3l-5 2l-12 -2l1 -16l-3 -7l3 -2l-1 -6l3 -6l2 -9l-3 -7l-6 -3l-1 -4l2 -7l-21 -1l-5 -13l4 0l-1 -5l-2 -3l0 -7l-7 -3l-7 0l-4 -3l-8 -2l-4 -5l-13 -2l-12 -10l1 -7l-1 -5l1 -8l-15 2l-5 4l-10 5l-3 3l-5 0l-9 -1l-6 2l-5 -1l1 -17l-9 7l-10 -1l-4 -6l-8 0l3 -5l-6 -7l-5 -10l3 -2l0 -5l7 -3l-2 -6l3 -4l1 -5l13 -8l9 -2l1 -1l10 0l5 -30l1 -5l-2 -7l-5 -4l0 -8l6 -2l3 2l0 -5l-7 -1l0 -7l22 0l4 -3l3 3l2 7l2 -2l6 6l9 -1l2 -3l8 -3l5 -1l1 -5l8 -3l-1 -3l-9 0l-2 -7l1 -8l-5 -3l2 -1l8 2l9 2l3 -2l8 -2l13 -4l4 -4l-2 -4l6 0l3 3l-2 4l4 2l2 5l-3 4l-1 10l2 5l1 5l7 6l6 0l1 -2l3 0l5 -2l4 -3l6 1l3 -1l6 1l1 -2l-2 -2l1 -4l5 1l5 -1l6 3l5 2l3 -3l3 0l1 3l6 0l4 -5l3 -8l7 -10l4 0l3 6l6 19l6 2l0 8l-8 9l3 3l20 2l0 11l9 -7l14 4l18 7l5 6l-1 6l13 -3l21 6l17 -1l16 9l14 13l9 3l9 1l4 3l4 14l2 7l-4 19l-6 7l-16 15l-7 13l-8 10l-3 0l-3 8l1 22l-3 17l-1 8l-4 4l-2 16l-11 15l-2 12l-9 5l-3 7l-12 0l-17 4l-8 6l-12 3l-13 10l-10 11l-1 9l1 7l-2 12l-2 6l-8 6l-12 22l-10 10l-8 5l-5 12l-7 7z","c":[352.7,349.4],"a":[370.6,385],"s":[380,383.3],"d":[344,323,355,392.5,351.5,358.5,330.5,315.5,344,356.5,345,364,356,351.5,322.5,324,343.5,373,385.5,373.5,365,362.5,346.5,403,368.5,378,348,318,378.5,374.5,316,328.5,336.5,351,341.5,380,348,350,339,352.5,360,376,351.5,386.5,348,405,307,325,310,342,340,372,377,347.5,361,392,344,404,322,347,369.5,355.5,306,332.5,325.5,353.5,382,357,350,358.5,356,395,342.5,359.5,348,324,327.5,333,369,343,362,389.5,350.5,345,324,337.5,321,351.5,296.5,339.5,368,337,350,341,395,343,318,317.5,374.5,377.5,351,344.5,366.5,388.5,371.5,342,346,372,336,340.5,372,362.5,306.5,343,366,377.5,334,343.5,330.5,316.5,341,343,333,314.5,344.5,324.5,333,353,357,332,365.5,369.5,336,336,347,344,308.5,340.5,376.5,338.5,314,317.5,386.5,353.5,345.5,355.5,368.5,352,387.5,327.5,337.5,344,351.5,373.5,384,381.5,383.5,377.5,356,405],"n":["col","ven","per","arg","bol"],"bb":[294.5,304,403.5,416]},"bol":{"p":"M1303 1526l-1 -3l-13 0l-4 9l-7 -8l-14 -3l-10 10l-8 2l-4 -16l-6 -13l4 -11l-6 -5l-2 -9l-5 -7l7 -13l-5 -9l3 -4l-2 -4l4 -6l0 -10l1 -8l2 -3l-10 -19l9 1l5 0l3 -3l10 -5l5 -4l15 -2l-1 8l1 5l-1 7l12 10l13 2l4 5l8 2l4 3l7 0l7 3l0 7l2 3l1 5l-4 0l5 13l21 1l-2 7l1 4l6 3l3 7l-2 9l-3 6l1 6l-3 2l3 7l-1 16l12 2l5 -2l7 3l2 3l1 11l1 5l5 0l4 -2l4 2l0 7l-2 7l-2 7l-2 10l-10 9l-9 2l-12 -2l-11 -3l11 -18l-2 -5l-11 -5l-14 -9l-9 -1l-21 -19z","c":[325.4,370.9],"a":[310.8,364.8],"s":null,"d":[326,375.5,337.5,366.5,328,373,329.5,376.5,333,377.5,331,385,319.5,372.5,324,371,336.5,370.5,318.5,378.5,336.5,370.5,331.5,385.5,345.5,389.5,324.5,378,310,367.5,337.5,377.5,329,357.5],"n":["per","bra","arg","chl"],"bb":[306.7,345.8,349.2,397.1]},"arg":{"p":"M1351 1666l-1 6l14 11l-1 9l7 6l-1 6l-11 16l-16 7l-22 3l-13 -1l3 7l-3 10l2 7l-6 4l-12 2l-10 -5l-5 4l2 13l8 4l6 -4l3 7l-10 4l-9 8l-2 14l-3 7l-10 0l-9 7l-3 11l11 10l11 3l-4 13l-13 8l-8 16l-10 6l-4 7l3 15l8 9l-5 -1l-10 -2l-27 -2l-5 -9l1 -11l-8 1l-4 -5l-1 -15l9 -7l3 -9l-1 -7l6 -12l4 -18l-1 -9l5 -2l-2 -5l-5 -3l4 -6l-5 -5l-3 -15l5 -3l-2 -16l3 -14l3 -11l6 -5l-3 -13l0 -11l8 -9l0 -10l6 -12l0 -12l-3 -2l-5 -22l7 -12l-1 -12l4 -11l7 -11l8 -8l-3 -4l2 -4l0 -20l12 -6l4 -12l-2 -3l10 -10l14 3l7 8l4 -9l13 0l1 3l21 19l9 1l14 9l11 5l2 5l-11 18l11 3l12 2l9 -2l10 -9l2 -10l6 -3l5 7l0 10l-9 6l-8 5l-12 12l-15 16l7 -1l11 10l4 -1l12 8l8 7l7 8l-5 6l3 7l-5 8l-12 7l-9 -2l-6 1l-10 -6l-7 1l-7 -7zM1237 1920l5 7l5 12l15 9l15 4l-5 7l-10 1l-6 -5l-7 -1l-12 0l0 -34zM1320 1908l13 -8l10 3l6 -6l9 7l-3 5l-15 5l-5 -6l-9 7l-6 -7z","c":[320.1,422.2],"a":[337.8,418.7],"s":[337.8,418.7],"d":[325.5,430,304.5,469,332,408,337,421,306.5,424,315.5,397,312,420.5,343.5,415.5,317,394,316.5,425,310.5,445.5,310.5,435.5,303,435.5,319.5,419.5,346,418.5,320.5,445.5,332.5,425,311.5,394,306.5,436,339.5,426.5,306,426,316.5,400,323.5,385,313.5,429.5,333.5,393,309.5,461.5,306.5,446,301.5,442.5,328,413,329,395.5,326,387,330,411.5,302.5,465,303,445,321.5,420,329.5,397.5,312.5,445.5,314,440,328.5,409.5,344,398,316.5,386,338,430.5,339,396.5,326.5,391.5],"n":["bra","bol","chl"],"bb":[296.1,380.2,352.2,490]},"chl":{"p":"M1227 1472l5 7l2 9l6 5l-4 11l6 13l4 16l8 -2l2 3l-4 12l-12 6l0 20l-2 4l3 4l-8 8l-7 11l-4 11l1 12l-7 12l5 22l3 2l0 12l-6 12l0 10l-8 9l0 11l3 13l-6 5l-3 11l-3 14l2 16l-5 3l3 15l5 5l-4 6l5 3l2 5l-5 2l1 9l-4 18l-6 12l1 7l-3 9l-9 7l1 15l4 5l8 -1l-1 11l5 9l27 2l10 2l-10 0l-5 4l-10 5l-2 14l-5 1l-12 -5l-13 -11l-14 -8l-3 -10l3 -8l-6 -10l-1 -25l5 -13l11 -11l-17 -4l11 -13l4 -22l12 4l6 -28l-7 -3l-4 17l-7 -2l4 -19l3 -25l5 -9l-3 -13l-1 -14l5 0l7 -21l8 -20l4 -19l-2 -18l3 -10l-1 -15l6 -15l2 -23l4 -24l3 -26l-1 -19l-2 -17l6 -3l3 -5zM1237 1920l0 34l12 0l7 1l-4 6l-9 5l-6 -1l-6 -1l-8 -5l-12 -2l-14 -9l-11 -8l-16 -17l10 3l15 11l15 5l6 -7l3 -10l10 -7l8 2z","c":[300.6,431.7],"a":[303.9,414.9],"s":[301.1,413.7],"d":[306,397,294.5,471.5,299,439.5,304.5,403,294.5,443.5,299.5,456,307,488.5,306,397.5,299.5,480.5,297.5,441.5,301,455,304.5,386.5,305.5,383.5],"n":["per","bol","arg"],"bb":[289.9,367.9,314,491.4]},"uk":{"p":"M1966 617l1 -9l-7 -9l0 -1l-14 -2l-2 -5l4 -7l-4 -4l-6 8l-1 -15l-5 -9l4 -16l8 -13l9 1l14 -1l-12 17l11 -2l12 0l-3 13l-10 14l12 1l1 2l10 18l7 3l7 17l3 6l14 3l-2 9l-5 5l4 7l-10 8l-15 0l-19 4l-5 -3l-7 7l-10 -2l-8 6l-6 -3l16 -16l10 -3l-17 -2l-4 -6l12 -5l-6 -8l2 -10l17 2zM1931 610l2 11l-8 13l-20 9l-16 -3l9 -15l-6 -15l15 -12l9 -8l9 0l12 9l-6 11z","c":[492.5,152],"a":[499.7,161.3],"s":[491.9,161.3],"d":[473,159.5,495,161.5,496,151,502.5,163,492,155,484.5,136,498.5,163.5],"n":[],"bb":[472.3,133.7,504.7,166.9]},"isl":{"p":"M1839 399l-3 12l13 13l-15 13l-32 12l-9 4l-15 -3l-31 -6l11 -7l-24 -9l19 -4l0 -5l-23 -4l7 -12l17 -3l17 13l17 -10l14 5l18 -10l19 1z","c":[447.9,106.1],"a":[439.2,110.5],"s":[439.2,110.5],"d":[449.5,107.5,445,110,442,109.5,459,107,441,102.5,449.5,105],"n":[],"bb":[432.4,99.5,462.2,113.2]},"nor":{"p":"M2346 340l-19 8l-9 2l4 -14l-14 -8l-17 7l-6 14l-10 9l-12 -5l-15 1l-12 -10l-7 5l-6 1l-2 12l-21 -3l-3 11l-11 0l-7 13l-11 21l-17 26l4 6l-4 7l-11 0l-7 16l0 23l7 9l-3 19l-10 12l-4 9l-8 -10l-22 19l-15 4l-15 -8l-4 -18l-4 -39l11 -11l29 -15l22 -18l20 -25l27 -36l19 -15l30 -24l25 -9l18 1l17 -16l20 0l20 -4l35 15l-15 6l13 12zM2168 116l4 -9l17 -1l14 9l36 19l-28 9l-6 18l-9 5l-6 19l-13 1l-24 -14l10 -9l-17 -7l-21 -20l-9 -19l30 -10l6 9l16 0zM2305 106l-17 14l-32 3l-33 -4l-2 -7l-16 -1l-12 -11l34 -8l16 7l12 -8l28 6l22 9zM2275 161l-25 9l-20 -5l8 -6l-7 -8l23 -5l5 9l16 6z","c":[538,106.8],"a":[529.7,128.5],"s":[514.7,126.4],"d":[520,132,551.5,30.5,563.5,41,560,38,529.5,114,548,35,559.5,27,542,95,536.5,108.5,524.5,130.5,557.5,28,560.5,86.5,534.5,105,538,29.5,528,129.5,536.5,38.5,582,79,532.5,30,528,118,522,128.5,542,96.5],"n":["rus","fin","swe"],"bb":[513.9,22.7,586.9,135.9]},"swe":{"p":"M2123 531l4 -9l10 -12l3 -19l-7 -9l0 -23l7 -16l11 0l4 -7l-4 -6l17 -26l11 -21l7 -13l11 0l3 -11l21 3l2 -12l6 -1l15 9l18 13l0 29l4 8l-20 5l-10 12l1 11l-17 15l-22 15l-8 24l8 12l11 9l-10 19l-12 3l-4 27l-7 15l-13 -1l-6 12l-13 1l-4 -15l-9 -18l-8 -23zM2110 593l-7 2l-8 -2l-5 -9l0 -16l2 -4l3 -5l10 -1l4 -4l9 -5l-1 9l-3 5l1 4l6 3l-2 6l-4 -2l-8 11l3 8zM2137 575l4 8l-7 12l-11 -8l-2 -7l16 -5z","c":[546.4,114.8],"a":[550.3,131],"s":[535,145.4],"d":[549.5,105,546.5,130.5,546,131.5,544,108.5,542.5,139,562,92,537.5,117.5,533.5,114,534.5,144.5,557.5,102,531.5,147,547.5,105.5,541.5,122,542.5,124,532.5,147.5,543.5,119,550.5,106],"n":["nor","fin","deu"],"bb":[522.5,87.2,566.4,148.9]},"fin":{"p":"M2318 350l-2 13l17 13l-10 14l13 21l-8 16l10 13l-4 12l16 12l-4 8l-10 10l-24 22l-20 1l-20 6l-18 4l-6 -9l-11 -6l2 -16l-5 -16l5 -10l10 -11l26 -19l7 -4l-1 -8l-15 -8l-4 -8l0 -29l-18 -13l-15 -9l7 -5l12 10l15 -1l12 5l10 -9l6 -14l17 -7l14 8l-4 14z","c":[572.9,107.8],"a":[569.2,127.3],"s":[569.4,127.3],"d":[560,88.5,571,112,572.5,109,567,117,577.5,115,571,100.5,569,120,578.5,103,560.5,122,566.5,126.5,569.5,124,565,114.5,580,119],"n":["nor","swe","rus"],"bb":[557.3,82,587.5,128.7]},"fra":{"p":"M2069 675l5 4l16 2l-6 10l-1 10l-3 3l-5 -2l0 4l-8 8l0 6l5 -2l4 6l0 4l3 5l-4 4l3 11l6 2l-1 6l-10 7l-22 -3l-17 4l-1 8l-13 2l-12 -6l-4 3l-21 -7l-4 -5l6 -8l2 -27l-12 -15l-8 -7l-17 -6l-1 -10l14 -3l19 4l-4 -17l11 7l26 -12l3 -12l10 -3l2 6l5 0l5 6l8 7l5 -2l10 7l3 1l3 0zM2097 770l7 -5l2 11l-3 11l-5 -3l-3 -9l2 -5z","c":[506.5,178.6],"a":[506.4,170.8],"s":[515,190.2],"d":[518.5,188,498.5,184.5,514.5,174.5,493.5,176.5,499.5,189.5,509,180.5,503.5,191.5,511.5,182,520,172,514,179.5,511,185],"n":["deu","ceu","ita","esp"],"bb":[487.2,162.6,526.6,196.6]},"esp":{"p":"M1917 842l-4 4l-6 -2l-6 1l2 -10l-1 -8l-5 -1l-3 -5l1 -8l4 -5l1 -5l3 -8l-1 -6l-2 -5l0 -4l0 -10l-4 -5l15 -10l14 2l15 0l12 2l9 0l18 0l4 5l21 7l4 -3l12 6l13 -2l1 8l-11 9l-14 2l-1 5l-7 7l-4 11l4 7l-6 6l-3 8l-8 3l-8 10l-14 0l-11 0l-7 4l-4 5l-5 -1l-4 -4l-3 -8l-11 -2z","c":[488.1,200.2],"a":[489.7,199.9],"s":[506.1,196.6],"d":[489,192.5,485,195,484.5,200,495,196,480.5,192.5,494,203.5,481.5,207,490.5,195.5,494.5,195,485,189.5],"n":["fra"],"bb":[473.5,188.7,508.4,214.2]},"ita":{"p":"M2116 711l7 2l1 -2l11 -3l3 5l15 4l-1 7l3 6l-9 -2l-9 4l1 7l-2 4l4 7l10 7l6 11l12 11l9 0l3 3l-3 2l10 5l8 4l9 7l1 3l-2 4l-6 -6l-10 -2l-4 8l8 5l-2 7l-4 1l-6 11l-5 1l0 -4l3 -7l2 -3l-4 -7l-4 -7l-4 -2l-4 -5l-7 -3l-5 -5l-8 -1l-8 -6l-11 -8l-7 -8l-4 -14l-5 -1l-9 -5l-5 2l-7 7l-4 1l1 -6l-6 -2l-3 -11l4 -4l-3 -5l0 -4l5 3l5 -1l6 -4l2 2l6 -1l2 -5l8 2l5 -3l1 -6zM2164 829l8 -1l-4 10l2 4l-2 6l-9 -4l-5 -2l-16 -6l2 -7l13 1l11 -1zM2097 793l5 -4l7 9l-2 17l-5 0l-4 4l-4 -3l-1 -16l-2 -8l6 1z","c":[533.8,189.4],"a":[534.7,194.9],"s":[524.7,186.5],"d":[524,199,528.5,184.5,525.5,187,545,204,531,191,530,189.5],"n":["fra","ceu"],"bb":[518.7,177.1,551.3,212.1]},"deu":{"p":"M2063 674l-10 -7l-5 2l-8 -7l-5 -6l-5 0l-2 -6l9 -3l6 -4l9 -22l16 -6l9 1l2 -4l9 0l2 3l8 -8l-3 -5l0 -9l8 2l7 -2l0 6l12 3l0 6l11 -3l6 -4l13 6l5 4l2 8l-3 4l4 5l3 8l-1 6l5 9l-5 2l-3 -2l-3 3l-8 2l-4 4l-8 3l2 5l1 6l6 3l6 6l-4 7l-4 2l2 9l-1 2l-4 -3l-5 0l-8 3l-10 -1l-1 4l-6 -4l-3 1l-12 -5l-3 3l-9 0l1 -10l6 -10l-16 -2l-5 -4l-3 0l-3 -1z","c":[526.2,162.2],"a":[537.2,157.6],"s":[527.8,153.8],"d":[530.5,158.5,528.5,155,518,168,528.5,152,516.5,166,524.5,170.5,536,169.5,524,154.5,513.5,166],"n":["swe","fra","pol","ceu"],"bb":[507,148.2,541.7,176.4]},"ceu":{"p":"M2184 717l-9 4l-1 5l-4 2l0 3l-4 0l-4 -2l-2 2l-8 0l3 -1l-3 -6l1 -7l-15 -4l-3 -5l-11 3l-1 2l-7 -2l-1 6l-5 3l-8 -2l-2 5l-6 1l-2 -2l-6 4l-5 1l-5 -3l-4 -6l-5 2l0 -6l8 -8l0 -4l5 2l3 -3l9 0l3 -3l12 5l3 -1l6 4l1 -4l10 1l8 -3l5 0l4 3l1 -2l-2 -9l4 -2l4 -7l-6 -6l-6 -3l-1 -6l-2 -5l8 -3l4 -4l8 -2l3 -3l3 2l5 -2l5 5l8 1l0 4l6 3l1 -4l8 2l1 4l8 1l5 7l1 1l5 -2l5 5l7 -3l5 2l8 -2l11 5l-3 4l-3 6l7 4l0 4l-6 2l-6 10l-6 10l-9 2l-7 0l-9 3l-4 2l-9 -2l-8 -6l-4 -2z","c":[543.6,174],"a":[545.6,173.3],"s":[538.7,182.4],"d":[554.5,176,557.5,169.5,543,179.5,552,171.5,524,176,540,182.5,550.5,169.5],"n":["fra","ita","deu","ukr","blk","pol"],"bb":[516.7,162.7,563.1,182.9]},"pol":{"p":"M2261 609l0 7l4 6l-1 5l-6 4l3 6l0 7l6 13l-1 4l-6 2l-10 12l3 6l-2 -1l-11 -5l-8 2l-5 -2l-7 3l-5 -5l-5 2l-1 -1l-5 -7l-8 -1l-1 -4l-8 -2l-1 4l-6 -3l0 -4l-8 -1l-5 -5l-5 -9l1 -6l-3 -8l-4 -5l3 -4l-2 -8l7 -4l18 -7l14 -5l11 2l1 4l10 0l14 2l21 0l5 1l3 5z","c":[553.6,158.8],"a":[558.3,158.7],"s":[551.7,150.4],"d":[558.5,153.5,564.5,155.5,555,156,553.5,158,541,160.5,549,161.5,555,153.5],"n":["deu","ceu","ukr","rus","bal"],"bb":[539.1,148.7,566.7,170.3]},"bal":{"p":"M2311 521l2 3l-8 9l3 15l-5 5l6 4l1 8l3 9l-12 6l-7 3l1 7l-9 5l-2 8l-12 6l-11 0l-3 -5l-5 -1l-1 -4l1 -4l-5 -3l-12 -3l-2 -13l0 -12l6 -10l10 -5l9 12l9 0l2 -13l1 -9l-4 2l-7 -6l-1 -9l14 -5l14 -2l12 2l12 0z","c":[568.8,141],"a":[566.9,140.7],"s":[566.9,140.3],"d":[564,141,563.5,144.5,573,144,562,146.5,565.5,146.5,568,138],"n":["pol","ukr","rus"],"bb":[558.5,129.7,578.3,152.3]},"blk":{"p":"M2255 787l-2 1l-2 2l-6 0l-4 2l-7 2l-1 3l-3 2l-1 4l-5 7l-2 -1l0 -3l-6 -5l-1 -6l1 -9l1 -4l-2 -2l-2 -1l-3 -4l-5 -3l-10 -5l-7 -5l-10 -4l-9 -10l2 -1l-5 -6l0 -4l-8 -3l-3 6l-3 -4l0 -5l8 0l2 -2l4 2l4 0l0 -3l4 -2l1 -5l9 -4l4 2l8 6l9 2l4 -2l9 -3l7 0l9 -2l6 -10l6 -10l6 -2l5 -4l7 2l7 0l5 4l4 -3l8 -1l3 -3l5 0l2 -2l8 -2l8 5l5 0l5 4l-1 5l4 2l1 6l4 3l0 3l2 1l-3 1l-7 0l-1 -2l-2 1l1 2l-4 5l-1 4l-3 2l5 3l5 -3l5 3l0 3l-5 3l-4 -1l-3 16l-5 6l-4 10l3 7l-9 -2l-12 5l0 6l-10 1l-8 -4l-9 3l-8 0z","c":[563.5,185.8],"a":[572.5,186.5],"s":[579.4,187.2],"d":[554.5,200.5,553,188.5,568.5,190,578.5,179,561.5,191,578,181.5,557,189,549,187,575,183.5,571,190,556.5,195,573.5,193],"n":["ceu","ukr","tur","grc"],"bb":[537.9,172.3,583.4,202.4]},"grc":{"p":"M2255 787l8 0l9 -3l8 4l10 -1l0 -6l6 3l-4 8l-2 2l-7 0l-6 -2l-13 4l7 7l-5 2l-7 0l-5 -7l-3 3l3 8l5 6l-4 3l6 6l6 4l0 7l-10 -3l3 6l-7 2l4 11l-7 0l-9 -5l-4 -11l-2 -8l-5 -6l-5 -8l-1 -3l5 -7l1 -4l3 -2l1 -3l7 -2l4 -2l6 0l2 -2l2 -1zM2364 867l2 -3l8 0l10 -4l-7 6l1 2l0 1l-12 5l-5 -1l-3 -5l6 -1zM2292 865l-1 4l-16 1l0 -2l-14 -3l2 -5l6 4l9 0l8 0l0 3l6 -2z","c":[562.7,203.3],"a":[565.8,207.7],"s":[565.6,208],"d":[565,199,564,207,560,200.5,563,207,559.5,201,562.5,199],"n":["blk","tur"],"bb":[556,195.2,596,218.6]},"ukr":{"p":"M2261 644l0 -7l-3 -6l6 -4l1 -5l-4 -6l0 -7l11 0l12 -6l2 -8l9 -5l-1 -7l7 -3l12 -6l12 4l1 4l6 -2l11 4l1 7l-2 4l7 10l4 3l0 3l7 3l3 4l-4 3l-9 -1l-2 2l2 5l3 9l4 1l3 -3l4 0l11 -1l7 8l-3 3l1 5l9 1l4 6l0 3l14 5l8 -2l7 6l7 0l16 5l0 4l-4 8l2 8l-1 4l-11 1l-6 4l0 7l-9 1l-8 4l-10 1l-10 5l1 8l-2 -1l-1 -3l-4 0l-8 -3l-2 3l-2 -1l-17 -4l-1 -5l-10 2l-4 7l-9 11l-5 -3l-5 3l-5 -3l3 -2l1 -4l4 -5l-1 -2l2 -1l1 2l7 0l3 -1l-2 -1l0 -3l-4 -3l-1 -6l-4 -2l1 -5l-5 -4l-5 0l-8 -5l-8 2l-2 2l-5 0l-3 3l-8 1l-4 3l-5 -4l-7 0l-7 -2l-5 4l0 -4l-7 -4l3 -6l3 -4l2 1l-3 -6l10 -12l6 -2l1 -4l-6 -13z","c":[584,165],"a":[584.7,165.3],"s":[585.3,179.2],"d":[569,170,576.5,165,581.5,165.5,582.5,146.5,588.5,175.5,583.5,179.5,596,169.5,579,146,586,151,574,153.5,608,170.5,597,162.5,582,165,592,178,567,152.5,607,170,576,160.5],"n":["ceu","pol","bal","blk","rus"],"bb":[561.3,143.5,611.3,183.4]},"rus":{"p":"M3453 775l-1 -2l-1 -7l6 0l2 -16l-3 -12l9 -5l14 3l7 -14l4 -15l4 -5l6 -13l-18 4l-10 6l-17 0l-4 -14l-13 -10l-20 -4l-4 -15l-4 -9l-4 -6l-7 -15l-9 -6l-17 -4l-15 0l-14 3l-9 8l6 3l1 8l-7 5l-10 16l0 6l-15 9l-14 -5l-13 1l-6 -5l-6 -1l-17 10l-14 2l-10 4l-14 -3l-11 1l-6 -8l-11 -7l-11 -2l-15 2l-10 3l-16 -6l-2 -11l-13 -4l-10 -2l-13 -6l-11 15l4 9l-10 10l-16 -3l-11 -1l-8 -7l-11 0l-10 -5l-17 7l-21 13l-12 2l-4 1l-6 -8l-15 2l-4 -7l-8 -2l-5 -9l-7 -2l-15 3l-16 -8l-6 8l-25 -38l-14 -12l4 -5l-27 15l-11 0l1 -8l-14 -5l-12 4l-4 -16l-20 -4l-10 7l-27 6l-6 3l-41 6l-5 5l8 10l-11 4l2 4l-11 7l18 11l-2 7l-16 -1l-3 4l-15 -7l-17 0l-12 6l-13 -6l-25 -10l-17 0l-23 16l-1 11l-12 -8l-9 15l4 3l-7 11l10 10l8 -1l7 10l-1 7l6 2l-5 9l-11 2l-11 14l10 13l-1 9l12 16l-7 5l-2 4l-5 -1l-7 -8l-3 -1l-7 -3l-4 -5l-10 -3l-7 2l-2 -3l-15 -6l-16 -2l-10 -3l-1 2l-14 -11l-13 -6l-9 -8l8 -2l9 -11l-6 -6l16 -6l0 -3l-10 3l0 -7l6 -4l11 -1l1 -4l-2 -8l4 -8l0 -4l-16 -5l-7 0l-7 -6l-8 2l-14 -5l0 -3l-4 -6l-9 -1l-1 -5l3 -3l-7 -8l-11 1l-4 0l-3 3l-4 -1l-3 -9l-2 -5l2 -2l9 1l4 -3l-3 -4l-7 -3l0 -3l-4 -3l-7 -10l2 -4l-1 -7l-11 -4l-6 2l-1 -4l-12 -4l-3 -9l-1 -8l-6 -4l5 -5l-3 -15l8 -9l-2 -3l13 -9l-12 -8l24 -22l10 -10l4 -8l-16 -12l4 -12l-10 -13l8 -16l-13 -21l10 -14l-17 -13l2 -13l9 -2l19 -8l11 -7l18 12l31 5l42 21l8 9l1 13l-12 10l-19 5l-49 -14l-8 2l18 13l1 9l0 18l15 6l8 4l2 -8l-7 -8l7 -7l27 11l9 -4l-7 -13l26 -18l10 1l10 6l7 -12l-9 -12l5 -11l-8 -12l31 6l6 11l-14 2l0 11l9 6l17 -4l3 -12l23 -9l39 -16l8 1l-11 11l14 2l8 -6l21 -1l16 -8l13 12l13 -13l-12 -11l6 -7l33 6l15 6l40 22l8 -10l-12 -10l0 -4l-13 -2l3 -9l-6 -16l0 -6l21 -19l7 -19l8 -4l30 5l2 12l-11 17l7 6l4 14l-3 27l13 12l-5 13l-22 27l13 2l4 -6l12 -5l3 -9l10 -9l-7 -11l6 -13l-13 -2l-2 -10l9 -20l-15 -17l20 -14l-2 -15l5 0l6 11l-4 20l11 4l-5 -15l19 -8l23 -1l21 12l-10 -18l-1 -22l19 -5l27 1l24 -2l-9 -12l13 -14l12 -1l22 -11l29 -3l4 -6l29 -2l9 5l25 -12l21 0l3 -10l10 -10l26 -10l20 8l-16 6l26 3l3 12l10 -6l32 0l25 12l9 8l-3 12l-12 7l-29 12l-8 6l13 3l17 6l10 -4l5 14l5 -6l18 -3l36 3l2 10l47 3l1 -16l23 4l18 0l18 11l5 13l-7 9l14 16l18 8l10 -21l18 9l19 -5l22 6l8 -6l18 3l-8 -19l15 -9l100 13l10 13l29 15l45 -3l22 3l9 8l-1 15l13 5l15 -4l20 0l21 4l21 -3l19 18l14 -6l-9 -13l5 -9l35 6l23 -1l32 9l16 9l27 14l29 19l-1 12l8 4l-3 -13l30 3l22 17l-11 8l-18 2l0 18l-5 3l-10 0l-9 -7l-14 -5l-3 -8l-11 -3l-13 3l-6 -7l3 -6l-14 4l5 9l-6 7l-14 8l-15 -1l10 9l7 15l5 5l1 7l-3 4l-20 -3l-31 13l-10 2l-17 11l-16 11l-4 7l-16 -11l-29 13l-5 -6l-11 7l-15 -2l-3 10l-14 16l1 7l12 3l-1 23l-11 1l-4 13l4 7l-19 7l-4 18l-17 3l-3 16l-16 13l-4 -10l-5 -22l-6 -34l5 -21l10 -10l0 -7l18 -4l19 -20l20 -17l20 -14l8 -24l-13 2l-7 14l-28 18l-9 -21l-29 6l-27 28l9 10l-25 5l-17 1l1 -11l-18 -3l-13 8l-34 -3l-37 5l-36 32l-43 37l18 1l5 10l11 3l7 -7l12 1l17 17l0 12l-9 15l-1 17l-5 23l-16 21l-4 10l-15 16l-15 16l-7 8l-15 7l-7 1l-7 -7l-15 10l-2 4zM2595 254l26 -19l-3 -11l25 -11l37 -15l37 -4l19 -9l21 -3l8 9l-7 7l-40 12l-34 10l-34 21l-17 22l-17 20l2 17l21 17l-6 2l-37 -3l-3 -9l-20 -6l-1 -11l11 -4l0 -12l22 -18l-10 -2zM3042 81l24 -6l22 14l25 24l-3 23l-24 3l-31 -7l-18 -10l-9 -18l-15 -5l29 -18zM3543 201l29 1l40 12l-9 16l-41 0l-18 5l-22 -15l6 -15l15 -4zM3588 612l4 15l0 14l4 15l11 26l-16 -5l-7 21l11 14l0 10l-9 -8l-7 10l-2 -11l1 -14l-1 -15l2 -11l1 -20l-7 -14l1 -21l11 -7l-5 -7l5 -2l3 10zM3143 126l28 14l-3 10l-63 9l20 -32l9 -3l9 2zM2498 93l22 -5l17 0l2 7l7 -7l10 -4l16 6l-4 4l-15 3l-10 2l-1 4l-13 4l-12 -6l6 -8l-25 0zM2372 724l2 -3l8 3l4 0l1 3l2 1l0 1l6 3l11 -1l-2 5l-12 3l-16 7l-6 -2l3 -7l-12 -4l2 -2l10 -5l-1 -2zM3647 219l28 5l-13 9l-18 -2l-20 -9l2 -7l21 4zM4000 301l1 -1l10 0l16 6l-1 2l-11 5l-15 2l-12 1l-2 -7l14 -8zM3554 262l11 -9l13 -2l16 9l2 5l-17 0l-23 -2l-2 -1zM2253 603l-21 0l-14 -2l3 -7l15 -5l12 3l5 3l-1 4l1 4z","c":[780.1,115.9],"a":[604.4,145],"s":[584.2,128.5],"d":[891,111,981.5,114,741.5,97.5,755.5,96,683,113.5,597.5,87,618,139.5,722.5,80,916,114,727,82,938.5,154,610.5,135,1003,98.5,848.5,69,663.5,150,846,115.5,779,86,825.5,76.5,626,104.5,727,102,821,106.5,855,131.5,802.5,133,791.5,80.5,853,89.5,829,114.5,742,79.5,811.5,158.5,852.5,98,667,118,908.5,114,760,112.5,808.5,147,670.5,52,651,118,590.5,134.5,752.5,138.5,791.5,165,709,90,605,163.5,784.5,104,625.5,181,601.5,135,619,128.5,994.5,101.5,772,68,596,131.5,744,77.5,653,144,636,128,619,117.5,630,109.5,887,157.5,657,94.5,695,140.5,990.5,107.5,620,122,948,115.5,842,78,810.5,142,787,66.5,743,148,756,96,714,85.5,795.5,141,782.5,151.5,673.5,49,785.5,124,772.5,118.5,708,133.5,948.5,118.5,743,110.5,627.5,149,844.5,103.5,998,94,876,144,733,149,586.5,104.5,895.5,56,639.5,110.5],"n":["nor","fin","pol","bal","ukr","kor","chn","mng","kaz","cau"],"bb":[554.6,18.9,1028.1,197.4]},"tur":{"p":"M2497 841l-5 3l-4 -4l-13 -1l-4 2l-13 2l-6 -1l-13 5l-9 0l-6 -2l-12 3l-4 -2l0 7l-3 3l-3 3l-4 -6l4 -5l-7 1l-9 -3l-8 7l-17 2l-9 -7l-12 0l-2 5l-8 1l-11 -6l-12 0l-6 -13l-9 -7l6 -10l-7 -6l12 -13l17 0l5 -10l21 1l13 -8l13 -4l19 0l19 9l16 5l13 -2l10 1l13 -7l12 0l10 6l2 5l-1 6l8 4l5 3l-8 4l4 15l-3 4l6 10zM2290 781l12 -5l9 2l1 5l10 5l-2 3l-13 1l-5 4l-9 7l-4 -6l1 -3l2 -2l4 -8l-6 -3z","c":[598.3,204.4],"a":[591.4,201.5],"s":[580.6,197.9],"d":[583.5,203,617.5,206,584.5,203,602.5,200,591,196,588.5,200,578,201.5,598.5,200.5,592.5,212.5,605.5,200,577.5,204.5,597,197.5,597,208.5],"n":["blk","grc","irq","lev","cau","irn"],"bb":[572.3,194.1,624.4,214.6]},"cau":{"p":"M2498 808l-5 -3l-8 -4l1 -6l-2 -5l-10 -6l-12 0l1 -5l-2 -9l-7 -5l-6 -2l-4 -4l1 -2l10 3l16 2l15 6l2 3l7 -2l10 3l4 5l7 3l3 1l7 8l5 1l2 -4l7 -5l6 7l5 9l6 1l3 3l-9 1l-2 11l-2 4l-4 3l0 7l-3 0l-7 -7l4 -6l-3 -4l-4 1l-13 10l-4 0l-8 -2l-6 -6l-1 -5z","c":[626.8,198],"a":[624.4,195.6],"s":[615.6,195.9],"d":[630.5,202.5,627,195.5,616.5,192,630.5,197.5,623.5,195.5,622,196.5],"n":["rus","tur","irn"],"bb":[611,189.4,640,206.8]},"sau":{"p":"M2625 982l2 10l5 8l6 4l8 1l7 3l5 6l3 4l4 2l0 2l-5 7l-1 3l-5 4l-4 8l-5 0l-2 2l-2 6l1 8l-1 1l-5 0l-7 5l-1 5l-3 3l-7 -1l-4 3l0 5l-5 3l-6 -1l-8 4l-5 1l-4 -8l-8 -19l-32 4l-11 5l-8 12l-5 2l-3 -4l-4 1l-11 -1l-2 -1l-12 0l-3 1l-5 -3l-3 6l1 4l-5 4l-1 -5l-3 -3l-1 -5l-6 -4l-6 -10l-3 -9l-8 -8l-5 -2l-7 -11l-1 -8l0 -7l-6 -13l-5 -4l-6 -3l-4 -7l0 -2l-3 -6l-3 -3l-4 -9l-7 -10l-6 -8l-5 0l2 -6l0 -5l1 -4l13 1l5 -3l2 -5l9 -1l2 -4l3 -2l-11 -13l22 -6l3 -2l13 4l16 8l32 25l20 1l9 -12l7 1l2 5l-1 3l4 9l4 11l6 2l2 5l7 5l1 5l-1 3l1 4l3 4l2 4l2 3l-1 -9l3 -6l3 -2l3 4l0 7l-2 7l2 5l2 -1l1 3l8 -2l9 1l7 0l8 -8l8 -8l7 -7l3 -4l2 1l-1 5l-2 2z","c":[628.7,251.2],"a":[629.7,248.6],"s":[608.9,257.9],"d":[615.5,266.5,654.5,265,607,250,621,239,625.5,257,631.5,243,618.5,234,596.5,237,620.5,234,620,248,659,265,655.5,262,629.5,252.5,636.5,251.5,611,236,624,244.5,606,240.5,652.5,257,647.5,267,657,253,601,242,639.5,258.5,658,254.5,651,264,628,243.5,649,266,624,237,629.5,259.5],"n":["irq","yem","lev"],"bb":[596.2,226.1,666.1,272.8]},"lev":{"p":"M2388 937l-1 -3l-6 -18l3 -4l-1 -1l3 -6l2 -9l2 -3l4 -10l6 -9l0 -1l-1 -9l3 -5l3 -3l3 -3l0 -7l4 2l12 -3l6 2l9 0l13 -5l6 1l13 -2l-6 8l-6 3l1 9l-4 15l-25 13l5 15l-3 2l-22 6l11 13l-3 2l-2 4l-9 1l-2 5l-5 3l-13 -1l0 -2z","c":[604.7,221.4],"a":[600.8,221.9],"s":[598.6,220.7],"d":[604,216.5,607.5,224,602,215,606,218,607.5,212,604.5,231.5],"n":["tur","sau","egy","irq"],"bb":[595.2,210.2,617.6,235.1]},"irq":{"p":"M2436 904l-5 -15l25 -13l4 -15l-1 -9l6 -3l6 -8l4 -2l13 1l4 4l5 -3l8 16l7 3l1 8l-6 4l-2 10l7 12l14 6l6 10l-2 9l3 0l1 6l6 7l-7 -1l-7 -1l-9 12l-20 -1l-32 -25l-16 -8l-13 -4z","c":[621.5,223.2],"a":[623.3,222.5],"s":[632.8,231.2],"d":[620.5,211,624,232.5,615,219.5,617.5,212.5,625,219,614.5,219],"n":["tur","sau","lev","irn"],"bb":[607.8,209.7,634.9,235.4]},"irn":{"p":"M2540 932l-6 -7l-1 -6l-3 0l2 -9l-6 -10l-14 -6l-7 -12l2 -10l6 -4l-1 -8l-7 -3l-8 -16l-6 -10l3 -4l-4 -15l8 -4l1 5l6 6l8 2l4 0l13 -10l4 -1l3 4l-4 6l7 7l3 0l4 9l10 3l8 6l16 2l17 -3l1 -3l10 -2l8 -8l7 1l5 -3l8 1l12 7l9 1l13 12l8 0l1 11l-4 15l-3 9l4 2l-4 7l3 10l1 8l9 2l0 8l-10 11l6 6l4 7l11 6l0 10l6 2l1 6l-16 6l-5 14l-21 -4l-12 -3l-12 -1l-5 -15l-5 -2l-9 2l-11 6l-14 -4l-11 -9l-11 -3l-7 -12l-8 -16l-6 2l-7 -4l-4 5z","c":[650.7,224.6],"a":[642.8,215],"s":[656.4,241.1],"d":[666.5,230.5,658,213.5,668.5,239.5,663,240,665,224,630,210.5,666,228,664.5,224.5,650.5,223.5,652.5,239.5,664.5,230.5,668,231,643,229,650,228,656,226.5,653,210.5,661,212.5,664.5,210,648,235,663,241,651.5,217,659,239],"n":["tur","cau","irq","cas","afg","pak"],"bb":[622.5,202.1,675.9,247.4]},"yem":{"p":"M2578 1061l8 19l4 8l-8 3l-2 5l0 4l-11 4l-18 6l-10 8l-5 0l-3 0l-7 4l-7 3l-9 0l-3 1l-2 3l-3 1l-2 2l-6 0l-3 2l-8 -1l-3 -6l1 -7l-2 -3l-2 -8l-4 -5l3 -1l-2 -5l2 -2l-1 -5l5 -4l-1 -4l3 -6l5 3l3 -1l12 0l2 1l11 1l4 -1l3 4l5 -2l8 -12l11 -5l32 -4z","c":[632.1,274],"a":[622.8,275.5],"s":[625,282.8],"d":[622.5,272,636,271.5,626,273.5,624,271,642.5,272,641,271],"n":["sau"],"bb":[618.3,265.2,647.5,283.4]},"egy":{"p":"M2410 1026l-44 0l-44 0l-44 0l0 -43l0 -43l-4 -10l3 -7l-1 -6l4 -5l14 -1l11 4l11 3l5 2l9 -4l4 -3l10 -1l8 1l3 6l3 -4l9 3l8 1l6 -3l6 18l1 3l-3 5l-2 9l-3 6l-3 2l-4 -4l-5 -5l-8 -17l-1 1l5 12l7 13l8 18l4 7l4 6l10 13l-3 2l1 8l13 10l2 3z","c":[582.9,243],"a":[586.7,232.4],"s":[583.1,229],"d":[584,236.5,582.5,236,588.5,232,595.5,252.5,595,253,587.5,241,591.5,251,591,237.5,598,253,588.5,232,569.5,246.5,582,234],"n":["lev","sdn","lby"],"bb":[568.6,227.8,602.4,256.5]},"lby":{"p":"M2278 1026l0 23l-13 0l0 5l-44 -22l-45 -23l-11 7l-8 4l-6 -6l-18 -5l-5 -8l-8 -5l-5 2l-4 -7l-1 -5l-6 -8l4 -5l-1 -8l1 -6l0 -6l2 -10l-1 -5l-4 -11l6 -3l1 -5l-1 -5l7 -5l4 -4l5 -3l1 -10l13 4l4 -1l10 2l14 6l6 11l10 2l15 5l12 6l6 -3l5 -5l-3 -10l4 -6l8 -5l7 -2l15 2l4 6l4 0l4 2l11 2l3 4l-4 5l1 6l-3 7l4 10l0 43l0 43z","c":[549.9,241.5],"a":[536.7,223.8],"s":[536.7,223.8],"d":[536.5,245.5,561,228.5,552,249,557,245.5,545.5,232.5,561,250.5,562,252,553,245.5,541.5,242,562.5,247,531.5,242.5,568,230,552,240.5,530.5,247.5,547.5,247.5,554.5,240,564,249,547.5,245,549,245,542,231,557.5,256.5],"n":["egy","sdn","caf","waf","alg"],"bb":[525.9,223,569.9,263.5]},"alg":{"p":"M1903 962l1 -2l0 -1l0 -14l18 -9l11 -2l9 -3l4 -6l13 -5l0 -9l7 -1l5 -5l14 -2l2 -5l-2 -2l-4 -14l-1 -7l-4 -8l11 -7l12 -2l7 -6l10 -3l19 -3l19 -1l5 2l11 -5l11 0l5 3l8 -1l12 -5l7 2l0 6l10 -5l0 3l-5 6l0 6l4 3l-2 11l-7 6l2 7l6 0l2 6l5 2l-1 10l-5 3l-4 4l-7 5l1 5l-1 5l-6 3l4 11l1 5l-2 10l0 6l-1 6l1 8l-4 5l6 8l1 5l4 7l5 -2l8 5l5 8l-38 22l-32 23l-16 5l-12 1l0 -7l-5 -2l-7 -4l-3 -5l-37 -25l-38 -26l-42 -29z","c":[508.5,236.4],"a":[508.3,211.5],"s":[508.3,211.5],"d":[515.5,251.5,491,247.5,501.5,225.5,498.5,220,497,243,526.5,225,499,219,499.5,231.5,507,214.5,493,232,529.5,250.5,526.5,216,520,242.5,512,224,527.5,224.5,507.5,232.5,505,242.5,520.5,214,512,228.5,515.5,248.5,524,249,523.5,230.5,499.5,218.5,511.5,226,503.5,224,510,230.5,513,214.5,498.5,223.5,511,259.5,491.5,236,494,232,510.5,215.5],"n":["lby","mar","waf"],"bb":[475.9,209.8,533.3,265]},"mar":{"p":"M1976 867l4 8l1 7l4 14l2 2l-2 5l-14 2l-5 5l-7 1l0 9l-13 5l-4 6l-9 3l-11 2l-18 9l0 14l0 1l-1 2l0 18l-36 0l0 30l-10 1l-3 6l2 17l-43 0l-3 4l1 -5l0 -6l5 -3l3 -6l0 -4l3 -8l7 -8l3 -2l3 -7l1 -6l4 -7l7 -5l7 -12l6 -5l10 -1l9 -8l5 -3l10 -10l-3 -16l4 -10l2 -7l7 -8l11 -6l8 -5l8 -13l3 -8l8 0l7 6l11 -1l11 3l5 0z","c":[475.5,234.9],"a":[481.1,220.4],"s":[478.9,221.6],"d":[476,235,483.5,220,455,254.5,468,244.5,460.5,247,483.5,225.5,467,244.5,462,255.5,479,229],"n":["alg","waf"],"bb":[452.6,214.8,496.9,259.4]},"afg":{"p":"M2739 839l6 0l9 3l3 1l8 -4l4 3l3 -6l7 0l2 -2l1 -5l5 -5l6 3l-1 4l3 1l-1 11l4 4l4 -3l5 -1l7 -6l8 1l11 0l2 4l-6 1l-6 3l-13 1l-12 3l-6 5l2 6l2 6l-6 5l1 5l-3 5l-11 -1l4 8l-7 4l-4 7l0 7l-4 4l-4 -1l-9 1l-1 4l-8 0l-6 7l-1 10l-14 5l-8 -1l-2 3l-7 -2l-11 2l-19 -6l10 -11l0 -8l-9 -2l-1 -8l-3 -10l4 -7l-4 -2l3 -9l4 -15l11 5l9 -2l2 -6l9 -2l6 -4l2 -10l10 -2l2 -5l5 4l3 0z","c":[683.6,220.7],"a":[692.2,218.8],"s":null,"d":[681.5,230,683.5,221.5,684,227,691.5,212,679,219,676,231,669,220.5,690,215,683,211],"n":["irn","cas","chn","pak"],"bb":[668.1,206.1,708.8,234.8]},"pak":{"p":"M2865 863l-11 10l-12 2l-17 -3l-6 5l4 11l4 9l9 6l-9 7l0 9l-11 12l-7 12l-11 13l-13 -1l-13 13l8 5l1 9l6 6l2 10l-24 0l-7 8l-9 -3l-3 -8l-9 -9l-20 2l-18 0l-16 2l5 -14l16 -6l-1 -6l-6 -2l0 -10l-11 -6l-4 -7l-6 -6l19 6l11 -2l7 2l2 -3l8 1l14 -5l1 -10l6 -7l8 0l1 -4l9 -1l4 1l4 -4l0 -7l4 -7l7 -4l-4 -8l11 1l3 -5l-1 -5l6 -5l-2 -6l-2 -6l6 -5l12 -3l13 -1l6 -3l6 -1l8 6l4 10l18 5z","c":[693,232.4],"a":[702.8,221.3],"s":[686.1,248],"d":[682,237.5,704,223,698,228,687.5,233.5,684,238,696,225.5,710.5,214,689.5,238.5,705,217.5,700.5,217.5,681.5,236,680,243.5],"n":["irn","afg","ind","chn"],"bb":[669.1,210.5,716.2,251.5]},"cas":{"p":"M2819 812l2 12l4 -1l7 3l-1 5l2 7l-11 0l-8 -1l-7 6l-5 1l-4 3l-4 -4l1 -11l-3 -1l1 -4l-6 -3l-5 5l-1 5l-2 2l-7 0l-3 6l-4 -3l-8 4l-3 -1l-9 -3l-6 0l-3 0l-5 -4l-2 5l-10 2l-2 10l-6 4l-9 2l-2 6l-9 2l-11 -5l-1 -11l-8 0l-13 -12l-9 -1l-12 -7l-8 -1l-5 3l-7 -1l-8 8l-10 2l-2 -9l2 -14l-9 -4l3 -9l-7 -1l2 -11l10 3l10 -4l-8 -8l-3 -7l-9 3l-1 10l-4 -9l5 -4l13 -3l7 4l8 10l6 -1l-1 -49l29 -8l2 1l17 10l9 5l11 12l13 -2l19 -1l13 10l0 13l5 0l2 11l14 1l3 6l5 0l4 -10l15 -9l6 -2l3 -6l7 -2l19 5l1 -8l7 -3l15 6l4 -2l19 0l16 2l6 5l7 2l-2 3l-17 7l-4 5l-14 2l-5 8l-11 -2l-8 3l-11 6l2 3l-3 3z","c":[678.8,199.7],"a":[692.5,196.9],"s":[652,198.1],"d":[670.5,192.5,662.5,206.5,701.5,196,658,198.5,668.5,208,713.5,192.5,698,196,649,199,706,194,703,195,680,203.5,657.5,193.5,700,206.5,652,202,691.5,198,667.5,191.5,679,213,704.5,205,680.5,191,711,192,676,208],"n":["irn","afg","kaz","chn"],"bb":[645.8,182.4,722.9,216.4]},"kaz":{"p":"M2971 678l-9 10l-9 1l-1 15l-6 6l-22 -5l-8 25l-5 3l-22 6l10 23l-8 4l1 8l-7 -2l-6 -5l-16 -2l-19 0l-4 2l-15 -6l-7 3l-1 8l-19 -5l-7 2l-3 6l-6 2l-15 9l-4 10l-5 0l-3 -6l-14 -1l-2 -11l-5 0l0 -13l-13 -10l-19 1l-13 2l-11 -12l-9 -5l-17 -10l-2 -1l-29 8l1 49l-6 1l-8 -10l-7 -4l-13 3l-5 4l0 -3l2 -6l-2 -4l-13 -5l-5 -12l-6 -4l0 -4l11 1l0 -10l10 -2l9 2l2 -13l-2 -9l-11 1l-9 -4l-13 6l-10 3l-6 -2l1 -7l-7 -10l-8 1l-10 -10l7 -11l-4 -3l9 -15l12 8l1 -11l23 -16l17 0l25 10l13 6l12 -6l17 0l15 7l3 -4l16 1l2 -7l-18 -11l11 -7l-2 -4l11 -4l-8 -10l5 -5l41 -6l6 -3l27 -6l10 -7l20 4l4 16l12 -4l14 5l-1 8l11 0l27 -15l-4 5l14 12l25 38l6 -8l16 8l15 -3l7 2l5 9l8 2l4 7l15 -2l6 8z","c":[687,172.7],"a":[698.3,162.4],"s":[647.8,180.2],"d":[679,175.5,688.5,186.5,698.5,159,682.5,159.5,700.5,170.5,706.5,180,719,172.5,721,171,648,170,690,158,662,177.5,716,157.5,722.5,167.5,639,169.5,659,183,692,160,682,165,685,178.5,708,188.5,666.5,183.5,701.5,151.5,732,172,653.5,188,697,173,709.5,169.5,661,177,648.5,180.5,633.5,170.5,704,188.5,700,158,727.5,178.5,659.5,178.5,677,164,694,159.5,740,170,721.5,170.5,719,186,685.5,166,699,169,672,156,673.5,152.5,689,159,664.5,170,717.5,179.5,676,179.5,698,161,692.5,178,648,179.5,714,155,713.5,160,675,155,701.5,157.5,704.5,155.5,631,172.5],"n":["rus","cas","chn"],"bb":[629.1,146.6,742.7,199]},"waf":{"p":"M1810 1038l3 -4l43 0l-2 -17l3 -6l10 -1l0 -30l36 0l0 -18l42 29l38 26l37 25l3 5l7 4l5 2l0 7l12 -1l16 -5l32 -23l38 -22l18 5l6 6l8 -4l3 18l4 3l0 4l5 4l-3 5l-4 23l-1 15l-14 11l-5 15l5 4l0 7l7 0l-1 6l-3 0l0 4l-2 0l-8 -12l-3 -1l-8 7l-9 -4l-6 0l-3 1l-7 0l-6 5l-6 0l-13 -6l-6 3l-5 0l-4 -5l-12 -4l-11 2l-3 2l-2 7l-3 4l-1 10l0 4l2 7l-2 4l1 3l-5 7l-4 3l-2 8l1 7l-1 18l-9 1l-9 2l-18 7l-6 4l-10 3l-10 -3l-5 0l-8 -2l-7 0l-13 2l-8 3l-11 4l-2 0l-3 0l-11 -5l-10 -9l-10 -6l-7 -7l-3 -1l-8 -5l-6 -6l-2 -4l-1 -8l-5 -7l-4 -4l-3 -1l-3 -3l-1 -5l-2 -2l-3 -2l-6 -5l-5 0l-2 -4l0 -1l-4 -3l0 -2l-2 -9l1 -5l-4 -9l-6 -4l5 -2l5 -8l3 -6l-1 -6l3 -5l2 -11l-2 -11l-1 -6l1 -6l-3 -5l-6 -5z","c":[492.2,274.7],"a":[495.8,283.9],"s":[451.7,277.4],"d":[468.5,294,464.5,272,455,262,523,263.5,462,265.5,516,271.5,499,290.5,489.5,262.5,516,265.5,527.5,276,489,290.5,481,245,476.5,247.5,507.5,273.5,471.5,246,483.5,287,537.5,276,536.5,268.5,471,278.5,518,270.5,477.5,305,482,273.5,458.5,274.5,491.5,267,527,282,481,300.5,538,281.5,536.5,274.5,497.5,267.5,463.5,261.5,482.5,268.5,473.5,246.5,452.5,276.5,471,262,492,295,496.5,270,521.5,275.5,467.5,284.5,508.5,278.5,487.5,257.5,494,273.5,534,280.5,465.5,255,478.5,296,482,290,498,270.5,461.5,277.5,471.5,280,481.5,293,504,293.5,498,285.5,539,255.5,473,298.5,474,255,488,271.5,492.5,266,455,272,477,291.5],"n":["lby","alg","mar","nga","caf"],"bb":[451,240.5,544.2,306.5]},"nga":{"p":"M2030 1205l1 -18l-1 -7l2 -8l4 -3l5 -7l-1 -3l2 -4l-2 -7l0 -4l1 -10l3 -4l2 -7l3 -2l11 -2l12 4l4 5l5 0l6 -3l13 6l6 0l6 -5l7 0l3 -1l6 0l9 4l8 -7l3 1l8 12l2 0l4 4l-1 2l-1 4l-9 9l-3 7l-2 6l-2 2l-2 8l-6 5l-2 5l-2 5l-1 5l-8 3l-6 -4l-5 0l-6 6l-3 1l-6 10l-3 8l-11 4l-4 0l-5 2l-8 0l-6 -7l-4 -8l-8 -7l-8 0l-10 0z","c":[522.2,291.9],"a":[520.8,293.2],"s":[509.4,300.5],"d":[514,296.5,524,301.5,521.5,287,511.5,291,516,304,514,290,514.5,288.5,522,301.5,534,286,515.5,284],"n":["waf","caf"],"bb":[507.5,279.8,540.5,306.8]},"sdn":{"p":"M2343 1235l-10 -7l-3 -5l-6 2l-5 0l-3 2l-5 -2l-7 -9l-2 -3l-8 -5l-3 -7l-4 -4l-8 -6l0 -4l-6 -4l-8 -5l-4 -3l-1 -4l2 -5l0 -4l-7 -7l-1 -5l0 -3l-4 -3l0 -7l-2 -4l-4 1l1 -4l3 -5l-2 -5l4 -3l-2 -3l3 -7l5 -8l9 0l0 -45l0 -5l13 0l0 -23l44 0l44 0l44 0l3 11l-2 2l1 12l4 14l5 3l6 4l-6 7l-8 2l-4 3l-1 8l-4 16l1 5l-2 10l-4 11l-7 5l-5 9l-1 5l-5 3l-4 11l1 11l-2 3l-6 0l-4 7l7 0l6 6l2 4l5 3l6 12l-7 7l-7 7l-7 5l-8 0l-9 3l-7 -3l-4 3z","c":[583.2,279.6],"a":[590.3,274.9],"s":[603.3,263.4],"d":[591,295.5,579.5,300,583.5,303,598,259,582.5,302,594.5,268.5,575,261,593.5,282.5,581.5,294,573.5,298,573.5,259.5,600,280.5,585,305.5,596.5,303,586.5,293.5,582,298.5,582.5,277,592,273,590.5,281.5,581.5,291.5,580.5,267,589.5,297,595,260.5,585.5,302,573,270,586,282,568.5,263.5],"n":["egy","lby","caf","eth","eaf"],"bb":[560.9,256.5,606.7,308.8]},"caf":{"p":"M2123 1318l-11 -11l-7 -9l-7 -11l0 -4l3 -4l2 -8l2 -8l-2 -2l4 -12l2 -9l-4 -7l-6 -2l-2 -5l-3 -2l0 -3l3 -8l6 -10l3 -1l6 -6l5 0l6 4l8 -3l1 -5l2 -5l2 -5l6 -5l2 -8l2 -2l2 -6l3 -7l9 -9l1 -4l1 -2l-4 -4l0 -4l3 0l1 -6l-7 0l0 -7l-5 -4l5 -15l14 -11l1 -15l4 -23l3 -5l-5 -4l0 -4l-4 -3l-3 -18l11 -7l45 23l44 22l0 45l-9 0l-5 8l-3 7l2 3l-4 3l2 5l-3 5l-1 4l4 -1l2 4l0 7l4 3l0 3l1 5l7 7l0 4l-2 5l1 4l4 3l8 5l6 4l0 4l8 6l4 4l3 7l8 5l2 3l7 9l5 2l3 -2l5 0l6 -2l3 5l10 7l-1 13l4 2l-3 4l-4 3l-5 5l-2 6l-1 9l-2 4l0 8l-4 3l0 7l-1 1l-1 6l2 5l1 13l2 11l-1 5l2 7l7 6l6 14l-5 -1l-15 2l-3 1l-3 7l3 5l-2 14l-2 11l3 2l8 4l3 -2l1 12l-8 0l-5 -6l-4 -5l-9 -1l-2 -6l-7 3l-9 -1l-4 -5l-7 -1l-5 0l0 -4l-4 0l-5 -1l-7 2l-5 0l-3 1l1 -13l-4 -5l-1 -6l2 -7l-2 -5l-1 -7l-13 1l1 -5l-6 1l0 1l-7 1l-3 6l-2 3l-6 -1l-3 1l-8 1l-4 -6l-3 -3l-3 -7l-3 -8l-32 -1l-4 2l-3 0l-5 1l-2 -3l3 -2l1 -4l1 -3l4 -3l-4 -3l-3 1l-5 5l-9 -12z","c":[555.1,308],"a":[542.5,330.5],"s":[526.9,307.2],"d":[545.5,307,548.5,292.5,579.5,328,541,333.5,554.5,309,535.5,297,569,346.5,543,269.5,579.5,331.5,564,312.5,564,338.5,574,338,559.5,327.5,571.5,301.5,552.5,315,551.5,264.5,560.5,343.5,537.5,334,556.5,321,546.5,330,528,325,565,298,549.5,289,552.5,339.5,547.5,294,558,269.5,562.5,293.5,535,327,541,278.5,527.5,315,577.5,343.5,581.5,331.5,548,313.5,566.5,320,550,318,535.5,305.5,534.5,329.5,550,331.5,581,321.5,544.5,326,526,318,554,328.5,537,300.5,552.5,298.5,552.5,275.5,538,298,557,315,548,340,538.5,300.5,545,309,556,268.5,547.5,313,576.5,339.5,576.5,346,572.5,316.5,567,330.5,548.5,270],"n":["lby","waf","nga","sdn","eaf","zmb","ang"],"bb":[523.6,252.3,586.6,355.6]},"eaf":{"p":"M2436 1326l-6 14l1 6l7 4l1 3l-3 7l0 3l-1 6l4 7l5 11l4 2l-9 7l-12 4l-7 0l-4 3l-7 1l-3 1l-14 -3l-8 1l-3 -15l-4 -6l-2 -3l-11 -2l-6 -3l-7 -2l-5 -2l-4 -3l-6 -14l-7 -6l-2 -7l1 -5l-2 -11l-1 -13l-2 -5l1 -6l1 -1l0 -7l4 -3l0 -8l2 -4l1 -9l2 -6l5 -5l4 -3l3 -4l-4 -2l1 -13l4 -3l7 3l9 -3l8 0l7 -5l7 -7l7 -7l6 2l0 6l4 4l8 0l14 9l3 0l3 0l2 1l8 1l3 -4l10 -5l4 4l8 0l-10 12l0 41l7 9l-8 4l-2 5l-5 1l-1 8l-4 4l-2 8l-4 3z","c":[598,326.7],"a":[602.2,322.2],"s":[610.3,330],"d":[607.5,313.5,609.5,318.5,588,313.5,603.5,316,595,338.5,612.5,320.5,591.5,308.5,587,320.5,589,310,590,334,608,315.5,613,308.5,585.5,336,601,317,608,315,600.5,318,610,318.5,596.5,346.5,601.5,348.5],"n":["sdn","caf","zmb","eth"],"bb":[580.6,303.3,616.3,351.3]},"eth":{"p":"M2405 1113l-1 -5l4 -16l1 -8l4 -3l8 -2l6 -7l6 13l3 11l6 5l16 11l6 7l6 6l3 4l6 3l2 4l0 5l-6 2l4 3l4 2l2 5l5 5l6 0l10 -3l12 -1l10 -4l6 -1l4 -2l6 0l3 0l6 -2l5 -1l6 -4l4 0l0 3l-1 7l0 6l-2 4l-3 12l-6 12l-7 15l-9 16l-10 12l-13 16l-11 9l-16 11l-11 8l-12 13l-2 6l-3 3l-7 -9l0 -41l10 -12l-8 0l-4 -4l-10 5l-3 4l-8 -1l-2 -1l-3 0l-3 0l-14 -9l-8 0l-4 -4l0 -6l-6 -2l-6 -12l-5 -3l-2 -4l-6 -6l-7 0l4 -7l6 0l2 -3l-1 -11l4 -11l5 -3l1 -5l5 -9l7 -5l4 -11l2 -10z","c":[615.7,295.5],"a":[607.5,293.5],"s":[619.7,286.2],"d":[611,296.5,599.5,290.5,621.5,310,627,311.5,600.5,288.5,607,303.5,607.5,278.5,607,273,618.5,309.5,618,296,604,279.5,625,292.5,623,301.5,624.5,313.5,616.5,311.5,615.5,301.5,630.5,306.5,618.5,302,622,293.5,626,300,629,293],"n":["sdn","eaf"],"bb":[591.5,268,642,323.2]},"ang":{"p":"M2137 1342l5 -1l3 0l4 -2l32 1l3 8l3 7l3 3l4 6l8 -1l3 -1l6 1l2 -3l3 -6l7 -1l0 -1l6 -1l-1 5l13 -1l1 7l2 5l-2 7l1 6l4 5l-1 13l3 -1l5 0l7 -2l5 1l1 4l-1 5l2 5l-2 5l1 4l-23 -1l-1 36l8 10l7 7l-20 5l-27 -2l-8 -6l-45 1l-2 1l-6 -5l-8 -1l-6 2l-6 2l-1 -7l2 -10l4 -10l0 -5l4 -10l3 -5l6 -7l4 -5l1 -9l-1 -6l-3 -4l-3 -7l-3 -7l1 -2l3 -4l-3 -11l-3 -8l-5 -7l1 -2zM2144 1327l-4 3l-1 3l-1 4l-3 2l-3 -9l5 -5l3 -1l4 3z","c":[548.6,353],"a":[536.7,343.1],"s":[536.7,343.1],"d":[539.5,353.5,540,343,559,354,550,361.5,543,360,559.5,346.5,547,366.5,545,336.5,561.5,350.5,546,347.5,542.5,336.5,556.5,364,534.5,365,549.5,359.5],"n":["caf","zmb","bwa"],"bb":[532.3,330.9,566.9,368.9]},"zmb":{"p":"M2384 1403l8 -1l14 3l3 -1l7 -1l4 -3l7 0l12 -4l9 -7l2 5l-1 12l2 9l0 18l2 6l-3 8l-5 8l-7 7l-10 4l-12 6l-13 12l-4 2l-8 8l-4 3l-1 8l5 9l2 7l0 3l2 0l0 11l-2 6l3 2l-2 5l-5 4l-9 4l-13 6l-5 4l1 5l3 1l-1 7l-9 -1l-1 -5l-1 -5l-1 -4l2 -14l-3 -8l-5 -16l11 -14l3 -8l2 -1l1 -7l-2 -3l1 -9l2 -8l0 -14l-6 -4l-5 -1l-2 -3l-6 -2l-9 0l-1 -4l-8 2l-6 4l-2 4l-4 1l-9 9l-6 8l-4 0l-4 -1l-12 -2l-2 0l0 -1l-5 -3l-7 -1l-9 3l-7 -7l-8 -10l1 -36l23 1l-1 -4l2 -5l-2 -5l1 -5l-1 -4l4 0l0 4l5 0l7 1l4 5l9 1l7 -3l2 6l9 1l4 5l5 6l8 0l-1 -12l-3 2l-8 -4l-3 -2l2 -11l2 -14l-3 -5l3 -7l3 -1l15 -2l5 1l4 3l5 2l7 2l6 3l11 2l2 3l4 6l3 15z","c":[588.7,361.5],"a":[578.6,361.7],"s":[613.1,359.1],"d":[595.5,376.5,588.5,354.5,598.5,354.5,574.5,354,592.5,370.5,601,361,596.5,361,604,357,591.5,378.5,591.5,384,569,354.5,591,364,579.5,361.5,608.5,360.5,592.5,369,591,385,593,377,589.5,346,586,361],"n":["caf","eaf","ang","zwe","bwa","zaf"],"bb":[560.8,341.5,613.3,394.6]},"zwe":{"p":"M2347 1526l-6 -2l-4 2l-5 -2l-5 0l-7 -6l-9 -1l-3 -8l0 -4l-5 -1l-12 -13l-4 -6l-2 -2l-4 -10l12 2l4 1l4 0l6 -8l9 -9l4 -1l2 -4l6 -4l8 -2l1 4l9 0l6 2l2 3l5 1l6 4l0 14l-2 8l-1 9l2 3l-1 7l-2 1l-3 8l-11 14z","c":[582.7,371.7],"a":[586.1,368.5],"s":null,"d":[588,378,587.5,379.5,572.5,370.5,584,380,576.5,372.5,584,365.5],"n":["zmb","zaf","bwa"],"bb":[570.2,362,591.2,381.5]},"bwa":{"p":"M2279 1473l2 0l4 10l2 2l4 6l12 13l5 1l0 4l3 8l9 1l7 6l-16 8l-10 9l-3 8l-4 4l-6 1l-2 6l-1 4l-7 2l-9 0l-5 -4l-5 -1l-5 3l-3 5l-5 4l-6 5l-8 2l-2 -5l1 -7l-7 -11l-3 -2l0 44l-10 6l-6 1l-7 -2l-5 -1l-2 -5l-4 -3l-5 6l-9 -10l-4 -8l-2 -12l-3 -8l-4 -19l0 -14l-2 -6l-4 -5l-6 -9l-5 -14l-3 -8l-9 -11l-1 -9l6 -2l6 -2l8 1l6 5l2 -1l45 -1l8 6l27 2l20 -5l9 -3l7 1l5 3l0 1z","c":[555.3,381.1],"a":[571.9,388.3],"s":[540,382.6],"d":[562.5,387.5,558.5,382,549.5,397.5,574,377,568,386,541,377.5,534.5,369,566.5,369.5,558.5,371.5,551,381,541,382.5,552.5,396.5,545,378,559,375.5,563,369.5,574,380.5,563.5,380.5],"n":["ang","zmb","zwe","zaf"],"bb":[532.6,366.1,581.8,401.6]},"zaf":{"p":"M2356 1578l9 1l-3 8l-1 10l-3 6l-8 6l-2 2l-5 6l-3 6l-6 9l-13 12l-7 8l-9 5l-11 5l-6 1l-2 3l-6 -1l-6 2l-12 -2l-7 1l-4 -1l-12 5l-9 2l-7 5l-5 0l-5 -4l-3 0l-5 -6l-1 2l-1 -4l0 -7l-4 -8l4 -2l-1 -10l-7 -11l-5 -11l-8 -15l5 -6l4 3l2 5l5 1l7 2l6 -1l10 -6l0 -44l3 2l7 11l-1 7l2 5l8 -2l6 -5l5 -4l3 -5l5 -3l5 1l5 4l9 0l7 -2l1 -4l2 -6l6 -1l4 -4l3 -8l10 -9l16 -8l5 0l5 2l4 -2l6 2l5 16l3 8l-2 14l1 4l1 5l1 5z","c":[569.9,401.4],"a":[577.8,393],"s":[586.1,404.1],"d":[559,402.5,585.5,387.5,582,407.5,583,387.5,585,384.5,561,403,584,406.5,579.5,391,584,391.5,573,409,569,413,557,411.5,580.5,401.5,576,400,583.5,386,577,399.5],"n":["zmb","zwe","bwa"],"bb":[545.4,380.9,591.2,419.3]},"mdg":{"p":"M2550 1414l3 4l3 8l2 13l3 6l-1 5l-2 4l-4 -7l-2 3l2 9l-1 5l-3 2l-1 10l-4 13l-6 16l-6 22l-5 17l-5 13l-9 3l-9 5l-7 -3l-9 -4l-3 -7l0 -10l-4 -9l-1 -9l2 -8l5 -2l0 -4l5 -9l1 -7l-3 -6l-2 -7l-1 -10l4 -7l2 -7l5 0l7 -3l4 -2l5 0l6 -6l9 -7l3 -6l-1 -5l5 1l6 -7l0 -7l4 -5l3 5z","c":[629.7,373.2],"a":[631.9,371.7],"s":[636.9,369.7],"d":[631.5,387.5,624,390,627,373.5,626,384,630,375,630,367.5,628.5,384],"n":[],"bb":[620.1,352.2,640.2,391.2]},"ind":{"p":"M2989 1025l-1 4l-8 0l-14 3l1 9l-6 6l-16 8l-12 14l-9 7l-11 7l0 6l-5 2l-10 5l-5 0l-4 9l2 15l1 9l-5 11l0 19l-5 0l-5 9l3 4l-10 3l-4 7l-4 4l-11 -11l-5 -16l-4 -11l-4 -5l-6 -11l-3 -14l-2 -7l-10 -16l-5 -22l-3 -15l0 -14l-2 -11l-16 7l-8 -1l-14 -14l5 -4l-3 -5l-13 -10l7 -8l24 0l-2 -10l-6 -6l-1 -9l-8 -5l13 -13l13 1l11 -13l7 -12l11 -12l0 -9l9 -7l-9 -6l-4 -9l-4 -11l6 -5l17 3l12 -2l11 -10l12 14l-1 11l4 6l0 6l-8 -1l3 13l11 8l15 8l5 -2l9 3l11 8l6 2l4 6l9 2l9 5l12 3l13 1l7 -2l1 9l7 -9l6 -3l8 3l6 0l5 4l9 -2l10 -9l13 -7l9 2l8 -5l5 8l-4 5l12 2l1 4l-4 3l1 7l-8 -2l-14 8l0 7l-6 10l0 6l-5 9l-9 -2l0 12l-3 4l1 5l-5 2l-1 9l-3 -2l0 9l-3 -6l0 -6l-3 -5l-4 -7l-10 -1l1 5l-4 7l-5 -3l-1 3l-3 -2l-5 -1zM2909 1191l-2 11l-5 3l-9 3l-6 -9l-1 -16l5 -18l7 6l5 8l6 12z","c":[723.2,252.2],"a":[714.4,236.9],"s":[702.2,265.2],"d":[705.5,261.5,709,235,720,289,707.5,244,712.5,255.5,711.5,252.5,709,272,734.5,255,762,237,708.5,240,727.5,249,714,281.5,725.5,297.5,718.5,284.5,755.5,256,708.5,272.5,711.5,228,710,224.5,744,245,709,256,716,216,720.5,232.5,727.5,256,718,290.5,711.5,277,719.5,273,721,233,753.5,252.5,707.5,245.5,730.5,242.5,730.5,245,713,237,739.5,242.5,693,251,738,251.5,711.5,220.5,700,247,699,246,730.5,268.5,704,250.5,710,257,746.5,252.5,730,258],"n":["pak","sea","chn"],"bb":[689.4,215.7,770.6,302]},"chn":{"p":"M2892 774l-1 -8l8 -4l-10 -23l22 -6l5 -3l8 -25l22 5l6 -6l1 -15l9 -1l9 -10l4 -1l3 10l9 8l16 5l8 12l-4 16l4 6l13 2l15 2l13 9l7 1l5 13l7 8l12 -1l23 3l15 -2l10 2l17 9l13 0l5 4l13 -8l18 -4l17 -1l13 -4l8 -8l8 -4l-2 -5l-4 -5l6 -9l6 2l12 2l11 -7l17 -5l8 -10l8 -3l16 -2l9 1l1 -5l-10 -10l-9 -4l-9 5l-11 -2l-6 2l-3 -6l8 -14l5 -11l14 5l15 -9l0 -6l10 -16l7 -5l-1 -8l-6 -3l9 -8l14 -3l15 0l17 4l9 6l7 15l4 6l4 9l4 15l20 4l13 10l4 14l17 0l10 -6l18 -4l-6 13l-4 5l-4 15l-7 14l-14 -3l-9 5l3 12l-2 16l-6 0l1 7l-8 -8l-4 8l-17 5l2 7l-10 0l-5 -4l-8 9l-12 7l-9 9l-16 3l-8 7l-12 3l6 -6l-2 -5l8 -9l-5 -7l-10 5l-13 9l-7 8l-10 1l-6 6l6 9l9 2l0 6l9 4l12 -10l10 5l8 1l1 6l-15 4l-6 7l-10 6l-6 9l12 7l4 12l7 12l8 9l-1 9l-7 3l3 7l7 4l-2 10l-3 9l-6 1l-8 13l-9 16l-11 14l-15 11l-15 10l-13 1l-7 5l-3 -4l-7 6l-15 6l-12 2l-4 12l-6 1l-3 -9l3 -4l-15 -4l-5 2l-12 -3l-5 -5l2 -6l-10 -3l-6 -4l-9 6l-11 2l-9 0l-6 2l-6 2l2 13l-6 0l-1 -3l0 -4l-8 3l-5 -2l-8 -4l3 -10l-7 -2l-3 -11l-11 2l1 -14l10 -10l1 -10l-1 -9l-4 -3l-4 -7l-7 1l-12 -2l4 -5l-5 -8l-8 5l-9 -2l-13 7l-10 9l-9 2l-5 -4l-6 0l-8 -3l-6 3l-7 9l-1 -9l-7 2l-13 -1l-12 -3l-9 -5l-9 -2l-4 -6l-6 -2l-11 -8l-9 -3l-5 2l-15 -8l-11 -8l-3 -13l8 1l0 -6l-4 -6l1 -11l-12 -14l-18 -5l-4 -10l-8 -6l-2 -4l-2 -7l1 -5l-7 -3l-4 1l-2 -12l3 -3l-2 -3l11 -6l8 -3l11 2l5 -8l14 -2l4 -5l17 -7l2 -3zM3353 998l-7 19l-4 9l-6 -10l-1 -8l6 -12l9 -9l5 4l-2 7zM3216 1070l-9 -4l0 -10l5 -5l13 -3l6 0l2 5l-4 5l-3 6l-10 6z","c":[789,210.2],"a":[823.3,201.5],"s":[837.5,229],"d":[814.5,218,848.5,194.5,781,248.5,765,229,722,195.5,803.5,210,743,239,738.5,230,843,186.5,814.5,189.5,840.5,167.5,736,184,778.5,203.5,810.5,198,745,223.5,838.5,175.5,828,203,784,194,808,235,760,198.5,857,185,773,227,734,191.5,788.5,203.5,755.5,184.5,732,213.5,763.5,201,774.5,240.5,794.5,232.5,777.5,219.5,852,165.5,802,252,807,251.5,801,212.5,868.5,178.5,772.5,195.5,775.5,203.5,758,215,747.5,193.5,835,160,828.5,211,807,262,844,162,816,214.5,748.5,202.5,847.5,187.5,848,158.5,758,199,817.5,198,733,225,803,203.5,737.5,221,734.5,234,831,213.5,818,245.5,776.5,222.5,778,243,744.5,201,802,237.5,851.5,185,739.5,178,715,214.5,750.5,220,782.5,243.5,774.5,195.5,840.5,184.5,796.5,194,799.5,219.5,744.5,185,731,177.5,772,234,818,252.5,756,233.5,793.5,223,804,205,739.5,172,780,208,784,195.5,728.5,226,736.5,182],"n":["rus","afg","pak","cas","kaz","ind","mng","kor","sea"],"bb":[704.7,154,875.1,267.5]},"mng":{"p":"M2975 677l12 -2l21 -13l17 -7l10 5l11 0l8 7l11 1l16 3l10 -10l-4 -9l11 -15l13 6l10 2l13 4l2 11l16 6l10 -3l15 -2l11 2l11 7l6 8l11 -1l14 3l10 -4l14 -2l17 -10l6 1l6 5l13 -1l-5 11l-8 14l3 6l6 -2l11 2l9 -5l9 4l10 10l-1 5l-9 -1l-16 2l-8 3l-8 10l-17 5l-11 7l-12 -2l-6 -2l-6 9l4 5l2 5l-8 4l-8 8l-13 4l-17 1l-18 4l-13 8l-5 -4l-13 0l-17 -9l-10 -2l-15 2l-23 -3l-12 1l-7 -8l-5 -13l-7 -1l-13 -9l-15 -2l-13 -2l-4 -6l4 -16l-8 -12l-16 -5l-9 -8l-3 -10z","c":[785.9,177.8],"a":[796.9,174.3],"s":null,"d":[805.5,177.5,763.5,180,800.5,189,745,171.5,767.5,170,804.5,174,785.5,174,765.5,177.5,808.5,176.5,783.5,181,759,175,779,187,761.5,178.5,765,181,777.5,173.5,777,165.5,820.5,170,777,175,775.5,160.5,797,184,752.5,182,769,177.5,787.5,169,772.5,166,770.5,191.5,750.5,172.5,761,165.5,772.5,177,789,169,781,163.5],"n":["rus","chn"],"bb":[743.8,159.3,832.7,195.9]},"kor":{"p":"M3402 834l-5 -3l-2 3l-3 1l0 -2l-3 -2l-3 -2l3 -5l2 -2l-1 -2l3 -7l-1 -2l-6 -2l-5 -3l9 -9l12 -7l8 -9l5 4l10 0l-2 -7l17 -5l4 -8l8 8l1 2l-4 0l-5 4l-3 5l0 9l-6 3l-2 2l-4 4l-7 2l-5 4l0 6l-2 1l5 2l6 6l10 15l2 8l1 15l-5 7l-10 2l-9 5l-10 2l-1 -7l2 -10l-5 -13l9 -2l-8 -11z","c":[854,205.7],"a":[852.8,209.3],"s":[858.3,216.9],"d":[849,199.5,853,199.5,850.5,207,849,202,859,213,855.5,216.5],"n":["rus","chn"],"bb":[845.2,191.3,863.3,219.1]},"jpn":{"p":"M3576 815l-10 13l0 14l-4 10l2 6l-6 9l-14 6l-19 1l-16 14l-8 -5l0 -9l-19 3l-14 6l-13 0l12 9l-8 21l-7 5l-5 -5l2 -11l-7 -3l-4 -9l10 -4l6 -7l11 -7l9 -9l22 -3l12 2l11 -22l8 6l16 -13l6 -5l7 -16l-2 -15l5 -8l12 -2l6 18l-1 10zM3607 752l8 -6l2 15l-16 4l-10 13l-18 -9l-6 15l-12 0l-1 -13l5 -11l12 0l3 -19l3 -11l13 14l9 5l8 3zM3471 888l6 -7l6 1l5 -5l8 3l1 4l-6 7l-4 -4l-6 3l-3 8l-7 -4l0 -6z","c":[880.4,213.8],"a":[888.1,215],"s":[887.8,216],"d":[862,222,880,214,871.5,220,884,211.5,887.5,207.5,891,199],"n":[],"bb":[859.5,182.5,904.3,229.5]},"sea":{"p":"M3095 1164l-1 -9l3 -8l-3 -7l1 -12l-5 -6l-4 -14l-2 -14l-4 -10l-8 6l-12 8l-7 -1l-6 -2l3 -15l-2 -10l-9 -14l2 -4l-7 -1l-8 -10l0 -9l3 2l1 -9l5 -2l-1 -5l3 -4l0 -12l9 2l5 -9l0 -6l6 -10l0 -7l14 -8l8 2l-1 -7l4 -3l-1 -4l7 -1l4 7l4 3l1 9l-1 10l-10 10l-1 14l11 -2l3 11l7 2l-3 10l8 4l5 2l8 -3l0 4l1 3l6 0l-2 -13l6 -2l6 -2l9 0l11 -2l9 -6l6 4l10 3l-2 6l5 5l12 3l-15 10l-10 11l-2 8l9 12l10 15l10 7l7 9l5 21l-2 20l-9 7l-13 8l-9 9l-14 10l-4 -7l4 -7l-9 -7l-9 -1l-5 -6l-5 -12l-10 -5l-10 0l2 -9l-10 0l-1 13l-6 16l-3 10l0 8l8 1l4 10l2 10l6 6l7 1l6 6l-4 5l-7 1l-1 -6l-9 -5l-2 2l-4 -4l-2 -5l-6 -7l-6 -5l-1 6l-2 -6l1 -7l3 -10z","c":[780.4,268.8],"a":[779.2,280],"s":[796.4,288.5],"d":[791.5,269,774.5,295.5,769,262.5,773,260.5,786.5,275.5,781.5,267,787,256.5,767.5,252.5,793.5,255,769.5,262,764,249,770,266.5,765.5,266,773.5,268.5,769.5,250,778.5,276.5,799.5,276,773,279.5,769,263,768,242.5,800,276.5,774,273.5],"n":["ind","chn","mys"],"bb":[756.4,237.7,803.7,302.7]},"mys":{"p":"M3283 1214l8 -8l6 -9l4 0l6 6l1 5l7 3l9 3l-1 4l-7 1l2 5l-8 4l-10 -2l-13 0l-3 13l-5 4l-5 15l-9 3l-11 -3l-5 1l-7 5l-7 -1l-7 3l-8 -7l-2 -7l9 4l8 -2l2 -10l5 -2l14 -2l7 -9l6 -7l4 -4l10 -6zM3112 1202l2 -2l9 5l1 6l7 -1l4 -5l2 1l7 7l5 7l0 8l-1 5l1 4l1 6l4 3l4 10l0 4l-8 1l-10 -9l-13 -8l-2 -6l-6 -8l-2 -9l-4 -6l2 -8l-3 -5z","c":[818.6,308.5],"a":[782.5,310],"s":[781.7,310.2],"d":[812,312.5,817.5,310,824,303,815,310.5,816.5,314,784,303.5],"n":["sea","idn"],"bb":[778,299.3,831.1,316.4]},"idn":{"p":"M3310 1228l-7 10l9 11l-2 5l12 10l-13 2l-4 7l1 10l-11 8l0 11l-4 17l-2 -4l-13 5l-4 -7l-8 -1l-6 -3l-13 4l-4 -5l-7 0l-9 -1l-2 -15l-6 -3l-5 -10l-1 -9l1 -11l6 -7l2 7l8 7l7 -3l7 1l7 -5l5 -1l11 3l9 -3l5 -15l5 -4l3 -13l13 0l10 2zM3160 1286l2 8l3 6l9 1l5 7l-3 14l0 17l-13 1l-9 -10l-14 -9l-5 -7l-8 -9l-6 -8l-8 -15l-10 -10l-3 -9l-4 -9l-10 -7l-6 -10l-9 -6l-11 -12l-1 -6l7 1l17 2l10 11l9 7l6 5l10 12l12 0l9 8l6 9l9 5l-5 9l7 4l4 0zM3567 1303l0 36l0 37l-10 -9l-11 -3l-3 4l-14 0l5 -9l7 -3l-3 -12l-5 -10l-22 -9l-9 -1l-17 -10l-3 5l-4 1l-3 -4l0 -5l-8 -5l12 -4l7 0l0 -3l-17 0l-4 -7l-10 -2l-5 -5l15 -3l6 -4l18 5l1 4l4 18l11 7l9 -12l13 -7l10 0l10 4l8 4l12 2zM3366 1265l13 -1l11 -8l2 2l-9 12l-9 2l-10 -3l-19 1l-10 2l-1 8l10 10l6 -5l20 -4l0 5l-5 -1l-5 6l-10 4l11 15l-2 4l10 12l-1 8l-5 3l-5 -4l6 -9l-11 4l-3 -3l1 -4l-8 -7l1 -11l-7 4l1 13l0 16l-7 1l-5 -3l3 -10l-1 -11l-5 0l-3 -8l4 -7l2 -9l5 -16l3 -5l9 -8l9 3l14 2zM3205 1346l2 4l21 1l3 -5l20 6l4 7l17 2l14 6l-13 5l-12 -5l-10 1l-12 -1l-10 -2l-13 -5l-8 -1l-5 2l-20 -5l-2 -5l-10 0l7 -11l14 1l9 4l4 1zM3390 1379l-7 8l-10 3l-1 -2l1 -3l5 -7l11 -5l1 -2l9 -3l8 0l4 -2l4 2l-4 3l-12 5l-9 3zM3421 1250l1 6l7 1l1 5l-1 9l-5 -1l-2 7l4 6l-3 1l-4 -7l-3 -14l2 -9l3 -4zM3437 1305l13 4l4 8l-10 -4l-9 -1l-6 0l-8 0l3 -6l13 -1zM3348 1369l8 -1l10 -4l-2 7l-17 3l-15 -2l0 -4l9 -2l7 3zM3314 1367l7 -1l3 5l-13 2l-8 2l-6 0l4 -7l6 0l3 -4l4 3zM3337 1389l-15 -8l10 -2l6 3l4 3l-1 3l-4 1zM3410 1316l-8 -2l-2 -4l11 -1l3 4l-4 3zM3491 1351l-1 -8l2 -4l2 -4l3 3l0 5l-6 8z","c":[816.7,319.3],"a":[796.7,335.8],"s":[796.9,335.5],"d":[856.5,320.5,799.5,337.5,891.5,340,785.5,317,826,320.5,787.5,319.5,821,311.5,777.5,317.5,783,319.5,874,327.5,783,314.5,765,304.5,784,316.5,885,327,786.5,317.5,856.5,316.5,889,327.5,789.5,324,824,309],"n":["mys","png"],"bb":[764.7,303.3,891.8,347.4]},"phl":{"p":"M3359 1070l-2 4l4 9l-3 9l-6 4l-2 9l3 9l5 1l5 -1l14 6l-1 6l4 3l-1 5l-9 -5l-4 -6l-3 4l-7 -7l-10 2l-6 -3l1 -4l3 -3l-3 -3l-1 4l-6 -6l-2 -5l0 -11l5 4l1 -18l3 -11l7 0l7 4l3 -3l1 3zM3404 1181l1 7l1 6l-4 10l-4 -11l-5 6l3 8l-3 5l-13 -6l-3 -8l3 -6l-7 -5l-3 5l-5 -1l-8 6l-2 -3l4 -9l7 -3l6 -5l4 6l8 -4l2 -5l8 0l-1 -9l9 6l1 5l1 5zM3394 1138l4 13l-9 -3l0 4l3 7l-5 2l-1 -8l-3 0l-2 -7l7 1l0 -4l-7 -9l10 0l3 4zM3362 1163l3 -3l1 -7l6 -1l-2 8l9 -11l-1 11l-4 3l-4 7l-3 4l-7 -8l2 -3zM3317 1170l-15 11l5 -8l8 -7l7 -7l6 -12l2 10l-7 6l-6 7zM3356 1147l-2 -5l7 3l7 0l0 5l-5 4l-7 4l-1 -5l1 -6zM3343 1132l-6 -8l9 0l4 4l-3 10l-4 -6z","c":[837.6,274.4],"a":[836.1,277.7],"s":[835.8,277.7],"d":[839.5,269.5,837,267,836.5,279.5,846.5,302,835,276.5,848,302.5],"n":[],"bb":[825.5,266.6,851.5,303]},"png":{"p":"M3567 1303l19 8l20 6l8 6l6 5l2 7l19 7l2 6l-10 1l2 7l10 8l8 12l6 -1l0 5l8 2l-3 2l12 5l-2 3l-7 1l-3 -3l-9 -1l-12 -2l-8 -7l-6 -6l-6 -10l-15 -5l-9 3l-7 4l1 8l-8 4l-6 -2l-12 0l0 -37l0 -36zM3681 1339l-6 3l-6 3l-6 0l-9 -4l-6 -3l1 -3l10 1l6 0l2 -6l1 0l1 6l7 -1l3 -4l6 -4l-1 -6l6 -1l3 2l-1 6l-3 7l-6 1l-2 3zM3842 1512l9 7l6 6l-4 2l-6 -3l-8 -5l-8 -6l-7 -8l-1 -4l4 0l7 4l4 4l4 3zM3979 1471l3 -2l4 3l-2 6l-7 2l-6 -2l-1 -5l4 -4l5 2zM3696 1315l4 4l2 5l-4 3l-2 -6l-3 -5l-5 -3l-6 -5l-8 -3l3 -3l6 3l4 3l5 2l4 5zM3720 1334l3 2l5 7l6 4l-2 3l-3 1l-5 -4l-5 -7l-2 -9l1 -1l2 4zM4000 1454l2 0l-1 5l-1 1l-7 3l-7 2l-2 -4l6 -3l3 0l7 -4zM3774 1364l2 3l1 2l-9 -4l-6 -4l-4 -4l2 -1l5 2l9 6zM3787 1384l-4 1l-7 -2l-2 -1l0 -5l8 2l3 2l2 3zM3796 1381l-1 2l-8 -9l-3 -7l4 0l4 9l4 5zM3853 1450l-1 -3l-1 -9l6 3l2 10l-3 -2l-3 1zM3801 1391l3 4l-7 0l-5 -7l7 3l2 0zM3746 1352l4 4l-2 1l-5 -3l-4 -4l0 -2l7 4zM3858 1452l7 7l-4 1l-3 -5l0 -3z","c":[900.9,337.1],"a":[908.9,344.8],"s":[908.9,345],"d":[899.5,337,965.5,364.5,895.5,335.5,896,342.5,958,377,949,347.5],"n":["idn"],"bb":[891.7,325.5,1000.6,381.8]},"aus":{"p":"M3402 1645l-12 6l-10 3l-2 7l-4 5l-9 0l-7 1l-10 -2l-8 1l-8 1l-6 6l-4 0l-5 3l-6 4l-8 0l-7 0l-12 -8l-6 -2l0 -8l6 -1l2 -3l-1 -5l2 -8l-2 -7l-5 -13l-2 -7l0 -7l-4 -8l0 -3l-5 -5l-2 -9l-6 -10l-2 -5l5 5l-4 -11l6 4l3 4l0 -6l-5 -9l-1 -4l-3 -3l1 -7l2 -3l2 -6l-1 -7l4 -8l1 9l5 -8l9 -4l5 -5l9 -4l5 -1l3 1l9 -4l6 -2l2 -2l3 -1l6 0l12 -3l6 -5l3 -6l6 -6l1 -5l0 -6l8 -10l4 10l5 -2l-4 -6l4 -5l5 2l1 -8l6 -6l3 -4l5 -2l1 -4l4 2l1 -3l4 -2l6 -1l8 5l6 7l7 0l7 1l-2 -6l5 -9l5 -3l-2 -3l5 -7l7 -4l6 2l9 -2l0 -6l-8 -4l6 -2l7 3l6 5l9 3l3 -1l7 3l7 -3l4 1l3 -2l5 5l-3 6l-4 5l-4 0l1 5l-3 5l-4 6l1 3l8 6l9 4l6 4l8 7l3 0l6 3l1 3l11 4l7 -4l2 -6l3 -5l1 -6l3 -9l-1 -6l1 -3l-2 -7l2 -8l2 -2l-2 -4l3 -6l2 -6l0 -4l5 -4l3 6l0 7l3 1l1 5l4 6l1 6l-1 4l4 9l7 -4l4 5l5 4l-1 5l3 10l1 5l3 2l3 10l-1 6l4 7l12 6l7 6l8 5l-2 3l7 7l4 13l5 -3l4 5l3 -2l2 13l8 7l5 4l8 10l4 10l0 6l-1 8l5 10l0 11l-2 5l-3 11l0 7l-2 9l-5 11l-8 6l-4 10l-4 6l-3 11l-5 6l-2 10l-2 8l1 4l-7 5l-12 0l-10 6l-6 5l-6 5l-9 -6l-7 -2l1 -7l-6 3l-9 9l-10 -3l-6 -2l-7 -1l-10 -4l-8 -8l-2 -10l-2 -6l-6 -5l-10 -2l3 -6l-2 -9l-6 9l-10 2l6 -7l2 -7l4 -6l-1 -10l-9 11l-7 4l-4 10l-9 -5l1 -7l-7 -9l-6 -4l2 -3l-14 -8l-8 0l-11 -6l-20 1l-14 5l-13 4l-10 -1zM3641 1754l7 1l0 16l-3 5l-2 11l-3 -4l-8 9l-2 -1l-7 0l-7 -11l-2 -9l-6 -12l0 -6l8 1l10 5l6 -2l9 -3z","c":[873.4,392],"a":[920,416.5],"s":[902.5,428.8],"d":[863,379,892,390,891.5,390.5,892,423.5,883,376.5,871.5,384.5,884,382,888.5,418.5,862,387.5,826,401.5,825.5,419,851,394,902,372,825,415,890,382,896.5,412.5,876,409,872.5,388,824,392,867.5,350,921,414.5,909,407,853.5,409.5,842,412,887.5,375.5,874.5,380.5,879.5,412.5,854,406.5,836.5,384,818,385,877,362,821.5,380.5,922.5,412,913.5,417,831.5,376,867,406.5,874,399,828.5,379,874.5,392.5,845.5,409,854,391,883.5,374.5,906.5,417,846,391,843,396.5,846,380,833.5,400.5,911.5,420,830,414,869.5,370.5,857,364.5,856,362.5,888,418,890,402.5,915.5,393,901.5,366,902,375,873,399.5,875,354,903,404,887.5,390.5,844.5,402,834.5,396,840,405.5,863,361.5,879.5,372,856,365,858.5,380,857.5,371.5,904,414,857.5,386.5,893,372,895.5,430,855.5,375,884.5,389,887.5,399,909.5,442.5,850,386,920.5,399.5,867,389],"n":[],"bb":[814.8,348.3,926.6,448.1]},"nzl":{"p":"M3885 1791l10 -7l6 -7l5 -10l5 -3l1 -8l8 -6l2 6l3 5l8 -5l3 6l0 5l-4 6l-7 10l-6 6l4 6l-8 0l-10 5l-3 9l-6 14l-9 7l-6 4l-10 -1l-7 -4l-12 -1l-2 -5l6 -11l14 -13l7 -3l8 -5zM3965 1745l-4 7l-5 9l-9 5l-2 -3l-4 -2l6 -11l-4 -7l-12 -6l1 -4l8 -5l2 -10l-1 -8l-4 -9l0 -2l-5 -5l-9 -11l-5 -9l4 -1l6 7l9 3l3 11l8 14l0 -9l5 3l2 10l9 4l8 1l6 -5l6 2l-3 11l-4 8l-8 0l-3 4l1 5l-2 3z","c":[973.6,449.4],"a":[985.6,425.9],"s":[985.6,425.6],"d":[968.5,453,980.5,442.5,978,446.5,984.5,425.5,985.5,427,986,429],"n":[],"bb":[962.5,418.2,995.9,458.4]}};
+/* ───── 1. عشوائية مبذورة (لا Math.random في منطق اللعب) ───── */
+function makeRng(seed){let s=(seed>>>0)||0x9e3779b9;
+  const f=function(){s^=s<<13;s>>>=0;s^=s>>>17;s^=s<<5;s>>>=0;return s/4294967296;};
+  f.get=()=>s; f.set=v=>{s=(v>>>0)||1;}; return f;}
+function hashSeed(str){let h=0x811c9dc5;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,0x01000193)>>>0;}return h>>>0;}
+let rng=makeRng(1), vrng=makeRng(2);
+const ri=n=>Math.floor(rng()*n), pick=a=>a[ri(a.length)];
+const vr=()=>vrng(), vpick=a=>a[Math.floor(vrng()*a.length)];
+
+/* ───── 3. الإسقاط والمسافات ───── */
+const SC=1/MAPS;                                  // من إحداثيات المسار إلى بكسل الخريطة
+function wrapDx(x1,x2){let d=x2-x1;if(d>MAPW/2)d-=MAPW;if(d<-MAPW/2)d+=MAPW;return d;}
+function dist(a,b){return Math.hypot(wrapDx(a[0],b[0]),b[1]-a[1]);}
+
+/* ───── 4. أنواع الأمراض ───── */
+const TYPES={
+ bac:{nm:'بكتيريا',ds:'متوازنة وصلبة. تتحمّل البيئات القاسية وتكسب حمضًا نوويًا إضافيًا من الدول المكتظة.',
+   col:'#7ad13f',mods:{envTough:.22,dnaBonus:1.15},uniq:'bac'},
+ vir:{nm:'فيروس',ds:'يتطوّر وحده بسرعة. طفرات مجانية متواصلة لكنها تفضحك مبكرًا، وفكّ الأعراض أرخص.',
+   col:'#e0353f',mods:{mutate:2.6,devolveCost:.45},uniq:'vir'},
+ fun:{nm:'فطريات',ds:'ينتقل بين القارات بصعوبة، لكن انفجار الأبواغ يقذفك إلى بلد بعيد فورًا.',
+   col:'#c46fe0',mods:{crossPenalty:.42},uniq:'fun'},
+ par:{nm:'طفيلي',ds:'خفيّ جدًا: العالم بطيء في ملاحظتك، لكن كسب الحمض النووي أبطأ.',
+   col:'#f2b23c',mods:{stealth:.45,dnaBonus:.72},uniq:'par'},
+ pri:{nm:'بريون',ds:'بطيء وقاتل. يشوّش أبحاث اللقاح باستمرار وهو الأصعب على الإطلاق.',
+   col:'#8fb6ff',mods:{slowSpread:.72,cureDrag:.55},uniq:'pri'}
+};
+/* ───── 5. الجينات (٤ خانات) ───── */
+const GENES={
+ gt:{nm:'النقل',opts:[
+   {id:'aero',nm:'إيروسيتوم',ds:'+١٥٪ انتقال جوي',e:{airMul:.15}},
+   {id:'hydro',nm:'هيدروفيلوم',ds:'+١٥٪ انتقال بحري',e:{seaMul:.15}},
+   {id:'xero',nm:'زيروفيلوم',ds:'انتشار أفضل في الدول القاحلة',e:{aridMul:.22}},
+   {id:'sym',nm:'سيمبيوسِس',ds:'+١٠٪ عدوى في كل مكان',e:{infMul:.10}}]},
+ gv:{nm:'التطوّر',opts:[
+   {id:'cyto',nm:'سايتوكروم',ds:'فقاعات الحمض النووي أكبر',e:{bubMul:.35}},
+   {id:'meta',nm:'ميتابوليك',ds:'−١٥٪ تكلفة الانتقال',e:{costT:-.15}},
+   {id:'sus',nm:'سُسبِنشن',ds:'−١٥٪ تكلفة الأعراض',e:{costS:-.15}},
+   {id:'darw',nm:'دارونيست',ds:'طفرات مجانية أكثر',e:{mut:.9}}]},
+ ga:{nm:'التكيّف',opts:[
+   {id:'ext1',nm:'إكستريموفيل',ds:'مقاومة بيئية أولية',e:{hres:.25,cres:.25}},
+   {id:'ur',nm:'أوربوفيل',ds:'انتشار أسرع في المدن',e:{urbanMul:.22}},
+   {id:'ru',nm:'رورالفيل',ds:'انتشار أسرع في الأرياف',e:{ruralMul:.28}},
+   {id:'nat',nm:'ناتوريست',ds:'تجاهل جزئي لإغلاق الحدود',e:{borderBypass:.35}}]},
+ gm:{nm:'الخبث',opts:[
+   {id:'sclero',nm:'سكليروسِس',ds:'اللقاح أبطأ ١٥٪',e:{cureSlow:.15}},
+   {id:'teleo',nm:'تيليوموريز',ds:'يعيد ٥٪ من تقدّم اللقاح عند اكتشافك',e:{cureBack:5}},
+   {id:'cyst',nm:'سيستوسبورا',ds:'الحكومات أبطأ في الإغلاق',e:{govSlow:.30}},
+   {id:'nano',nm:'نانو-سايت',ds:'+٢٠٪ مقاومة الأدوية',e:{dres:1.2}}]}
+};
+const DIFF={
+ easy:{k:'سهل',cure:.55,dna:22,gov:.6,ds:'الأطباء يغسلون أيديهم أحيانًا.'},
+ norm:{k:'عادي',cure:1,dna:14,gov:1,ds:'عالم واقعي: يتحرك متأخرًا لكنه يتحرك.'},
+ hard:{k:'صعب',cure:1.5,dna:9,gov:1.35,ds:'العالم متيقّظ. النظافة عادة يومية.'},
+ brut:{k:'وحشي',cure:2.1,dna:6,gov:1.7,ds:'الجميع يغسل يديه. الحدود تُغلق قبل أن تسعل.'}
+};
+
+/* ───── 2. الدول والمناطق: بيانات واقعية ─────
+   [ id, الاسم, السكان(مليون), الثراء, الحرارة, البرودة, التحضّر, الجفاف, الرطوبة, مطار, ميناء, بحث ] */
+const RAW=[
+['usa','الولايات المتحدة',340,.92,.35,.45,.83,.30,.45,3,3,1.00],
+['can','كندا',40,.90,.10,.92,.82,.15,.35,2,2,.72],
+['grl','غرينلاند',0.06,.72,.02,.99,.87,.05,.20,1,1,.20],
+['mex','المكسيك',129,.48,.72,.15,.81,.55,.45,2,2,.40],
+['cam','أمريكا الوسطى',51,.36,.86,.03,.60,.25,.85,1,2,.22],
+['car','الكاريبي',42,.38,.88,.02,.72,.20,.90,2,2,.24],
+['col','كولومبيا',52,.42,.80,.08,.82,.15,.85,2,2,.32],
+['ven','فنزويلا وغيانا',31,.32,.86,.02,.85,.20,.88,1,2,.22],
+['per','بيرو والإكوادور',52,.40,.66,.25,.78,.45,.62,2,2,.30],
+['bra','البرازيل',216,.48,.85,.04,.87,.25,.82,3,3,.55],
+['bol','بوليفيا وباراغواي',19,.30,.68,.22,.70,.40,.55,1,0,.18],
+['arg','الأرجنتين وأوروغواي',50,.52,.42,.32,.92,.35,.45,2,2,.40],
+['chl','تشيلي',20,.60,.40,.42,.88,.60,.35,2,2,.36],
+['uk','بريطانيا وإيرلندا',73,.88,.06,.48,.84,.05,.72,3,3,.95],
+['isl','آيسلندا',0.4,.90,.01,.90,.94,.05,.65,1,1,.30],
+['nor','النرويج',5.5,.95,.03,.85,.83,.05,.70,2,2,.60],
+['swe','السويد والدنمارك',16,.92,.05,.78,.88,.05,.62,2,2,.72],
+['fin','فنلندا',5.6,.90,.04,.86,.86,.05,.60,2,2,.55],
+['fra','فرنسا',68,.86,.16,.42,.82,.10,.60,3,2,.92],
+['esp','إسبانيا والبرتغال',58,.78,.42,.22,.82,.35,.50,3,3,.72],
+['ita','إيطاليا',59,.80,.35,.28,.72,.20,.55,3,3,.78],
+['deu','ألمانيا والبنلوكس',114,.92,.12,.48,.83,.05,.62,3,3,.98],
+['ceu','وسط أوروبا',46,.76,.14,.56,.62,.08,.55,2,1,.60],
+['pol','بولندا',37,.72,.10,.60,.60,.08,.55,2,2,.50],
+['bal','دول البلطيق',6,.70,.08,.66,.68,.06,.58,1,2,.30],
+['blk','البلقان',49,.58,.28,.42,.58,.15,.50,2,2,.42],
+['grc','اليونان وقبرص',12,.66,.48,.18,.80,.35,.45,2,3,.36],
+['ukr','أوكرانيا وبيلاروسيا',46,.42,.16,.60,.70,.12,.50,2,2,.32],
+['rus','روسيا',144,.58,.06,.94,.75,.20,.42,3,3,.68],
+['tur','تركيا',85,.58,.50,.30,.77,.35,.42,3,3,.48],
+['cau','القوقاز',17,.40,.38,.42,.60,.25,.48,1,2,.22],
+['sau','الخليج العربي',58,.72,.96,.01,.85,.95,.12,3,3,.42],
+['lev','بلاد الشام',55,.42,.66,.10,.78,.65,.30,2,2,.34],
+['irq','العراق',45,.36,.92,.04,.72,.85,.15,1,1,.20],
+['irn','إيران',89,.44,.78,.22,.77,.75,.20,2,2,.36],
+['yem','اليمن',34,.14,.94,.01,.40,.85,.20,1,2,.08],
+['egy','مصر',113,.34,.90,.02,.44,.92,.15,2,3,.30],
+['lby','ليبيا',7,.32,.94,.01,.82,.95,.08,1,2,.12],
+['alg','الجزائر وتونس',58,.42,.88,.04,.75,.85,.18,2,2,.26],
+['mar','المغرب',38,.38,.72,.10,.66,.60,.35,2,2,.26],
+['afg','أفغانستان',42,.10,.62,.42,.28,.75,.15,1,0,.06],
+['pak','باكستان',240,.24,.88,.12,.38,.72,.30,2,2,.24],
+['cas','آسيا الوسطى',61,.28,.62,.48,.52,.80,.15,1,0,.18],
+['kaz','كازاخستان',20,.46,.42,.70,.58,.70,.20,2,1,.24],
+['waf','غرب أفريقيا',218,.16,.94,.01,.48,.55,.60,2,2,.14],
+['nga','نيجيريا',227,.22,.92,.01,.54,.30,.80,2,2,.16],
+['sdn','السودان',59,.12,.95,.01,.36,.85,.20,1,1,.06],
+['caf','وسط أفريقيا',164,.14,.92,.01,.46,.20,.95,1,2,.10],
+['eaf','شرق أفريقيا',197,.16,.82,.05,.32,.40,.72,2,2,.14],
+['eth','القرن الأفريقي',149,.12,.86,.06,.24,.70,.35,1,2,.08],
+['ang','أنغولا',36,.22,.85,.02,.68,.45,.60,1,2,.12],
+['zmb','زامبيا وموزمبيق',75,.16,.82,.04,.42,.40,.70,1,2,.12],
+['zwe','زيمبابوي',16,.14,.78,.06,.32,.50,.55,1,0,.10],
+['bwa','ناميبيا وبوتسوانا',5,.40,.88,.05,.68,.92,.10,1,1,.16],
+['zaf','جنوب أفريقيا',64,.44,.62,.16,.68,.55,.42,2,3,.42],
+['mdg','مدغشقر',30,.12,.84,.02,.40,.35,.78,1,1,.08],
+['ind','شبه القارة الهندية',1655,.24,.90,.06,.36,.45,.72,3,3,.48],
+['chn','الصين',1448,.62,.42,.42,.66,.50,.52,3,3,.88],
+['mng','منغوليا',3.4,.34,.30,.82,.68,.85,.10,1,0,.12],
+['kor','الكوريتان',78,.68,.32,.42,.85,.10,.70,3,3,.60],
+['jpn','اليابان',124,.86,.30,.42,.92,.05,.78,3,3,.90],
+['sea','الهند الصينية',249,.32,.94,.02,.48,.15,.92,2,3,.30],
+['mys','ماليزيا',35,.58,.94,.01,.78,.05,.96,3,3,.36],
+['idn','إندونيسيا',278,.34,.94,.01,.58,.10,.95,2,3,.32],
+['phl','الفلبين',117,.30,.92,.01,.48,.10,.94,2,3,.24],
+['png','ميلانيزيا',13,.24,.90,.02,.16,.10,.95,1,2,.08],
+['aus','أستراليا',26,.90,.68,.10,.87,.85,.25,3,3,.72],
+['nzl','نيوزيلندا',5.2,.86,.22,.42,.87,.10,.75,2,2,.42]
+];
+
+/* ───── 6. شجرة التطوير ───── */
+const T='trans',S='symp',A='abil';
+const UPS=[
+ /* الانتقال */
+ {id:'air1',c:T,nm:'الانتقال الجوي ١',cost:9,e:{air:2,inf:2},ds:'رذاذ السعال يبقى معلّقًا في الهواء.'},
+ {id:'air2',c:T,nm:'الانتقال الجوي ٢',cost:16,r:['air1'],e:{air:3,inf:3},ds:'جسيمات أدقّ تصمد لساعات في الغرف المغلقة.'},
+ {id:'air3',c:T,nm:'الانتقال الجوي ٣',cost:26,r:['air2'],e:{air:4,inf:4},ds:'تنتقل عبر أنظمة التكييف في المباني كاملة.'},
+ {id:'wat1',c:T,nm:'الانتقال المائي ١',cost:9,e:{wat:2,inf:2},ds:'يعيش في الماء العذب مدة قصيرة.'},
+ {id:'wat2',c:T,nm:'الانتقال المائي ٢',cost:16,r:['wat1'],e:{wat:3,inf:3},ds:'يقاوم الكلور في شبكات المياه.'},
+ {id:'wat3',c:T,nm:'الانتقال المائي ٣',cost:26,r:['wat2'],e:{wat:4,inf:4},ds:'يتكاثر داخل خزانات المياه نفسها.'},
+ {id:'rod1',c:T,nm:'ناقل: القوارض',cost:11,e:{lnd:2,inf:2},ds:'الجرذان تحمل المرض بين الأحياء.'},
+ {id:'rod2',c:T,nm:'قوارض المجاري',cost:18,r:['rod1'],e:{lnd:3,inf:2,ur:.1},ds:'شبكات الصرف تصبح طرقًا سريعة للعدوى.'},
+ {id:'ins1',c:T,nm:'ناقل: الحشرات',cost:10,e:{ins:2,inf:1},ds:'البعوض ينقل المرض في المناطق الحارّة.'},
+ {id:'ins2',c:T,nm:'بعوض متحوّر',cost:17,r:['ins1'],e:{ins:3,inf:2},ds:'سلالة بعوض جديدة تنشط ليلًا ونهارًا.'},
+ {id:'bir1',c:T,nm:'ناقل: الطيور',cost:12,e:{bir:2,air:1,inf:2},ds:'الطيور تحمل المرض بين المزارع.'},
+ {id:'bir2',c:T,nm:'أسراب مهاجرة',cost:19,r:['bir1'],e:{bir:3,air:2,inf:2},ds:'الهجرة الموسمية تعبر القارات بالعدوى.'},
+ {id:'liv1',c:T,nm:'ناقل: الماشية',cost:13,e:{liv:2,lnd:1,inf:2},ds:'قطعان الماشية تنقل المرض إلى الأرياف.'},
+ {id:'liv2',c:T,nm:'صناعة اللحوم',cost:20,r:['liv1'],e:{liv:3,inf:3},ds:'سلاسل التوريد الغذائية تنشره في كل مدينة.'},
+ {id:'blo1',c:T,nm:'الانتقال بالدم',cost:15,e:{blo:3,inf:3},ds:'ينتقل بالدم والإبر ونقل الدم.'},
+ {id:'blo2',c:T,nm:'دم صامت',cost:22,r:['blo1'],e:{blo:3,inf:2,stealth:.1},ds:'يبقى في الدم دون أعراض لأسابيع.'},
+ {id:'ext1',c:T,nm:'تكيّف متطرّف',cost:28,r:['air2','wat2'],e:{air:2,wat:2,inf:4},ds:'يجمع بين الهواء والماء في كل بيئة.'},
+
+ /* الأعراض */
+ {id:'snz',c:S,nm:'العطاس',cost:4,e:{inf:3,sev:1},ds:'رذاذ يقذف آلاف الجسيمات.'},
+ {id:'cgh',c:S,nm:'السعال',cost:5,e:{inf:3,sev:2,air:1},ds:'سعال جاف يملأ الغرفة بالعدوى.'},
+ {id:'rsh',c:S,nm:'الطفح الجلدي',cost:4,e:{inf:2,sev:2},ds:'بقع حمراء تنتقل باللمس.'},
+ {id:'swt',c:S,nm:'التعرّق',cost:5,r:['snz'],e:{inf:2,sev:1,wat:1},ds:'العرق ينقل المرض عبر الأسطح.'},
+ {id:'nau',c:S,nm:'الغثيان',cost:6,r:['rsh'],e:{inf:2,sev:2},ds:'غثيان دائم يربك التشخيص.'},
+ {id:'fvr',c:S,nm:'الحُمّى',cost:8,r:['cgh'],e:{inf:3,sev:4,let:1},ds:'ارتفاع حرارة يُنهك الجسد.'},
+ {id:'vom',c:S,nm:'القيء',cost:9,r:['nau'],e:{inf:3,sev:4,wat:2,let:1},ds:'يلوّث الطعام والماء حوله.'},
+ {id:'ins',c:S,nm:'الأرق',cost:7,r:['swt'],e:{sev:3,let:1},ds:'حرمان من النوم يُضعف المناعة.'},
+ {id:'anm',c:S,nm:'فقر الدم',cost:10,r:['rsh'],e:{sev:3,let:2,blo:1},ds:'الدم يعجز عن حمل الأكسجين.'},
+ {id:'dia',c:S,nm:'الإسهال',cost:12,r:['vom'],e:{inf:4,sev:5,wat:2,let:3},ds:'يجفّف الجسد ويلوّث المياه.'},
+ {id:'pnu',c:S,nm:'الالتهاب الرئوي',cost:14,r:['fvr'],e:{sev:6,let:5,air:2},ds:'الرئتان تمتلئان بالسوائل.'},
+ {id:'par',c:S,nm:'جنون الارتياب',cost:11,r:['ins'],e:{sev:4,cure:.6},ds:'المصابون يرفضون العلاج ويهربون منه.'},
+ {id:'sei',c:S,nm:'التشنّجات',cost:16,r:['par'],e:{sev:6,let:6},ds:'نوبات عنيفة تُنهك الجهاز العصبي.'},
+ {id:'hem',c:S,nm:'النزيف الداخلي',cost:18,r:['anm'],e:{sev:8,let:9,blo:2},ds:'الأوعية الدموية تنهار من الداخل.'},
+ {id:'kid',c:S,nm:'الفشل الكلوي',cost:20,r:['dia'],e:{sev:8,let:10},ds:'الكلى تتوقف عن تنقية الدم.'},
+ {id:'pul',c:S,nm:'الفشل التنفسي',cost:20,r:['pnu'],e:{sev:8,let:10},ds:'الرئتان تتوقفان عن العمل.'},
+ {id:'com',c:S,nm:'الغيبوبة',cost:22,r:['sei'],e:{sev:7,let:12,cure:.4},ds:'المصاب يغيب عن الوعي تمامًا.'},
+ {id:'nec',c:S,nm:'النخر',cost:26,r:['hem'],e:{sev:10,let:14,inf:3},ds:'الأنسجة تتحلّل وهي حيّة.'},
+ {id:'org',c:S,nm:'فشل الأعضاء',cost:30,r:['kid','pul'],e:{sev:12,let:20},ds:'الأعضاء تنهار واحدًا تلو الآخر.'},
+ {id:'ttl',c:S,nm:'الانهيار الكلّي',cost:44,r:['org','com','nec'],e:{sev:16,let:32,inf:5},ds:'الجسد يستسلم بالكامل خلال ساعات.'},
+
+ /* القدرات */
+ {id:'ht1',c:A,nm:'مقاومة الحرارة ١',cost:9,e:{hres:.40},ds:'يصمد في المناخات الحارّة.'},
+ {id:'ht2',c:A,nm:'مقاومة الحرارة ٢',cost:16,r:['ht1'],e:{hres:.45},ds:'يزدهر في الصحاري.'},
+ {id:'cd1',c:A,nm:'مقاومة البرودة ١',cost:9,e:{cres:.40},ds:'يصمد في المناخات الباردة.'},
+ {id:'cd2',c:A,nm:'مقاومة البرودة ٢',cost:16,r:['cd1'],e:{cres:.45},ds:'يعيش في الجليد القطبي.'},
+ {id:'env',c:A,nm:'التحمّل البيئي',cost:22,r:['ht2','cd2'],e:{hres:.30,cres:.30,inf:2},ds:'لا مناخ يوقفه بعد اليوم.'},
+ {id:'gn1',c:A,nm:'تصلّب جيني ١',cost:7,e:{dres:.5},ds:'يقاوم العقاقير البسيطة.'},
+ {id:'gn2',c:A,nm:'تصلّب جيني ٢',cost:12,r:['gn1'],e:{dres:.7},ds:'يتجاوز الأدوية الشائعة.'},
+ {id:'gn3',c:A,nm:'تصلّب جيني ٣',cost:19,r:['gn2'],e:{dres:1.0},ds:'حمضه النووي يقاوم التفكيك.'},
+ {id:'dr1',c:A,nm:'مقاومة الأدوية ١',cost:14,e:{dres:1.1},ds:'يبطل مفعول المضادات في الدول الفقيرة.'},
+ {id:'dr2',c:A,nm:'مقاومة الأدوية ٢',cost:23,r:['dr1'],e:{dres:1.6},ds:'حتى المستشفيات الغنية تعجز.'},
+ {id:'stb',c:A,nm:'استقرار جيني',cost:13,e:{stab:1},ds:'يوقف الطفرات العشوائية التي تفضحك.'},
+ {id:'rsf',c:A,nm:'إعادة ترتيب جيني',cost:26,r:['gn3'],e:{back:14},ds:'يُلغي جزءًا من عمل مختبرات اللقاح.'},
+ {id:'sab',c:A,nm:'تخريب المختبرات',cost:32,rep:1,e:{back:9},ds:'يمكن شراؤه مرارًا، وتزيد كلفته في كل مرة.'},
+ /* قدرات خاصة بكل نوع */
+ {id:'bac_r',c:A,nm:'غلاف بكتيري',cost:18,ty:'bac',e:{hres:.3,cres:.3,dres:.6},ds:'جدار خلوي سميك يقاوم كل شيء.'},
+ {id:'vir_s',c:A,nm:'انزياح مستضدّي',cost:20,ty:'vir',e:{back:10,mutRand:1},ds:'يغيّر شكله فيبطل جزءًا من اللقاح.'},
+ {id:'fun_b',c:A,nm:'انفجار الأبواغ',cost:16,ty:'fun',rep:1,e:{spore:1},ds:'يقذف أبواغه إلى بلد عشوائي بعيد فورًا.'},
+ {id:'par_s',c:A,nm:'تعايش طفيلي',cost:19,ty:'par',e:{stealth:.35,dnaUp:.35},ds:'يختبئ في الجسد ويكسب حمضًا نوويًا أكثر.'},
+ {id:'pri_n',c:A,nm:'انحلال عصبي',cost:21,ty:'pri',e:{cure:.8,sev:3},ds:'يُفسد بيانات المختبرات ويشوّش الأبحاث.'}
+];
+const UPMAP={}; UPS.forEach(u=>UPMAP[u.id]=u);
+const EFF_LABEL={inf:'عدوى',sev:'شدّة',let:'فتك',air:'جوّي',wat:'مائي',lnd:'قوارض',ins:'حشرات',bir:'طيور',
+ blo:'دم',liv:'ماشية',hres:'حرّ',cres:'برد',dres:'دواء',stab:'ثبات',back:'يُرجع اللقاح',cure:'يبطّئ اللقاح',
+ stealth:'تخفٍّ',spore:'أبواغ',dnaUp:'حمض نووي',ur:'مدن',mutRand:'طفرة'};
+
+/* ───── 7. بناء العالم والشبكات ───── */
+let G=null;
+const REGS=RAW.map(r=>({id:r[0],nm:r[1],pop:r[2]*1e6,wealth:r[3],heat:r[4],cold:r[5],urban:r[6],
+  arid:r[7],hum:r[8],airT:r[9],portT:r[10],res:r[11]}));
+const RBASE={}; REGS.forEach(r=>RBASE[r.id]=r);
+for(const r of REGS){
+  const g=GEO[r.id];
+  r.cx=g.c[0]; r.cy=g.c[1];                    // إحداثيات بكسل الخريطة
+  r.ax=g.a[0]; r.ay=g.a[1];
+  r.sx=g.s?g.s[0]:r.cx; r.sy=g.s?g.s[1]:r.cy;
+  if(!g.s)r.portT=0;
+  r.dots=[]; for(let i=0;i<g.d.length;i+=2)r.dots.push([g.d[i],g.d[i+1]]);
+  r.path=new Path2D(g.p);                      // مسار بوحدات ×MAPS
+  r.bb=g.bb.slice();
+  r.land=g.n.slice();
+}
+/* الروابط: برّية من الحدود الحقيقية، بحرية وجوية مولّدة من المسافات والرتب */
+const SEA_LANES=[['usa','uk'],['usa','esp'],['usa','bra'],['bra','waf'],['bra','zaf'],['esp','car'],
+ ['uk','can'],['zaf','aus'],['zaf','ind'],['sau','ind'],['egy','ita'],['idn','aus'],['chn','usa'],
+ ['jpn','usa'],['kor','usa'],['mys','sau'],['ind','mys'],['aus','nzl'],['chl','nzl'],['arg','zaf'],
+ ['mar','esp'],['isl','uk'],['grl','can'],['nor','isl'],['rus','jpn'],['phl','jpn'],['png','aus'],
+ ['mdg','zaf'],['eth','ind'],['car','usa'],['per','chn'],['mex','jpn'],['ven','esp'],['nga','bra']];
+const AIR_LANES=[['usa','uk'],['usa','deu'],['usa','fra'],['usa','jpn'],['usa','chn'],['usa','bra'],
+ ['usa','mex'],['usa','ind'],['usa','sau'],['uk','ind'],['uk','zaf'],['uk','aus'],['deu','tur'],
+ ['deu','rus'],['fra','waf'],['fra','car'],['esp','arg'],['ita','egy'],['sau','ind'],['sau','pak'],
+ ['sau','egy'],['sau','idn'],['sau','uk'],['chn','aus'],['chn','sea'],['chn','rus'],['jpn','aus'],
+ ['ind','mys'],['bra','arg'],['zaf','eaf'],['tur','deu'],['kor','usa'],['aus','nzl'],['mys','aus'],
+ ['idn','sau'],['egy','sdn'],['irn','tur'],['nga','uk'],['eth','sau'],['can','uk'],['mar','fra'],
+ ['alg','fra'],['phl','sau'],['jpn','sea'],['rus','tur'],['chn','irn'],['bra','ang'],['col','usa']];
+function buildLinks(){
+  const L=[], seen=new Set();
+  const add=(a,b,t,w)=>{const k=t+(a<b?a+b:b+a); if(seen.has(k))return; seen.add(k);
+    L.push({a,b,t,w:w||1});};
+  for(const r of REGS)for(const n of r.land)if(RBASE[n])add(r.id,n,'land',1);
+  const sea=REGS.filter(r=>r.portT>0);
+  for(const r of sea){
+    const near=sea.filter(o=>o!==r).map(o=>({o,d:dist([r.sx,r.sy],[o.sx,o.sy])})).sort((p,q)=>p.d-q.d);
+    const k=1+r.portT;
+    for(let i=0;i<k&&i<near.length;i++)add(r.id,near[i].o.id,'sea',1-Math.min(.6,near[i].d/900));
+  }
+  for(const [a,b] of SEA_LANES)if(RBASE[a]&&RBASE[b]&&RBASE[a].portT&&RBASE[b].portT)add(a,b,'sea',.75);
+  const air=REGS.filter(r=>r.airT>0), hubs=REGS.filter(r=>r.airT>=3);
+  for(const r of air){
+    const near=air.filter(o=>o!==r).map(o=>({o,d:dist([r.ax,r.ay],[o.ax,o.ay])})).sort((p,q)=>p.d-q.d);
+    for(let i=0;i<2&&i<near.length;i++)add(r.id,near[i].o.id,'air',1);
+    if(r.airT>=2){const hn=hubs.filter(o=>o!==r).map(o=>({o,d:dist([r.ax,r.ay],[o.ax,o.ay])})).sort((p,q)=>p.d-q.d);
+      for(let i=0;i<2&&i<hn.length;i++)add(r.id,hn[i].o.id,'air',.9);}
+  }
+  for(let i=0;i<hubs.length;i++)for(let j=i+1;j<hubs.length;j++)add(hubs[i].id,hubs[j].id,'air',.8);
+  for(const [a,b] of AIR_LANES)if(RBASE[a]&&RBASE[b]&&RBASE[a].airT&&RBASE[b].airT)add(a,b,'air',1);
+  return L;
+}
+const LINKS=buildLinks();
+const LINKS_OF={}; for(const r of REGS)LINKS_OF[r.id]=[];
+for(const L of LINKS){LINKS_OF[L.a].push(L);LINKS_OF[L.b].push(L);}
+
+/* ───── 8. حالة اللعبة ───── */
+function newGame(cfg){
+  rng=makeRng(hashSeed(cfg.seed)); vrng=makeRng(hashSeed(cfg.seed)^0x5bf03635);
+  const regs=REGS.map(r=>({...r,inf:0,dead:0,rec:0,aware:false,seen:false,
+    airOpen:r.airT>0,portOpen:r.portT>0,borderOpen:true,lock:false,collapse:false,
+    dotsOn:0,heat:r.heat,research:0}));
+  const gm=DIFF[cfg.diff];
+  G={cfg,name:cfg.name,type:cfg.type,diff:gm,diffKey:cfg.diff,seed:cfg.seed,genes:cfg.genes,
+    day:1,frames:0,tick:0,speed:1,over:null,paused:false,
+    dna:gm.dna,owned:{},sabCount:0,devolves:0,sporeCount:0,
+    cure:0,cureRate:0,known:false,knownDay:0,awareness:0,globalPanic:0,
+    regs,byId:{},bubbles:[],bubId:1,travelers:[],parts:[],flash:0,shake:0,
+    logs:[],hist:[],stats:null,sel:null,tab:'dis',sub:T,newFlag:false,
+    labs:[],cureFund:0,pop0:0,maxCountries:0};
+  regs.forEach(r=>{G.byId[r.id]=r;G.pop0+=r.pop;});
+  applyGenes(); recalc();
+  return G;
+}
+function applyGenes(){
+  const g={airMul:0,seaMul:0,aridMul:0,infMul:0,bubMul:0,costT:0,costS:0,mut:0,hres:0,cres:0,
+    urbanMul:0,ruralMul:0,borderBypass:0,cureSlow:0,cureBack:0,govSlow:0,dres:0};
+  for(const slot in GENES){
+    const chosen=G.genes[slot]; if(!chosen)continue;
+    const opt=GENES[slot].opts.find(o=>o.id===chosen); if(!opt)continue;
+    for(const k in opt.e)g[k]=(g[k]||0)+opt.e[k];
+  }
+  G.gene=g;
+}
+function recalc(){
+  const s={inf:0,sev:0,let:0,air:0,wat:0,lnd:0,ins:0,bir:0,blo:0,liv:0,
+           hres:0,cres:0,dres:0,stab:0,cureSlow:0,stealth:0,dnaUp:0,ur:0};
+  for(const id in G.owned){
+    const u=UPMAP[id]; if(!u)continue; const n=G.owned[id];
+    for(const k in u.e){
+      const v=u.e[k];
+      if(k==='back'||k==='spore'||k==='mutRand')continue;
+      if(k==='cure'){s.cureSlow+=v*n;continue;}
+      s[k]=(s[k]||0)+v*n;
+    }
+  }
+  const g=G.gene;
+  s.hres+=g.hres; s.cres+=g.cres; s.dres+=g.dres;
+  s.cureSlow+=g.cureSlow;
+  s.stealth+= (TYPES[G.type].mods.stealth||0);
+  G.stats=s;
+}
+const owns=id=>!!G.owned[id];
+const unlocked=u=>!u.r||u.r.every(owns);
+const visibleUp=u=>!u.ty||u.ty===G.type;
+function costOf(u){
+  let c=u.cost;
+  if(u.id==='sab')c+=G.sabCount*15;
+  if(u.id==='fun_b')c+=G.sporeCount*8;
+  if(u.c===T)c*=1+G.gene.costT;
+  if(u.c===S)c*=1+G.gene.costS;
+  return Math.max(1,Math.round(c));
+}
+
+/* ───── 9. أدوات ───── */
+function fmt(n){n=Math.floor(n);
+  if(n>=1e9)return (n/1e9).toFixed(2)+' مليار';
+  if(n>=1e6)return (n/1e6).toFixed(2)+' مليون';
+  if(n>=1e3)return (n/1e3).toFixed(1)+' ألف';
+  return String(n);}
+function fmtShort(n){n=Math.floor(n);
+  if(n>=1e9)return (n/1e9).toFixed(1)+' مليار';
+  if(n>=1e6)return (n/1e6).toFixed(1)+' مليون';
+  if(n>=1e3)return (n/1e3).toFixed(0)+' ألف';
+  return String(n);}
+const dayLabel=()=>'يوم '+G.day;
+function totals(){let inf=0,dead=0,pop=0,cn=0;
+  for(const r of G.regs){inf+=r.inf;dead+=r.dead;pop+=r.pop;if(r.inf>=1)cn++;}
+  return {inf,dead,pop,alive:pop-dead,healthy:pop-dead-inf,countries:cn};}
+function log(txt,kind){
+  G.logs.unshift({t:dayLabel(),txt,kind:kind||''});
+  if(G.logs.length>140)G.logs.pop();
+  const el=document.getElementById('tick'); if(el)el.textContent=txt;
+}
+
+/* ───── 10. الشراء والفكّ ───── */
+function buy(id){
+  const u=UPMAP[id]; if(!u||!visibleUp(u))return;
+  if(!unlocked(u))return toast('يحتاج تطويرًا سابقًا');
+  if(owns(id)&&!u.rep)return;
+  const c=costOf(u);
+  if(G.dna<c)return toast('الحمض النووي غير كافٍ');
+  G.dna-=c; G.owned[id]=(G.owned[id]||0)+1;
+  if(u.e.back){
+    G.cure=Math.max(0,G.cure-u.e.back);
+    log(u.id==='sab'?`خلية مجهولة أحرقت مختبرًا. تراجع بحث اللقاح ${u.e.back}٪.`
+      :`أعاد المرض ترتيب حمضه النووي. أُلغي ${u.e.back}٪ من عمل اللقاح.`,'good');
+    if(u.id==='sab')G.sabCount++;
+    G.flash=30;
+  }
+  if(u.e.spore){ sporeBurst(); G.sporeCount++; }
+  recalc(); syncUI();
+}
+function devolve(id){
+  if(!owns(id))return;
+  const u=UPMAP[id]; if(u.c!==S)return;
+  for(const o of UPS)if(o.c===S&&owns(o.id)&&o.r&&o.r.includes(id))return toast('فُكّ العرَض المتفرّع عنه أولًا');
+  const c=Math.max(1,Math.round((2+G.devolves*3)*(TYPES[G.type].mods.devolveCost||1)));
+  if(G.dna<c)return toast(`فكّ العرَض يكلّف ${c}`);
+  G.dna-=c; G.devolves++; delete G.owned[id];
+  recalc(); syncUI(); toast(`فُكّ «${u.nm}»`);
+}
+function sporeBurst(){
+  const clean=G.regs.filter(r=>r.inf<1&&r.pop>1e5);
+  if(!clean.length)return toast('كل البلدان مصابة أصلًا');
+  const far=clean.map(r=>({r,d:Math.min(...G.regs.filter(x=>x.inf>=1).map(x=>dist([x.cx,x.cy],[r.cx,r.cy])))}))
+    .sort((a,b)=>b.d-a.d);
+  const t=far[Math.min(far.length-1,ri(3))].r;
+  t.inf=Math.max(t.inf,3+rng()*6); t.seen=true;
+  G.dna+=2; flashDna(); burst(t.cx,t.cy,'#c46fe0',16,2.6);
+  log(`انفجار أبواغ: وصل المرض إلى ${t.nm} من الجو مباشرة.`,'good');
+}
+
+/* ───── 11. يوم واحد من المحاكاة ───── */
+function stepDay(){
+  if(G.over)return;
+  G.day++;
+  const S_=G.stats, ge=G.gene, ty=TYPES[G.type].mods;
+
+  /* أ. النمو داخل كل بلد */
+  const base=(.155+S_.inf*.0102+S_.air*.0045+S_.wat*.0045)*(1+ge.infMul)*(ty.slowSpread||1);
+  for(const r of G.regs){
+    const alive=r.pop-r.dead;
+    if(alive<1){r.dead=r.pop;r.inf=0;continue;}
+    if(r.inf<.0001)continue;
+    const healthy=Math.max(0,alive-r.inf);
+    let m=1;
+    m*=1-r.wealth*.30;                                   // الرعاية الصحية
+    m*=.72+r.urban*(.62+ge.urbanMul)+ (1-r.urban)*ge.ruralMul;
+    const heatPen=r.heat*Math.max(0,1-S_.hres)*.48, coldPen=r.cold*Math.max(0,1-S_.cres)*.48;
+    m*=Math.max(.15,1-heatPen-coldPen);
+    m*=1+S_.ins*.013*r.heat + S_.lnd*.009*(1-r.urban) + S_.liv*.010*(1-r.urban)
+       + S_.blo*.009 + S_.bir*.007 + S_.wat*.006*r.hum + ge.aridMul*r.arid*.5;
+    if(r.lock)m*=.32;
+    if(r.aware)m*=.86;
+    if(r.collapse)m*=1.35;
+    if(G.cure>0)m*=Math.max(.35,1-G.cure/210*(1/(1+S_.dres*.22)));
+    let add=r.inf*base*m*(healthy/alive);
+    if(r.inf<50&&healthy>1)add=Math.max(add,base*m*.45);
+    r.inf=Math.min(alive,r.inf+Math.min(add,healthy));
+  }
+
+  /* ب. الانتقال بين البلدان */
+  for(const L of LINKS){
+    const a=G.byId[L.a], b=G.byId[L.b];
+    for(let d=0;d<2;d++){
+      const from=d?b:a, to=d?a:b;
+      if(from.inf<1)continue;
+      const frac=from.inf/Math.max(1,from.pop-from.dead);
+      let ch=0, open=true;
+      if(L.t==='air'){
+        open=from.airOpen&&to.airOpen;
+        ch=.0165*(.55+S_.air*.085+S_.bir*.06)*(.45+from.wealth)*(.45+to.wealth)*L.w;
+      }else if(L.t==='sea'){
+        open=from.portOpen&&to.portOpen;
+        ch=.0145*(.55+S_.wat*.085+S_.lnd*.03+S_.liv*.03)*(.6+from.portT*.2)*L.w;
+      }else{
+        open=from.borderOpen&&to.borderOpen;
+        ch=.0215*(.55+S_.lnd*.08+S_.ins*.055+S_.air*.02+S_.liv*.04)*L.w;
+      }
+      if(!open)ch*=Math.max(.03,.045+ge.borderBypass*.12);
+      if(L.t!=='land')ch*=(ty.crossPenalty!==undefined?ty.crossPenalty:1);
+      if(L.t==='air')ch*=1+ge.airMul; if(L.t==='sea')ch*=1+ge.seaMul;
+      ch*=Math.min(1,Math.max(.06,frac*28));
+      if(to.lock)ch*=.5;
+      if(rng()<ch){
+        const wasClean=to.inf<1;
+        to.inf+=1+rng()*3;
+        spawnTraveler(from,to,L.t,wasClean);
+        if(wasClean&&!to.seen){
+          to.seen=true;
+          const g=Math.round(2*(TYPES[G.type].mods.dnaBonus||1)*(1+(S_.dnaUp||0)));
+          G.dna+=g; flashDna();
+          const how=L.t==='air'?'على متن رحلة جوية':L.t==='sea'?'داخل حاوية شحن':'عبر معبر برّي';
+          log(`وصل المرض إلى ${to.nm} ${how}. +${g} حمض نووي.`,'good');
+        }
+      }
+    }
+  }
+
+  /* ج. الوفيات */
+  const lethal=S_.let*.00152;
+  if(lethal>0)for(const r of G.regs){
+    if(r.inf<1)continue;
+    let d=r.inf*lethal*(1-r.wealth*.28);
+    if(G.cure>0)d*=Math.max(.28,1-G.cure/240);
+    d=Math.min(d,r.inf); r.inf-=d; r.dead+=d;
+    if(r.pop-r.dead-r.inf<1&&r.inf<1){r.dead=r.pop;r.inf=0;}
+    if(!r.collapse&&r.dead/r.pop>.28){r.collapse=true;r.lock=false;
+      log(`انهيار كامل للدولة في ${r.nm}. لا حكومة ولا مستشفيات.`,'good');}
+  }
+
+  const t=totals();
+  if(t.countries>G.maxCountries)G.maxCountries=t.countries;
+
+  /* د. الاكتشاف العالمي */
+  if(!G.known){
+    const stealth=1+S_.stealth;
+    if(t.inf>1.5e6*stealth||t.dead>500*stealth||(S_.sev>=13&&t.inf>1e5*stealth)){
+      G.known=true; G.knownDay=G.day; G.flash=48; G.shake=16;
+      if(ge.cureBack)G.cure=Math.max(0,G.cure-ge.cureBack);
+      log('منظمة الصحة العالمية تعلن حالة طوارئ صحية عالمية. بدأ سباق اللقاح.','bad');
+      popAlert('اكتُشف المرض — بدأ سباق اللقاح');
+      setSpeed(0);
+      for(const r of G.regs)if(r.inf/Math.max(1,r.pop)>.0004)r.aware=true;
+    }
+  }
+  G.awareness=G.known?Math.min(1,(t.inf/t.pop)*3.0+(t.dead/t.pop)*8+S_.sev/62):0;
+  G.globalPanic=Math.min(1,G.awareness*1.2+t.dead/t.pop*4);
+
+  /* هـ. ردود فعل الحكومات */
+  if(G.known)for(const r of G.regs){
+    const frac=r.inf/Math.max(1,r.pop-r.dead);
+    if(!r.aware&&(frac>.0006||rng()<.018*G.awareness)){
+      r.aware=true;
+      if(frac>.0006&&rng()<.5)log(`${r.nm} تُعلن أول حالة مؤكدة.`,'warn');
+    }
+    if(!r.aware||r.collapse)continue;
+    const sev=S_.sev, aw=G.awareness, gv=G.diff.gov*(1-ge.govSlow);
+    if(r.airOpen&&rng()<(.0030+sev*.00055+aw*.011)*gv){r.airOpen=false;G.netDirty=true;
+      log(`${r.nm} تُغلق مجالها الجوي.`,'bad');}
+    if(r.portOpen&&rng()<(.0025+sev*.00045+aw*.009)*gv){r.portOpen=false;G.netDirty=true;
+      log(`${r.nm} تُغلق موانئها.`,'bad');}
+    if(r.borderOpen&&rng()<(.0019+sev*.00038+aw*.0075)*gv){r.borderOpen=false;G.netDirty=true;
+      log(`${r.nm} تُقفل حدودها البرّية.`,'bad');}
+    if(!r.lock&&frac>.04&&rng()<(.0075+sev*.00085)*gv){r.lock=true;
+      log(`${r.nm} تدخل إغلاقًا شاملًا.`,'bad');}
+    if(r.lock&&frac>.30&&rng()<.014){r.lock=false;log(`فوضى في ${r.nm}: رُفع الإغلاق قسرًا.`,'good');}
+  }
+
+  /* و. سباق اللقاح */
+  if(G.known){
+    let rp=0,tp=0; G.labs.length=0;
+    for(const r of G.regs){
+      const cap=Math.pow(r.pop,.62)*Math.pow(r.wealth,2)*Math.pow(r.res,1.4)*1e3; tp+=cap;
+      let c=0;
+      if(r.aware&&!r.collapse){
+        c=cap*Math.pow(Math.max(0,r.pop-r.dead)/r.pop,.6)*(r.lock?1.10:1)*(1+G.awareness*.35);
+        rp+=c;
+      }
+      r.research=c;
+      if(c>0)G.labs.push(r);
+    }
+    G.labs.sort((a,b)=>b.research-a.research);
+    const rf=tp>0?rp/tp:0;
+    const rampUp=Math.min(1,(G.day-G.knownDay+4)/26);          // المختبرات تحتاج وقتًا للإقلاع
+    G.cureRate=.34*G.diff.cure*rf*rampUp*(.28+.72*G.awareness)*(1+S_.sev/95)*(1+G.cure/300)
+      /(1+S_.dres*.30+S_.cureSlow*.32+(TYPES[G.type].mods.cureDrag||0));
+    G.cure=Math.min(100,G.cure+G.cureRate);
+  }
+
+  /* ز. الطفرات العشوائية */
+  const mutRate=.0009*Math.min(18,t.countries)*(S_.stab?.22:1)*(TYPES[G.type].mods.mutate||1)*(1+G.gene.mut);
+  if(rng()<mutRate){
+    const cands=UPS.filter(u=>u.c===S&&!owns(u.id)&&unlocked(u)&&visibleUp(u));
+    if(cands.length){
+      const m=cands[ri(Math.min(cands.length,6))];
+      G.owned[m.id]=1; recalc();
+      log(`طفرة عشوائية: ظهر عرَض «${m.nm}» بلا تكلفة.`,'warn');
+    }
+  }
+
+  /* ح. الفقاعات */
+  const bubBase=.085*(1+G.gene.bubMul)*(TYPES[G.type].mods.dnaBonus||1);
+  for(const r of G.regs)
+    if(r.inf>=1&&rng()<bubBase*Math.min(1,.35+r.inf/r.pop*4)&&G.bubbles.length<8){
+      const p=r.dots.length?r.dots[ri(r.dots.length)]:[r.cx,r.cy];
+      const v=1+ri(2)+(G.gene.bubMul>0?1:0)+(S_.dnaUp>0?1:0);
+      G.bubbles.push({id:G.bubId++,x:p[0],y:p[1],v,life:0,kind:'dna',ph:ri(60)});
+    }
+  if(G.cure>6&&rng()<.032&&G.bubbles.length<9){
+    const rich=G.labs.slice(0,8);
+    if(rich.length){const r=rich[ri(rich.length)];
+      G.bubbles.push({id:G.bubId++,x:r.ax,y:r.ay,v:0,life:0,kind:'cure',ph:ri(60)});}
+  }
+  for(const b of G.bubbles)b.life++;
+  G.bubbles=G.bubbles.filter(b=>b.life<8);
+
+  /* ط. حركة مرئية على الخريطة */
+  const hot=G.regs.filter(r=>r.inf>=1);
+  if(hot.length&&vr()<.9&&G.travelers.length<14){
+    const from=vpick(hot), opts=LINKS_OF[from.id];
+    if(opts&&opts.length){
+      const L=vpick(opts), to=G.byId[L.a===from.id?L.b:L.a];
+      const open=L.t==='air'?(from.airOpen&&to.airOpen):L.t==='sea'?(from.portOpen&&to.portOpen)
+        :(from.borderOpen&&to.borderOpen);
+      if(open)spawnTraveler(from,to,L.t,false);
+    }
+  }
+
+  /* ي. أحداث عالمية */
+  if(rng()<.020)worldEvent();
+
+  /* ك. نقاط العدوى المرئية */
+  for(const r of G.regs){
+    const f=Math.min(1,(r.inf+r.dead)/Math.max(1,r.pop));
+    r.dotsOn=Math.round(Math.min(r.dots.length,r.dots.length*Math.pow(f,.55)*1.05));
+  }
+
+  G.hist.push({d:G.day,i:t.inf,x:t.dead,c:G.cure});
+  if(G.hist.length>2200)G.hist.shift();
+  if(t.alive<=.5||(t.alive<2500&&t.healthy<1))return endGame(true,'انقرض الجنس البشري.');
+  if(G.cure>=100)return endGame(false,'اكتمل اللقاح ووُزّع على كل بلد.');
+  if(t.inf<1&&t.dead>0)return endGame(false,'مات آخر حامل للمرض. انتهت السلالة.');
+  if(G.day>3600)return endGame(false,'خمد الوباء بمرور السنين.');
+}
+
+/* ───── 12. الأحداث العالمية ───── */
+function worldEvent(){
+  const alive=G.regs.filter(r=>r.inf>=1);
+  const kinds=[];
+  if(alive.length)kinds.push('fest','flood','strike','war','drought');
+  if(G.known)kinds.push('fund','leak','summit','protest','trial');
+  if(!kinds.length)return;
+  const k=pick(kinds), r=alive.length?pick(alive):pick(G.regs);
+  if(k==='fest'){r.inf=Math.min(r.pop-r.dead,r.inf*1.32+80);
+    log(`مهرجان ضخم في ${r.nm} ضاعف انتشار العدوى.`,'good');}
+  else if(k==='flood'){r.inf=Math.min(r.pop-r.dead,r.inf*(1+.12+G.stats.wat*.028));
+    log(`فيضانات في ${r.nm} لوّثت مياه الشرب.`,'good');}
+  else if(k==='drought'){r.inf=Math.min(r.pop-r.dead,r.inf*(1+.08+G.gene.aridMul));
+    log(`جفاف في ${r.nm} دفع الناس إلى آبار مشتركة.`,'good');}
+  else if(k==='war'){const n=G.regs.filter(x=>x.land.includes(r.id));
+    if(n.length){const t2=pick(n);t2.borderOpen=true;r.borderOpen=true;G.netDirty=true;
+      t2.inf=Math.max(t2.inf,r.inf>1?2:0);
+      log(`نزاع مسلّح بين ${r.nm} و${t2.nm} فتح الحدود أمام موجات النزوح.`,'good');}}
+  else if(k==='strike'){
+    const c=G.regs.filter(x=>!x.airOpen&&x.airT>0);
+    if(c.length){const t2=pick(c);t2.airOpen=true;G.netDirty=true;
+      log(`ضغوط اقتصادية تُعيد فتح مطارات ${t2.nm}.`,'good');}
+    else{r.borderOpen=true;G.netDirty=true;log(`احتجاجات تُجبر ${r.nm} على فتح حدودها.`,'good');}}
+  else if(k==='fund'){G.cure=Math.min(100,G.cure+1.7);G.cureFund++;
+    log('تمويل طارئ بمليارات الدولارات يُسرّع أبحاث اللقاح.','bad');}
+  else if(k==='leak'){const g=3;G.dna+=g;flashDna();
+    log('تسرّبت عيّنة من مختبر أبحاث. +3 حمض نووي.','good');}
+  else if(k==='summit'){let n=0;for(const x of G.regs)if(x.aware&&!x.collapse&&rng()<.3){x.borderOpen=false;n++;}
+    G.netDirty=true;log(`قمة طارئة: ${n} دولة تُغلق حدودها في يوم واحد.`,'bad');}
+  else if(k==='trial'){G.cure=Math.min(100,G.cure+.9);
+    log('تجارب سريرية ناجحة على متطوّعين.','bad');}
+  else{const lk=G.regs.filter(x=>x.lock);
+    if(lk.length){const t2=pick(lk);t2.lock=false;log(`مظاهرات ترفع الإغلاق في ${t2.nm}.`,'good');}
+    else{G.dna+=2;flashDna();log('فوضى إعلامية أربكت تتبّع المخالطين. +2 حمض نووي.','good');}}
+}
+
+/* ───── 13. النهاية والنتيجة ───── */
+function endGame(win,reason){
+  if(G.over)return;
+  const t=totals();
+  const infPct=(t.inf+t.dead)/t.pop*100, deadPct=t.dead/t.pop*100;
+  let score=deadPct*6+infPct*2+Math.max(0,100-G.cure)*.8+Math.max(0,900-G.day)/12;
+  if(!win)score*=.45;
+  score=Math.round(score*{easy:.7,norm:1,hard:1.3,brut:1.6}[G.diffKey]);
+  const grade=score>=800?'S':score>=620?'A':score>=450?'B':score>=280?'C':score>=130?'D':'E';
+  G.over={win,reason,score,grade,infPct,deadPct,days:G.day,cure:G.cure,
+    countries:Math.max(G.maxCountries,t.countries)};
+  G.speed=0; showEnd();
+}
+
+/* ───── 14. الكاميرا والرسم ───── */
+const mapC=document.getElementById('map'), fxC=document.getElementById('fx');
+const mg=mapC.getContext('2d'), fg=fxC.getContext('2d');
+let DPR=Math.min(2,window.devicePixelRatio||1);
+const view={x:0,y:0,k:1,min:1,max:7};
+let VW=0,VH=0,baseDirty=true;
+
+function resize(){
+  const w=mapC.parentElement.clientWidth, h=mapC.parentElement.clientHeight;
+  VW=w; VH=h; DPR=Math.min(2,window.devicePixelRatio||1);
+  for(const c of [mapC,fxC]){c.width=Math.round(w*DPR);c.height=Math.round(h*DPR);
+    c.style.width=w+'px';c.style.height=h+'px';}
+  view.min=w/MAPW;                       // عرض عالم واحد على الأقل (بلا تكرار مرئي)
+  view.max=view.min*14;
+  if(view.k<view.min)view.k=view.min;
+  clampView(); baseDirty=true;
+}
+function fitView(){                      // العالم كاملًا
+  view.k=view.min;
+  view.x=VW/2-MAPW*view.k/2; view.y=VH/2-MAPH*view.k/2;
+  clampView(); baseDirty=true;
+}
+function clampView(){
+  const h=MAPH*view.k;
+  if(h<=VH)view.y=(VH-h)/2; else view.y=Math.min(0,Math.max(VH-h,view.y));
+  const w=MAPW*view.k;
+  view.x=((view.x%w)+w)%w; if(view.x>w/2)view.x-=w;      // لفّ أفقي لا نهائي
+}
+const s2w=(sx,sy)=>[ (sx-view.x)/view.k, (sy-view.y)/view.k ];
+function w2s(wx,wy){                     // أقرب نسخة مرئية أفقيًا
+  const w=MAPW*view.k; let x=wx*view.k+view.x;
+  const c=VW/2; while(x-c>w/2)x-=w; while(c-x>w/2)x+=w;
+  return [x, wy*view.k+view.y];
+}
+
+/* ألوان اليابسة حسب المناخ ثم حالة الوباء */
+function landColor(r){
+  const dry=r.arid, cold=r.cold, hum=r.hum;
+  let c=[185,180,154];
+  c=[c[0]+dry*22-hum*24, c[1]+dry*8-hum*6, c[2]-dry*30+hum*8];
+  if(cold>.6){const t=(cold-.6)/.4;c=[c[0]+(206-c[0])*t*.7,c[1]+(210-c[1])*t*.7,c[2]+(206-c[2])*t*.7];}
+  const alive=Math.max(1,r.pop-r.dead);
+  const infF=Math.min(1,r.inf/alive), dedF=Math.min(1,r.dead/r.pop);
+  const t1=Math.min(1,infF*1.15);
+  c=[c[0]+(196-c[0])*t1, c[1]+(74-c[1])*t1, c[2]+(58-c[2])*t1];
+  const t2=Math.min(1,dedF*1.25);
+  c=[c[0]+(58-c[0])*t2, c[1]+(30-c[1])*t2, c[2]+(30-c[2])*t2];
+  return `rgb(${c[0]|0},${c[1]|0},${c[2]|0})`;
+}
+function copiesX(){                                        // نسخ الخريطة الظاهرة أفقيًا
+  const w=MAPW*view.k, out=[];
+  for(let i=-1;i<=1;i++){const ox=view.x+i*w; if(ox<VW&&ox+w>0)out.push(ox);}
+  return out.length?out:[view.x];
+}
+function drawBase(){
+  mg.setTransform(DPR,0,0,DPR,0,0);
+  mg.clearRect(0,0,VW,VH);
+  const k=view.k, showDetail=k>view.min*1.9, showNames=k>view.min*2.6;
+  /* المحيط */
+  const og=mg.createLinearGradient(0,0,0,VH);
+  og.addColorStop(0,'#0a2338'); og.addColorStop(.5,'#071a2a'); og.addColorStop(1,'#040f19');
+  mg.fillStyle=og; mg.fillRect(0,0,VW,VH);
+  /* خطوط الطول والعرض */
+  mg.strokeStyle='rgba(90,150,190,.10)'; mg.lineWidth=1;
+  mg.beginPath();
+  for(let lon=-180;lon<=180;lon+=20){
+    const wx=(lon+180)*MAPW/360;
+    for(const ox of copiesX()){const x=wx*k+ox; if(x>-2&&x<VW+2){mg.moveTo(x,0);mg.lineTo(x,VH);}}
+  }
+  for(let i=0;i<=10;i++){
+    const y=(MAPH*i/10)*k+view.y; if(y>-2&&y<VH+2){mg.moveTo(0,y);mg.lineTo(VW,y);}
+  }
+  mg.stroke();
+  for(const ox of copiesX()){
+    mg.save(); mg.translate(ox,view.y); mg.scale(k*SC,k*SC);   // إحداثيات المسار
+    /* اليابسة */
+    mg.lineJoin='round';
+    for(const r of G.regs){
+      mg.fillStyle=landColor(r);
+      mg.fill(r.path);
+    }
+    mg.lineWidth=Math.max(.5,1.2/k)*MAPS;
+    mg.strokeStyle='rgba(40,52,50,.55)';
+    for(const r of G.regs)mg.stroke(r.path);
+    mg.restore();
+
+    /* المسارات */
+    mg.save(); mg.translate(ox,view.y); mg.scale(k,k);
+    mg.lineWidth=Math.max(.35,.9/k);
+    for(const L of LINKS){
+      const a=G.byId[L.a], b=G.byId[L.b];
+      if(L.t==='land')continue;
+      const open=L.t==='air'?(a.airOpen&&b.airOpen):(a.portOpen&&b.portOpen);
+      if(!showDetail&&!open)continue;
+      const A=L.t==='air'?[a.ax,a.ay]:[a.sx,a.sy], B=L.t==='air'?[b.ax,b.ay]:[b.sx,b.sy];
+      const dx=wrapDx(A[0],B[0]), dy=B[1]-A[1];
+      const bend=L.t==='air'?.20:.10;
+      mg.beginPath(); mg.moveTo(A[0],A[1]);
+      mg.quadraticCurveTo(A[0]+dx/2-dy*bend, A[1]+dy/2+dx*bend, A[0]+dx, A[1]+dy);
+      mg.setLineDash(L.t==='air'?[5/k,6/k]:[2/k,6/k]);
+      mg.strokeStyle=open?(L.t==='air'?'rgba(120,196,224,.30)':'rgba(96,170,210,.22)')
+                         :'rgba(150,60,60,.13)';
+      mg.stroke();
+    }
+    mg.setLineDash([]);
+
+    /* نقاط العدوى */
+    for(const r of G.regs){
+      if(!r.dotsOn)continue;
+      const rad=Math.max(.85,1.6/Math.sqrt(k))*(1+ (r.collapse?.35:0));
+      mg.fillStyle=r.collapse?'#5b1418':'#d62a30';
+      for(let i=0;i<r.dotsOn;i++){
+        const p=r.dots[i];
+        mg.beginPath(); mg.arc(p[0],p[1],rad,0,6.284); mg.fill();
+      }
+    }
+    /* المطارات والموانئ */
+    if(showDetail)for(const r of G.regs){
+      if(r.airT>0){
+        mg.fillStyle=r.airOpen?'rgba(226,238,240,.85)':'rgba(220,90,90,.85)';
+        mg.beginPath(); mg.arc(r.ax,r.ay,1.2/Math.sqrt(k)+.45,0,6.284); mg.fill();
+      }
+      if(r.portT>0){
+        mg.fillStyle=r.portOpen?'rgba(120,196,235,.85)':'rgba(220,90,90,.8)';
+        mg.fillRect(r.sx-1/Math.sqrt(k),r.sy-1/Math.sqrt(k),2/Math.sqrt(k),2/Math.sqrt(k));
+      }
+    }
+    /* التحديد */
+    if(G.sel&&G.byId[G.sel]){
+      const r=G.byId[G.sel];
+      mg.save(); mg.scale(SC,SC);
+      mg.lineWidth=Math.max(1.2,2.4/k)*MAPS; mg.strokeStyle='#2fd6a8'; mg.stroke(r.path);
+      mg.restore();
+    }
+    mg.restore();
+
+    /* الأسماء — بإحداثيات الشاشة كي تبقى واضحة عند أي تكبير */
+    if(showNames){
+      mg.save();
+      mg.textAlign='center'; mg.textBaseline='middle';
+      mg.font='700 11px "Noto Kufi Arabic",sans-serif';
+      mg.lineJoin='round';
+      for(const r of G.regs){
+        if((r.bb[2]-r.bb[0])*k<62)continue;
+        const sx=r.cx*k+ox, sy=r.cy*k+view.y;
+        if(sx<-70||sx>VW+70||sy<-20||sy>VH+20)continue;
+        mg.lineWidth=3.2; mg.strokeStyle='rgba(12,22,28,.60)'; mg.strokeText(r.nm,sx,sy);
+        mg.fillStyle='rgba(30,38,36,.95)'; mg.fillText(r.nm,sx,sy);
+      }
+      mg.restore();
+    }
+  }
+  baseDirty=false;
+}
+
+/* ───── 15. طبقة المؤثرات ───── */
+function spawnTraveler(from,to,type,strong){
+  if(G.travelers.length>=18)return;
+  const A=type==='air'?[from.ax,from.ay]:type==='sea'?[from.sx,from.sy]:[from.cx,from.cy];
+  const B=type==='air'?[to.ax,to.ay]:type==='sea'?[to.sx,to.sy]:[to.cx,to.cy];
+  const dx=wrapDx(A[0],B[0]), dy=B[1]-A[1], len=Math.hypot(dx,dy);
+  const bend=type==='air'?.20:type==='sea'?.10:.04;
+  G.travelers.push({x0:A[0],y0:A[1],dx,dy,type,strong:!!strong,to,
+    cx:A[0]+dx/2-dy*bend, cy:A[1]+dy/2+dx*bend,
+    t:0,dur:Math.max(40,Math.min(190,len*(type==='air'?.7:type==='sea'?1.25:1.5)))});
+}
+const bez=(a,b,c,t)=>{const u=1-t;return u*u*a+2*u*t*b+t*t*c;};
+function burst(x,y,color,n,pow){
+  for(let i=0;i<n;i++){
+    const ang=(i/n)*6.283+vr()*.7;
+    G.parts.push({x,y,vx:Math.cos(ang)*pow*(.5+vr()),vy:Math.sin(ang)*pow*(.5+vr()),
+      life:0,max:20+Math.floor(vr()*14),color,r:1.6+vr()*2});
+  }
+  if(G.parts.length>200)G.parts.splice(0,G.parts.length-200);
+}
+function animate(){
+  for(let i=G.travelers.length-1;i>=0;i--){
+    const m=G.travelers[i]; m.t++;
+    if(m.t>=m.dur){ if(m.strong)burst(m.x0+m.dx,m.y0+m.dy,'#ff6b53',10,1.7); G.travelers.splice(i,1); }
+  }
+  for(let i=G.parts.length-1;i>=0;i--){
+    const p=G.parts[i]; p.x+=p.vx; p.y+=p.vy; p.vx*=.9; p.vy*=.9; p.life++;
+    if(p.life>=p.max)G.parts.splice(i,1);
+  }
+  if(G.flash>0)G.flash--;
+  if(G.shake>0)G.shake--;
+}
+const ICON={air:'✈',sea:'⛴',land:'●'};
+function drawFx(){
+  fg.setTransform(DPR,0,0,DPR,0,0);
+  fg.clearRect(0,0,VW,VH);
+  const k=view.k, tk=G.tick;
+  const sh=G.shake>0?(vr()-.5)*G.shake*.5:0;
+  for(const ox of copiesX()){
+    fg.save(); fg.translate(ox+sh,view.y);
+    /* هالة العدوى */
+    for(const r of G.regs){
+      const f=r.inf/Math.max(1,r.pop-r.dead);
+      if(f<.004)continue;
+      const [sx,sy]=[r.cx*k,r.cy*k];
+      if(sx<-140||sx>VW+140)continue;
+      const rad=Math.max(18,Math.min(110,(r.bb[2]-r.bb[0])*k*.42))*(.92+.08*Math.sin(tk/22+r.cx));
+      const gr=fg.createRadialGradient(sx,sy,0,sx,sy,rad);
+      const a=Math.min(.13,f*.22);
+      gr.addColorStop(0,`rgba(255,60,44,${a})`); gr.addColorStop(1,'rgba(255,60,44,0)');
+      fg.fillStyle=gr; fg.beginPath(); fg.arc(sx,sy,rad,0,6.284); fg.fill();
+    }
+    /* المسافرون */
+    for(const m of G.travelers){
+      const t=m.t/m.dur;
+      const wx=bez(m.x0,m.cx,m.x0+m.dx,t), wy=bez(m.y0,m.cy,m.y0+m.dy,t);
+      const sx=wx*k, sy=wy*k;
+      if(sx<-40||sx>VW+40||sy<-40||sy>VH+40)continue;
+      const t2=Math.min(1,t+.04);
+      const ang=Math.atan2(bez(m.y0,m.cy,m.y0+m.dy,t2)-wy,bez(m.x0,m.cx,m.x0+m.dx,t2)-wx);
+      const col=m.strong?'#ff6b53':m.type==='air'?'#cfe9f2':m.type==='sea'?'#9ecbe0':'#b6e0c8';
+      /* ذيل */
+      fg.strokeStyle=m.strong?'rgba(255,107,83,.45)':'rgba(190,225,240,.28)';
+      fg.lineWidth=1.4; fg.beginPath();
+      for(let i=0;i<7;i++){const tt=Math.max(0,t-i*.016);
+        const px2=bez(m.x0,m.cx,m.x0+m.dx,tt)*k, py2=bez(m.y0,m.cy,m.y0+m.dy,tt)*k;
+        i?fg.lineTo(px2,py2):fg.moveTo(px2,py2);} fg.stroke();
+      fg.save(); fg.translate(sx,sy); fg.rotate(ang);
+      fg.fillStyle=col;
+      if(m.type==='air'){fg.beginPath();fg.moveTo(5,0);fg.lineTo(-3.5,3);fg.lineTo(-1.6,0);fg.lineTo(-3.5,-3);fg.closePath();fg.fill();}
+      else if(m.type==='sea'){fg.fillRect(-3.4,-1.5,6.8,3);}
+      else {fg.beginPath();fg.arc(0,0,2.1,0,6.284);fg.fill();}
+      fg.restore();
+      if(m.strong){fg.strokeStyle='rgba(255,107,83,.55)';fg.lineWidth=1;
+        fg.beginPath();fg.arc(sx,sy,5+3*Math.sin(tk/5),0,6.284);fg.stroke();}
+    }
+    /* الجسيمات */
+    for(const p of G.parts){
+      const f=1-p.life/p.max;
+      fg.globalAlpha=f; fg.fillStyle=p.color;
+      fg.beginPath(); fg.arc(p.x*k,p.y*k,p.r*f*1.4,0,6.284); fg.fill();
+    }
+    fg.globalAlpha=1;
+    /* الفقاعات */
+    for(const b of G.bubbles){
+      const sx=b.x*k, sy=b.y*k-b.life*3.4;
+      if(sx<-40||sx>VW+40)continue;
+      const fade=Math.max(.25,1-b.life/8);
+      const R=15*(1+.08*Math.sin((tk+b.ph)/7));
+      const col=b.kind==='dna'?'#ff9d20':'#48b7ff';
+      fg.globalAlpha=fade;
+      fg.beginPath(); fg.arc(sx,sy,R,0,6.284);
+      fg.fillStyle=b.kind==='dna'?'rgba(255,157,32,.16)':'rgba(72,183,255,.16)'; fg.fill();
+      fg.lineWidth=1.8; fg.strokeStyle=col; fg.stroke();
+      fg.beginPath(); fg.arc(sx,sy,R*.62,0,6.284); fg.globalAlpha=fade*.55; fg.stroke();
+      fg.globalAlpha=fade;
+      fg.fillStyle=col; fg.font='700 12px "Noto Kufi Arabic",sans-serif';
+      fg.textAlign='center'; fg.textBaseline='middle';
+      fg.fillText(b.kind==='dna'?String(b.v):'✚',sx,sy+.5);
+      b._sx=sx+ox; b._sy=sy+view.y; b._r=R+10;
+    }
+    fg.globalAlpha=1;
+    fg.restore();
+  }
+  if(G.flash>0){fg.fillStyle=`rgba(224,53,63,${(G.flash/48*.22).toFixed(3)})`;fg.fillRect(0,0,VW,VH);}
+}
+
+/* ───── 16. اللمس والتكبير ───── */
+let picking=false;
+const pointers=new Map();
+let dragged=false, lastTap=0, pinchD=0, pinchMid=null;
+function evPos(e){const r=mapC.getBoundingClientRect();return [e.clientX-r.left,e.clientY-r.top];}
+fxC.style.pointerEvents='none';
+mapC.addEventListener('pointerdown',e=>{
+  mapC.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId,evPos(e));
+  if(pointers.size===2){
+    const [a,b]=[...pointers.values()];
+    pinchD=Math.hypot(a[0]-b[0],a[1]-b[1]); pinchMid=[(a[0]+b[0])/2,(a[1]+b[1])/2];
+  }
+  dragged=false;
+});
+mapC.addEventListener('pointermove',e=>{
+  if(!pointers.has(e.pointerId))return;
+  const prev=pointers.get(e.pointerId), pos=evPos(e);
+  pointers.set(e.pointerId,pos);
+  if(pointers.size===2){
+    const [a,b]=[...pointers.values()];
+    const d=Math.hypot(a[0]-b[0],a[1]-b[1]), mid=[(a[0]+b[0])/2,(a[1]+b[1])/2];
+    if(pinchD>0){zoomAt(mid[0],mid[1],d/pinchD);}
+    view.x+=mid[0]-pinchMid[0]; view.y+=mid[1]-pinchMid[1];
+    pinchD=d; pinchMid=mid; dragged=true; clampView(); baseDirty=true;
+  }else{
+    const dx=pos[0]-prev[0], dy=pos[1]-prev[1];
+    if(Math.abs(dx)+Math.abs(dy)>2)dragged=true;
+    view.x+=dx; view.y+=dy; clampView(); baseDirty=true;
+  }
+});
+function endPointer(e){
+  const pos=pointers.get(e.pointerId);
+  pointers.delete(e.pointerId);
+  if(pointers.size<2){pinchD=0;pinchMid=null;}
+  if(!dragged&&pos)handleTap(pos[0],pos[1]);
+}
+mapC.addEventListener('pointerup',endPointer);
+mapC.addEventListener('pointercancel',e=>{pointers.delete(e.pointerId);pinchD=0;});
+mapC.addEventListener('wheel',e=>{e.preventDefault();zoomAt(...evPos(e),e.deltaY<0?1.16:1/1.16);},{passive:false});
+function zoomAt(sx,sy,f){
+  const k0=view.k, k=Math.max(view.min,Math.min(view.max,k0*f));
+  if(k===k0)return;
+  const [wx,wy]=s2w(sx,sy);
+  view.k=k; view.x=sx-wx*k; view.y=sy-wy*k;
+  clampView(); baseDirty=true;
+}
+function handleTap(sx,sy){
+  const now=Date.now();
+  /* فقاعة؟ */
+  for(const b of G.bubbles){
+    if(b._sx===undefined)continue;
+    if(Math.hypot(sx-b._sx,sy-b._sy)<b._r){popBubble(b.id);return;}
+  }
+  const hit=regionAt(sx,sy);
+  if(picking){ if(hit)startFrom(hit.id); else toast('اضغط على اليابسة'); return; }
+  if(now-lastTap<300&&hit&&G.sel===hit.id){ zoomAt(sx,sy,1.6); }
+  lastTap=now;
+  if(hit){ G.sel=hit.id; showCountry(hit,sx,sy); }
+  else { G.sel=null; hideCountry(); }
+  baseDirty=true;
+}
+function regionAt(sx,sy){
+  const [wx,wy]=s2w(sx,sy);
+  mg.setTransform(1,0,0,1,0,0);
+  for(const off of [0,-MAPW,MAPW]){
+    const px2=(wx+off)/SC, py2=wy/SC;
+    for(const r of G.regs)if(mg.isPointInPath(r.path,px2,py2))return r;
+  }
+  /* لمسة قريبة من دولة صغيرة */
+  let best=null,bd=26/view.k;
+  for(const r of G.regs){
+    for(const off of [0,-MAPW,MAPW]){
+      const d=Math.hypot(wx+off-r.cx,wy-r.cy);
+      if(d<bd){bd=d;best=r;}
+    }
+  }
+  return best;
+}
+function popBubble(id){
+  const i=G.bubbles.findIndex(b=>b.id===id); if(i<0)return;
+  const b=G.bubbles[i]; G.bubbles.splice(i,1);
+  const y=b.y-b.life*3.4/view.k;
+  if(b.kind==='dna'){
+    G.dna+=b.v; burst(b.x,y,'#ff9d20',12,2.2); flashDna(); toast('+'+b.v+' حمض نووي');
+  }else{
+    G.cure=Math.max(0,G.cure-.35); burst(b.x,y,'#48b7ff',12,2.2); toast('تعطّلت عيّنة بحثية');
+  }
+  syncTop();
+}
+document.getElementById('zin').onclick=()=>zoomAt(VW/2,VH/2,1.4);
+document.getElementById('zout').onclick=()=>zoomAt(VW/2,VH/2,1/1.4);
+document.getElementById('zfit').onclick=()=>{fitView();};
+
+/* ───── 17. الواجهة العلوية والتنبيهات ───── */
+const $=id=>document.getElementById(id);
+let toastT=0, alertT=0;
+function toast(msg){
+  const box=$('toast'); box.firstElementChild.textContent=msg; box.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>box.classList.remove('show'),1500);
+}
+function popAlert(msg){
+  const box=$('popalert'); box.firstElementChild.textContent=msg; box.classList.add('show');
+  clearTimeout(alertT); alertT=setTimeout(()=>box.classList.remove('show'),2600);
+}
+function flashDna(){const b=$('dnabtn');b.classList.remove('flash');void b.offsetWidth;b.classList.add('flash');}
+function syncTop(){
+  const t=totals();
+  $('dna').textContent=Math.floor(G.dna);
+  $('ginf').textContent=fmt(t.inf);
+  $('gdead').textContent=fmt(t.dead);
+  $('gcure').textContent=G.cure.toFixed(1)+'٪';
+  $('binf').style.width=Math.min(100,t.inf/t.pop*100)+'%';
+  $('bdead').style.width=Math.min(100,t.dead/t.pop*100)+'%';
+  $('bcure').style.width=G.cure+'%';
+  $('vname').textContent=G.name;
+  $('vsub').textContent=`يوم ${G.day} · ${G.known?'مكتشَف':'غير مكتشَف'} · ${t.countries} بلدًا`;
+  const afford=UPS.filter(u=>visibleUp(u)&&unlocked(u)&&(!owns(u.id)||u.rep)&&G.dna>=costOf(u)).length;
+  const bd=$('bdgDis'); bd.classList.toggle('hide',!(afford>0&&G.tab!=='dis')); bd.textContent=afford;
+  const bc=$('bdgCur'); bc.classList.toggle('hide',!(G.cure>=25&&G.tab!=='cur'));
+}
+function syncUI(){ syncTop(); if(sheetOpen)renderSheet(); }
+
+/* ───── 18. بطاقة الدولة على الخريطة ───── */
+const cpop=$('cpop');
+function hideCountry(){cpop.classList.add('hide');}
+function showCountry(r,sx,sy){
+  if(sx===undefined){const q=w2s(r.cx,r.cy);sx=q[0];sy=q[1];}
+  const alive=Math.max(1,r.pop-r.dead);
+  const pct=(r.inf/alive)*100, dpct=r.dead/r.pop*100;
+  const clim=r.arid>.6?'قاحل':r.cold>.6?'بارد':r.hum>.7?'رطب':r.heat>.7?'حارّ':'معتدل';
+  const wealth=r.wealth>.75?'غني':r.wealth>.45?'متوسط':'فقير';
+  let tags='';
+  if(r.airT>0)tags+=`<i class="${r.airOpen?'':'red'}">${r.airOpen?'مطار مفتوح':'مطار مغلق'}</i>`;
+  if(r.portT>0)tags+=`<i class="${r.portOpen?'':'red'}">${r.portOpen?'ميناء مفتوح':'ميناء مغلق'}</i>`;
+  tags+=`<i class="${r.borderOpen?'':'red'}">${r.borderOpen?'حدود مفتوحة':'حدود مغلقة'}</i>`;
+  if(r.lock)tags+='<i class="red">إغلاق شامل</i>';
+  if(r.collapse)tags+='<i class="red">دولة منهارة</i>';
+  if(r.research>0)tags+='<i class="blue">مختبر لقاح</i>';
+  if(!r.aware&&r.inf>0)tags+='<i>لم تكتشف بعد</i>';
+  cpop.innerHTML=`<button class="close" id="cpx">✕</button>
+    <h3>${r.nm}</h3>
+    <div class="sub">${wealth} · مناخ ${clim} · تحضّر ${Math.round(r.urban*100)}٪</div>
+    <div class="kv">
+      <div><span>السكان</span><b>${fmt(r.pop)}</b></div>
+      <div><span>الأحياء</span><b>${fmt(alive)}</b></div>
+      <div><span>مصابون</span><b style="color:#ff6b53">${fmt(r.inf)}</b></div>
+      <div><span>وفيات</span><b style="color:#e0353f">${fmt(r.dead)}</b></div>
+      <div><span>نسبة الإصابة</span><b>${pct<1&&pct>0?'<1':pct.toFixed(0)}٪</b></div>
+      <div><span>نسبة الوفيات</span><b>${dpct<1&&dpct>0?'<1':dpct.toFixed(0)}٪</b></div>
+    </div>
+    <div class="tags">${tags}</div>`;
+  cpop.classList.remove('hide');
+  const w=cpop.offsetWidth||236, h=cpop.offsetHeight||160;
+  let x=Math.min(Math.max(8,sx-w/2),window.innerWidth-w-8);
+  let y=sy-h-16; if(y<70)y=Math.min(sy+18,window.innerHeight-h-70);
+  cpop.style.left=x+'px'; cpop.style.top=y+'px';
+  $('cpx').onclick=()=>{hideCountry();G.sel=null;baseDirty=true;};
+}
+
+/* ───── 19. اللوحة السفلية ───── */
+const sheet=$('sheet'), sheetBody=$('sheetBody'), sheetTitle=$('sheetTitle');
+let sheetOpen=false, devMode=false;
+const TAB_TITLE={dis:'تطوير المرض',wld:'دول العالم',cur:'سباق اللقاح',new:'نشرة الأخبار',sta:'الأرقام'};
+function openSheet(tab){
+  G.tab=tab; sheetOpen=true; sheet.classList.add('open');
+  sheetTitle.textContent=TAB_TITLE[tab];
+  for(const b of $('dock').children)b.classList.toggle('on',b.dataset.t===tab);
+  renderSheet(); syncTop();
+}
+function closeSheet(){sheetOpen=false;sheet.classList.remove('open');
+  for(const b of $('dock').children)b.classList.remove('on');G.tab='';syncTop();}
+$('sheetX').onclick=closeSheet;
+$('grab').onclick=closeSheet;
+$('dock').onclick=e=>{
+  const b=e.target.closest('[data-t]'); if(!b||!G)return;
+  if(sheetOpen&&G.tab===b.dataset.t)closeSheet(); else openSheet(b.dataset.t);
+};
+function renderSheet(){
+  if(G.tab==='dis')return panelDis();
+  if(G.tab==='wld')return panelWorld();
+  if(G.tab==='cur')return panelCure();
+  if(G.tab==='new')return panelNews();
+  if(G.tab==='sta')return panelStats();
+}
+function effBadges(u){
+  let h='';
+  for(const k in u.e){
+    const v=u.e[k], cls=k==='sev'?'s':k==='let'?'l':'p';
+    let val=k==='back'?v+'٪':k==='stab'||k==='spore'||k==='mutRand'?'':'+'+v;
+    if(k==='hres'||k==='cres'||k==='dres'||k==='cure'||k==='stealth'||k==='dnaUp'||k==='ur')val='+'+v;
+    h+=`<i class="${cls}">${EFF_LABEL[k]||k} ${val}</i>`;
+  }
+  return h;
+}
+function panelDis(){
+  const subs=[[T,'الانتقال'],[S,'الأعراض'],[A,'القدرات']];
+  let h='<div class="subtabs">'+subs.map(s=>
+    `<button data-sub="${s[0]}" class="${G.sub===s[0]?'on':''}">${s[1]}</button>`).join('')+'</div><div class="tree">';
+  for(const u of UPS){
+    if(u.c!==G.sub||!visibleUp(u))continue;
+    const has=owns(u.id), unl=unlocked(u), cost=costOf(u), cant=!has&&G.dna<cost;
+    const cls='up'+(has&&!u.rep?' owned':'')+(!unl?' locked':'')+(cant&&unl?' cant':'');
+    const badge=(has&&u.rep)?`<span class="badge rep">×${G.owned[u.id]}</span>`:has?'<span class="badge">مُفعّل</span>':'';
+    h+=`<button class="${cls}" data-buy="${u.id}">${badge}
+      <div class="nm">${u.nm}</div><div class="ds">${u.ds||''}</div>
+      <div class="ef">${effBadges(u)}</div>
+      <div class="cost"><span>${!unl?'مقفل':(has&&!u.rep)?'مملوك':'التكلفة'}</span><b>${(has&&!u.rep)?'✓':cost}</b></div></button>`;
+  }
+  h+='</div>';
+  if(G.sub===S){
+    const c=Math.max(1,Math.round((2+G.devolves*3)*(TYPES[G.type].mods.devolveCost||1)));
+    h+=`<button class="devbtn" id="devmode">${devMode?'اضغط على العرَض الذي تريد فكّه — أو ألغِ':`فكّ عرَضًا لتخفيض الشدّة — التكلفة الآن ${c}`}</button>`;
+  }
+  h+=`<div class="hint">الشدّة تفضحك مبكرًا وتُسرّع اللقاح. الفتك يقتل حاملي المرض قبل أن ينشروه.
+    الخطة الذكية: انتشر وأنت غير مؤذٍ، ثم تحوّل إلى قاتل بعد أن تصل إلى الجميع.</div>`;
+  sheetBody.innerHTML=h;
+  sheetBody.querySelectorAll('[data-sub]').forEach(b=>b.onclick=()=>{G.sub=b.dataset.sub;devMode=false;renderSheet();});
+  sheetBody.querySelectorAll('[data-buy]').forEach(b=>b.onclick=()=>{devMode?devolve(b.dataset.buy):buy(b.dataset.buy);});
+  const dm=$('devmode'); if(dm)dm.onclick=()=>{devMode=!devMode;renderSheet();};
+}
+function panelWorld(){
+  const arr=G.regs.slice().sort((a,b)=>((b.inf+b.dead)/b.pop)-((a.inf+a.dead)/a.pop));
+  let h='<div class="rows">';
+  for(const r of arr){
+    const alive=Math.max(1,r.pop-r.dead);
+    const pct=Math.min(100,(r.inf/alive+r.dead/r.pop)*100);
+    let flags='';
+    if(r.airT>0)flags+=`<i class="${r.airOpen?'':'hot'}">✈</i>`;
+    if(r.portT>0)flags+=`<i class="${r.portOpen?'':'hot'}">⚓</i>`;
+    flags+=`<i class="${r.borderOpen?'':'hot'}">⛔</i>`;
+    if(r.lock)flags+='<i class="hot">🔒</i>';
+    h+=`<button class="row" data-reg="${r.id}">
+      <div class="nm"><b>${r.nm}</b><span>${fmtShort(r.pop)} نسمة · مصابون ${fmtShort(r.inf)} · وفيات ${fmtShort(r.dead)}</span></div>
+      <div class="flags">${flags}</div>
+      <div class="mini"><div class="track"><i class="f-inf" style="width:${pct}%"></i></div></div>
+      <div class="pct num" style="color:${pct>60?'#e0353f':pct>5?'#f2b23c':'#7a949c'}">${pct<1&&pct>0?'<1':Math.round(pct)}٪</div></button>`;
+  }
+  sheetBody.innerHTML=h+'</div>';
+  sheetBody.querySelectorAll('[data-reg]').forEach(b=>b.onclick=()=>{
+    const r=G.byId[b.dataset.reg];
+    G.sel=r.id; focusRegion(r); closeSheet();
+    setTimeout(()=>showCountry(r),280);
+  });
+}
+function focusRegion(r){
+  const targetK=Math.max(view.min*2.2,Math.min(view.max,view.min*3));
+  view.k=targetK;
+  view.x=VW/2-r.cx*view.k; view.y=VH/2-r.cy*view.k;
+  clampView(); baseDirty=true;
+}
+function panelCure(){
+  if(!G.known){
+    sheetBody.innerHTML=`<div class="hint" style="font-size:12.5px;color:var(--dim)">
+      لم يكتشف أحد المرض بعد، ولم يبدأ أي مختبر بالعمل على لقاح.<br><br>
+      كلما ارتفعت شدّة الأعراض وعدد المصابين، أسرع ما يلاحظك العالم.</div>`;
+    return;
+  }
+  const total=G.labs.reduce((a,r)=>a+r.research,0)||1;
+  let h=`<div class="stats">
+    <div class="stat"><span>تقدّم اللقاح</span><b class="num" style="color:var(--cure)">${G.cure.toFixed(1)}٪</b></div>
+    <div class="stat"><span>سرعة يومية</span><b class="num">${G.cureRate.toFixed(2)}٪</b></div>
+    <div class="stat"><span>مختبرات عاملة</span><b class="num">${G.labs.length}</b></div>
+    <div class="stat"><span>متبقٍّ (تقديري)</span><b class="num">${G.cureRate>.001?Math.ceil((100-G.cure)/G.cureRate)+' يوم':'—'}</b></div>
+  </div><div class="cureline">`;
+  for(const r of G.labs.slice(0,14)){
+    const share=r.research/total*100;
+    h+=`<div class="cl"><span class="nm">${r.nm}</span>
+      <div class="mini" style="width:70px"><div class="track"><i class="f-cure" style="width:${Math.min(100,share*2.2)}%"></i></div></div>
+      <span class="v num">${share.toFixed(1)}٪</span></div>`;
+  }
+  h+='</div><div class="hint">أوقف المختبرات بإسقاط الدول الغنية أو بشراء «مقاومة الأدوية» و«إعادة الترتيب الجيني».<br>الفقاعات الزرقاء فوق المختبرات تُعيد اللقاح إلى الخلف عند الضغط عليها.</div>';
+  sheetBody.innerHTML=h;
+}
+function panelNews(){
+  if(!G.logs.length){sheetBody.innerHTML='<div class="hint">لا أخبار بعد. العالم نائم.</div>';return;}
+  sheetBody.innerHTML='<div class="logs">'+G.logs.map(l=>
+    `<div class="log ${l.kind}"><time>${l.t}</time><span>${l.txt}</span></div>`).join('')+'</div>';
+}
+function panelStats(){
+  const t=totals(), s=G.stats;
+  sheetBody.innerHTML=`<div class="stats">
+    <div class="stat"><span>مصابون الآن</span><b class="num">${fmt(t.inf)}</b></div>
+    <div class="stat"><span>وفيات</span><b class="num" style="color:var(--virus)">${fmt(t.dead)}</b></div>
+    <div class="stat"><span>سليمون</span><b class="num">${fmt(t.healthy)}</b></div>
+    <div class="stat"><span>بلدان مصابة</span><b class="num">${t.countries} / ${G.regs.length}</b></div>
+    <div class="stat"><span>العدوى</span><b class="num" style="color:var(--plasma)">${s.inf}</b></div>
+    <div class="stat"><span>الشدّة</span><b class="num" style="color:var(--amber)">${s.sev}</b></div>
+    <div class="stat"><span>الفتك</span><b class="num" style="color:var(--virus)">${s.let}</b></div>
+    <div class="stat"><span>مقاومة الأدوية</span><b class="num" style="color:var(--serum)">${s.dres.toFixed(1)}</b></div>
+  </div>
+  <div class="chartbox"><div class="legend">
+    <i style="color:var(--virus)">مصابون</i><i style="color:#8c2b33">وفيات</i><i style="color:var(--cure)">اللقاح</i></div>
+    <canvas class="chart" id="chart"></canvas></div>
+  <div class="hint">النوع: ${TYPES[G.type].nm} · الصعوبة: ${G.diff.k} · البذرة <span class="num">${G.seed}</span><br>
+    الجينات: ${Object.keys(GENES).map(k=>{const o=GENES[k].opts.find(o=>o.id===G.genes[k]);return o?o.nm:'—';}).join(' · ')}<br>
+    نفس البذرة ونفس الخيارات تُعيد نفس العالم بالضبط.</div>`;
+  drawChart();
+}
+function drawChart(){
+  const cv=$('chart'); if(!cv)return;
+  const dpr=Math.min(2,window.devicePixelRatio||1), Wd=cv.clientWidth||300, Hd=140;
+  cv.width=Wd*dpr; cv.height=Hd*dpr;
+  const g=cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,Wd,Hd);
+  const hist=G.hist;
+  if(hist.length<2){g.fillStyle='#4b636b';g.font='12px sans-serif';g.textAlign='center';
+    g.fillText('لا توجد بيانات كافية بعد',Wd/2,Hd/2);return;}
+  const N=hist.length, pop=G.pop0;
+  g.strokeStyle='#16272d'; g.lineWidth=1;
+  for(let i=1;i<4;i++){const y=Hd*i/4;g.beginPath();g.moveTo(0,y);g.lineTo(Wd,y);g.stroke();}
+  const line=(get,color,fill)=>{
+    g.beginPath();
+    for(let i=0;i<N;i++){
+      const x=(i/(N-1))*Wd, y=Hd-Math.min(1,get(hist[i]))*(Hd-6)-3;
+      i?g.lineTo(x,y):g.moveTo(x,y);
+    }
+    g.strokeStyle=color; g.lineWidth=2; g.stroke();
+    if(fill){g.lineTo(Wd,Hd);g.lineTo(0,Hd);g.closePath();g.fillStyle=fill;g.fill();}
+  };
+  line(h=>h.i/pop,'#e0353f','rgba(224,53,63,.10)');
+  line(h=>h.x/pop,'#8c2b33',null);
+  line(h=>h.c/100,'#48b7ff',null);
+}
+
+/* ───── 22. الحفظ التلقائي والاستئناف ───── */
+const SAVE_KEY='ya7_wabaa_save_v1';
+function saveGame(){
+  if(!G||G.over)return;
+  try{
+    const s={v:1,cfg:G.cfg,day:G.day,dna:G.dna,owned:G.owned,cure:G.cure,known:G.known,knownDay:G.knownDay,
+      sabCount:G.sabCount,devolves:G.devolves,sporeCount:G.sporeCount,cureFund:G.cureFund,
+      logs:G.logs.slice(0,40),hist:G.hist.filter((h,i)=>i%4===0).slice(-420),
+      rs:rng.get(),vs:vrng.get(),
+      regs:G.regs.map(r=>[r.id,r.inf,r.dead,r.aware?1:0,r.seen?1:0,r.airOpen?1:0,r.portOpen?1:0,
+        r.borderOpen?1:0,r.lock?1:0,r.collapse?1:0])};
+    localStorage.setItem(SAVE_KEY,JSON.stringify(s));
+  }catch(e){}
+}
+function hasSave(){try{return !!localStorage.getItem(SAVE_KEY);}catch(e){return false;}}
+function clearSave(){try{localStorage.removeItem(SAVE_KEY);}catch(e){}}
+function loadGame(){
+  let s; try{s=JSON.parse(localStorage.getItem(SAVE_KEY));}catch(e){return false;}
+  if(!s||s.v!==1)return false;
+  veil.style.display='none'; $('stage').hidden=false;
+  cfg=s.cfg; newGame(s.cfg);
+  G.day=s.day; G.dna=s.dna; G.owned=s.owned||{}; G.cure=s.cure; G.known=s.known; G.knownDay=s.knownDay||0;
+  G.sabCount=s.sabCount||0; G.devolves=s.devolves||0; G.sporeCount=s.sporeCount||0; G.cureFund=s.cureFund||0;
+  G.logs=s.logs||[]; G.hist=s.hist||[];
+  rng.set(s.rs); vrng.set(s.vs);
+  for(const a of s.regs){
+    const r=G.byId[a[0]]; if(!r)continue;
+    r.inf=a[1];r.dead=a[2];r.aware=!!a[3];r.seen=!!a[4];r.airOpen=!!a[5];r.portOpen=!!a[6];
+    r.borderOpen=!!a[7];r.lock=!!a[8];r.collapse=!!a[9];
+    const f=Math.min(1,(r.inf+r.dead)/Math.max(1,r.pop));
+    r.dotsOn=Math.round(Math.min(r.dots.length,r.dots.length*Math.pow(f,.55)*1.05));
+  }
+  recalc(); resize(); fitView(); drawBase(); syncTop();
+  picking=false; $('pickbar').hidden=true; running=true; setSpeed(1);
+  if(G.logs.length)$('tick').textContent=G.logs[0].txt;
+  toast('استُؤنفت اللعبة — يوم '+G.day);
+  return true;
+}
+setInterval(()=>{if(G&&running&&!G.over&&!picking)saveGame();},9000);
+document.addEventListener('visibilitychange',()=>{if(document.hidden)saveGame();});
+window.addEventListener('pagehide',saveGame);
+
+/* ───── 20. الحلقة الرئيسية ───── */
+const FPD=[0,26,11,4];
+let running=false, uiTick=0;
+function loop(){
+  requestAnimationFrame(loop);
+  if(!G)return;
+  if(running&&!G.over){
+    const fpd=FPD[G.speed];
+    if(fpd>0){
+      G.tick++; G.frames++;
+      if(G.frames>=fpd){G.frames=0;stepDay();baseDirty=true;}
+      animate();
+    }
+  }
+  if(baseDirty)drawBase();
+  drawFx();
+  if(++uiTick%8===0&&!G.over){
+    syncTop();
+    if(sheetOpen&&(G.tab==='wld'||G.tab==='cur'||G.tab==='new'||G.tab==='sta'))renderSheet();
+    if(G.sel&&!cpop.classList.contains('hide'))showCountry(G.byId[G.sel]);
+  }
+}
+requestAnimationFrame(loop);
+
+$('speeds').onclick=e=>{
+  const b=e.target.closest('[data-s]'); if(!b||!G)return;
+  G.speed=+b.dataset.s;
+  for(const x of e.currentTarget.children)x.classList.toggle('on',x===b);
+};
+function setSpeed(s){
+  G.speed=s;
+  for(const x of $('speeds').children)x.classList.toggle('on',+x.dataset.s===s);
+}
+$('dnabtn').onclick=()=>openSheet('dis');
+document.addEventListener('keydown',e=>{
+  if(!G||veil.style.display==='flex')return;
+  if(e.code==='Space'){e.preventDefault();setSpeed(G.speed?0:1);}
+  else if(e.key>='1'&&e.key<='3')setSpeed(+e.key);
+  else if(e.key==='Escape'){if(sheetOpen)closeSheet();else{hideCountry();G.sel=null;baseDirty=true;}}
+  else if(e.key==='+'||e.key==='=')zoomAt(VW/2,VH/2,1.3);
+  else if(e.key==='-')zoomAt(VW/2,VH/2,1/1.3);
+});
+window.addEventListener('resize',()=>{resize();if(sheetOpen&&G.tab==='sta')drawChart();});
+
+/* ───── 21. الشاشات ───── */
+const veil=$('veil'), veilCard=$('veilcard');
+let cfg={name:'وباء ياح',type:'bac',diff:'norm',seed:'',genes:{gt:null,gv:null,ga:null,gm:null}};
+const defaultSeed=()=>'YA7-'+Math.floor(Math.random()*99999);
+function showStart(){
+  $('stage').hidden=true; $('pickbar').hidden=true; hideCountry();
+  running=false;
+  veil.style.display='flex';
+  veilCard.innerHTML=`
+    <h1>الوباء<small>محاكي تفشٍّ عالمي على خريطة العالم الحقيقية.
+      أنت المُمْرِض، والبشرية تسابقك إلى اللقاح.</small></h1>
+    <div class="field"><label>اسم المرض</label>
+      <input id="fName" value="${cfg.name}" maxlength="24"></div>
+    <div class="field"><label>نوع المُمْرِض</label>
+      <div class="typegrid" id="fType">${Object.keys(TYPES).map(k=>
+        `<button class="typebtn ${cfg.type===k?'on':''}" data-ty="${k}">
+          <b style="color:${TYPES[k].col}">${TYPES[k].nm}</b><span>${TYPES[k].ds}</span></button>`).join('')}</div></div>
+    <div class="field"><label>الجينات — اضغط لتغيير كل خانة</label>
+      <div class="genes" id="fGenes"></div></div>
+    <div class="field"><label>الصعوبة</label>
+      <div class="seg" id="fDiff">${Object.keys(DIFF).map(k=>
+        `<button data-d="${k}" class="${cfg.diff===k?'on':''}">${DIFF[k].k}</button>`).join('')}</div>
+      <div class="hint" id="diffHint" style="margin-top:7px">${DIFF[cfg.diff].ds}</div></div>
+    <div class="field"><label>البذرة — نفس البذرة تُعيد نفس العالم بالضبط</label>
+      <input id="fSeed" value="${cfg.seed||defaultSeed()}"></div>
+    <button class="go" id="fGo">ابدأ التفشّي</button>
+    ${hasSave()?'<button class="ghost" id="fRes" style="border-color:#1d5a4e;color:#7fe0c8">متابعة اللعبة المحفوظة</button>':''}
+    <button class="ghost" id="fRnd">بذرة جديدة</button>
+    <div class="hint">انتشر وأنت غير مؤذٍ أولًا. لا تقتل أحدًا قبل أن تصل إلى كل بلد،
+      فالجثث تُنبّه العالم وتُسرّع اللقاح.</div>`;
+  renderGenes();
+  $('fType').onclick=e=>{const b=e.target.closest('[data-ty]');if(!b)return;
+    cfg.type=b.dataset.ty;
+    for(const x of e.currentTarget.children)x.classList.toggle('on',x===b);};
+  $('fDiff').onclick=e=>{const b=e.target.closest('[data-d]');if(!b)return;
+    cfg.diff=b.dataset.d; $('diffHint').textContent=DIFF[cfg.diff].ds;
+    for(const x of e.currentTarget.children)x.classList.toggle('on',x===b);};
+  $('fRnd').onclick=()=>{$('fSeed').value=defaultSeed();};
+  const fres=$('fRes'); if(fres)fres.onclick=()=>{if(!loadGame())toast('تعذّر تحميل اللعبة المحفوظة');};
+  $('fGo').onclick=()=>{
+    cfg.name=($('fName').value||'وباء ياح').trim();
+    cfg.seed=($('fSeed').value||'ya7').trim();
+    beginPicking();
+  };
+}
+function renderGenes(){
+  const box=$('fGenes'); if(!box)return;
+  box.innerHTML=Object.keys(GENES).map(k=>{
+    const o=GENES[k].opts.find(o=>o.id===cfg.genes[k]);
+    return `<button class="gslot" data-g="${k}">
+      <span class="gl">${GENES[k].nm}</span>
+      <span class="gv">${o?o.nm:'— فارغة —'}<i>${o?o.ds:'اضغط لاختيار جين'}</i></span></button>`;
+  }).join('');
+  box.onclick=e=>{
+    const b=e.target.closest('[data-g]'); if(!b)return;
+    const k=b.dataset.g, opts=GENES[k].opts;
+    const i=opts.findIndex(o=>o.id===cfg.genes[k]);
+    cfg.genes[k]=i+1>=opts.length?null:opts[i+1].id;
+    renderGenes();
+  };
+}
+function beginPicking(){
+  veil.style.display='none';
+  $('stage').hidden=false;
+  newGame(cfg);
+  resize(); fitView(); drawBase();
+  syncTop(); closeSheet();
+  picking=true; running=false; setSpeed(0);
+  $('pickbar').hidden=false;
+  $('tick').textContent='اختر البلد الذي يبدأ منه المريض صفر.';
+}
+function startFrom(id){
+  picking=false; $('pickbar').hidden=true;
+  const s=G.byId[id];
+  s.inf=6; s.seen=true; s.dotsOn=1;
+  G.logs=[];
+  log(`ظهر «${G.name}» في ${s.nm}. ستة مصابين. لا أحد يشعر بشيء.`,'');
+  burst(s.cx,s.cy,'#ff6b53',18,2.4);
+  focusRegion(s);
+  running=true; setSpeed(1);
+  toast('بدأ التفشّي في '+s.nm);
+  openSheet('dis');
+}
+function showEnd(){
+  const o=G.over, t=totals();
+  running=false; clearSave();
+  veil.style.display='flex';
+  veilCard.innerHTML=`
+    <h1 style="color:${o.win?'var(--virus)':'var(--cure)'}">${o.win?'انتصر المرض':'انتصرت البشرية'}
+      <small>${o.reason}</small></h1>
+    <div class="endstats">
+      <div><span>التقدير</span><b class="num" style="color:var(--dna)">${o.grade}</b></div>
+      <div><span>النتيجة</span><b class="num" style="color:var(--dna)">${o.score}</b></div>
+      <div><span>الأيام</span><b class="num">${o.days}</b></div>
+      <div><span>بلدان أُصيبت</span><b class="num">${o.countries} / ${G.regs.length}</b></div>
+      <div><span>الوفيات</span><b class="num">${fmt(t.dead)}</b></div>
+      <div><span>نسبة الإصابة</span><b class="num">${o.infPct.toFixed(1)}٪</b></div>
+      <div><span>نسبة الوفيات</span><b class="num">${o.deadPct.toFixed(1)}٪</b></div>
+      <div><span>اللقاح</span><b class="num">${o.cure.toFixed(0)}٪</b></div>
+    </div>
+    <button class="go" id="eAgain">أعد نفس البذرة</button>
+    <button class="ghost" id="eNew">عالم جديد</button>
+    <div class="hint">${TYPES[G.type].nm} · ${G.diff.k} · البذرة <span class="num">${G.seed}</span></div>`;
+  $('eAgain').onclick=()=>beginPicking();
+  $('eNew').onclick=()=>{cfg.seed='';showStart();};
+}
+window.addEventListener('load',()=>{resize();});
+resize();
+showStart();
+</script>
+</body>
+</html>
