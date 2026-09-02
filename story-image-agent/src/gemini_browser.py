@@ -14,6 +14,11 @@ Design rules this module follows:
 * Waiting is done with Playwright waits and real page state (the stop button
   disappearing, an image node appearing and settling), never a fixed sleep as
   the primary mechanism.
+* When a configured selector finds nothing, the agent does not give up: a
+  heuristic layer (`_JS_*` below) looks at the live DOM by shape rather than by
+  name — the button next to the composer, the large image that appeared after
+  the prompt was sent. Selectors stay the fast path; heuristics keep the run
+  alive through a UI rename.
 """
 
 from __future__ import annotations
@@ -63,6 +68,152 @@ def _ci(pattern: str) -> re.Pattern[str]:
     return re.compile(re.escape(pattern), re.IGNORECASE)
 
 
+# --- DOM heuristics -------------------------------------------------------
+# These run in the page and identify controls by shape and behaviour, so they
+# keep working when Gemini renames a class, an aria-label or a custom element.
+
+_JS_IMAGE_SRCS = "() => Array.from(document.images).map((img) => img.src)"
+
+_JS_FIND_IMAGE = """
+(baseline) => {
+  const junk = /avatar|profile|icon|favicon|logo|sprite|emoji/i;
+  const known = new Set(baseline || []);
+  const candidates = Array.from(document.images).filter((img) => {
+    if (!img.src || known.has(img.src)) return false;
+    // A data: URI is opaque base64 — only its alt text is meaningful here.
+    const isData = img.src.startsWith('data:');
+    if (!isData && junk.test(img.src)) return false;
+    if (junk.test(img.alt || '')) return false;
+    const rect = img.getBoundingClientRect();
+    const width = img.naturalWidth || rect.width;
+    const height = img.naturalHeight || rect.height;
+    return width >= 200 && height >= 200;
+  });
+  return candidates.length ? candidates[candidates.length - 1] : null;
+}
+"""
+
+_JS_FIND_SEND = """
+() => {
+  const editor = document.querySelector("[contenteditable='true'], textarea");
+  const wanted = /send|submit|إرسال|ارسال/i;
+  const visible = (el) => {
+    const rect = el.getBoundingClientRect();
+    const style = getComputedStyle(el);
+    return rect.width > 0 && rect.height > 0 &&
+           style.visibility !== 'hidden' && style.display !== 'none' &&
+           !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+  };
+  const buttons = Array.from(
+    document.querySelectorAll("button, [role='button'], mat-icon-button")
+  ).filter(visible);
+
+  const named = buttons.filter((b) => wanted.test(
+    [b.getAttribute('aria-label'), b.getAttribute('title'), b.className,
+     b.innerText, b.querySelector('mat-icon')?.getAttribute('fonticon')]
+      .filter(Boolean).join(' ')
+  ));
+  if (named.length) return named[named.length - 1];
+
+  if (!editor) return null;
+  // Otherwise: the closest visible button to the right of / below the composer.
+  const anchor = editor.getBoundingClientRect();
+  const near = buttons
+    .map((b) => {
+      const rect = b.getBoundingClientRect();
+      return { b, dx: rect.left - anchor.left, dy: rect.top - anchor.top,
+               dist: Math.hypot(rect.left - anchor.right, rect.top - anchor.top) };
+    })
+    .filter((entry) => entry.dist < 400 && entry.dy > -60)
+    .sort((a, b) => a.dist - b.dist);
+  return near.length ? near[0].b : null;
+}
+"""
+
+_JS_FIND_DOWNLOAD = """
+(imageSrc) => {
+  const wanted = /download|save|تنزيل|تحميل|حفظ/i;
+  const nodes = Array.from(
+    document.querySelectorAll("a[download], a, button, [role='button']")
+  );
+  const scored = nodes.filter((el) => {
+    if (el.tagName === 'A' && el.hasAttribute('download')) return true;
+    return wanted.test([el.getAttribute('aria-label'), el.getAttribute('title'),
+                        el.innerText].filter(Boolean).join(' '));
+  });
+  if (!scored.length) return null;
+  if (!imageSrc) return scored[scored.length - 1];
+  const image = Array.from(document.images).find((img) => img.src === imageSrc);
+  if (!image) return scored[scored.length - 1];
+  const anchor = image.getBoundingClientRect();
+  return scored
+    .map((el) => {
+      const rect = el.getBoundingClientRect();
+      return { el, dist: Math.hypot(rect.left - anchor.left, rect.top - anchor.bottom) };
+    })
+    .sort((a, b) => a.dist - b.dist)[0].el;
+}
+"""
+
+_JS_DOM_DUMP = """
+() => {
+  const trim = (value, size) => (value || '').toString().replace(/\s+/g, ' ')
+      .trim().slice(0, size);
+  const visible = (el) => {
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const buttons = Array.from(
+    document.querySelectorAll("button, [role='button'], a[download]")
+  ).slice(0, 120).map((el) => ({
+    tag: el.tagName.toLowerCase(),
+    aria_label: trim(el.getAttribute('aria-label'), 60),
+    title: trim(el.getAttribute('title'), 60),
+    text: trim(el.innerText, 40),
+    icon: trim(el.querySelector('mat-icon')?.getAttribute('fonticon'), 30),
+    classes: trim(el.className, 80),
+    test_id: trim(el.getAttribute('data-test-id') || el.getAttribute('data-testid'), 40),
+    visible: visible(el),
+    disabled: !!el.disabled || el.getAttribute('aria-disabled') === 'true',
+  }));
+
+  const customTags = {};
+  document.querySelectorAll('*').forEach((el) => {
+    const tag = el.tagName.toLowerCase();
+    if (tag.includes('-')) customTags[tag] = (customTags[tag] || 0) + 1;
+  });
+
+  const images = Array.from(document.images).slice(0, 40).map((img) => {
+    let parent = img.parentElement, custom = '';
+    while (parent && !custom) {
+      if (parent.tagName.toLowerCase().includes('-')) custom = parent.tagName.toLowerCase();
+      parent = parent.parentElement;
+    }
+    return {
+      src_prefix: trim(img.src, 80),
+      alt: trim(img.alt, 40),
+      natural: [img.naturalWidth, img.naturalHeight],
+      displayed: [Math.round(img.width), Math.round(img.height)],
+      custom_ancestor: custom,
+    };
+  });
+
+  const editables = Array.from(
+    document.querySelectorAll("[contenteditable='true'], textarea")
+  ).slice(0, 10).map((el) => ({
+    tag: el.tagName.toLowerCase(),
+    role: trim(el.getAttribute('role'), 20),
+    aria_label: trim(el.getAttribute('aria-label'), 60),
+    classes: trim(el.className, 80),
+    parent_tag: el.parentElement ? el.parentElement.tagName.toLowerCase() : '',
+  }));
+
+  return { buttons, custom_tags: customTags, images, editables,
+           body_text_tail: trim(document.body.innerText.slice(-600), 600) };
+}
+"""
+
+
 class GeminiBrowser:
     """Owns the browser session and all interaction with the Gemini page."""
 
@@ -72,6 +223,7 @@ class GeminiBrowser:
         self._playwright: Any = None
         self.context: Any = None
         self.page: Any = None
+        self._baseline_image_srcs: list[str] = []
 
     # ------------------------------------------------------------------ setup
     async def start(self) -> None:
@@ -254,8 +406,29 @@ class GeminiBrowser:
             await self.open_gemini()
             return False
 
+    async def _element_from_js(self, script: str, *args: Any) -> Any | None:
+        """Runs a heuristic script in the page and returns the element it picked."""
+        if self.page is None:
+            return None
+        try:
+            handle = await self.page.evaluate_handle(script, *args)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Heuristic script failed: %s", exc)
+            return None
+        element = handle.as_element()
+        if element is None:
+            await handle.dispose()
+        return element
+
+    async def _image_srcs(self) -> list[str]:
+        try:
+            return list(await self.page.evaluate(_JS_IMAGE_SRCS))
+        except Exception:  # noqa: BLE001
+            return []
+
     async def send_prompt(self, prompt: str) -> None:
         """Types the prompt into the composer and submits it."""
+        self._baseline_image_srcs = await self._image_srcs()
         box = await self._resolve_or_fail("prompt_input",
                                           timeout_ms=self.config.timeout("prompt_submit_ms"))
         await box.click()
@@ -268,27 +441,43 @@ class GeminiBrowser:
                     await self.page.keyboard.press("Shift+Enter")
                 await self.page.keyboard.insert_text(line)
 
+        # The send control usually only appears once the composer has text, so it
+        # is looked up *after* typing — first by selector, then by page shape.
         send_button = await self._resolve("send_button", timeout_ms=6000)
+        source = "selector"
+        if send_button is None:
+            send_button = await self._element_from_js(_JS_FIND_SEND)
+            source = "heuristic"
         if send_button is not None:
             try:
                 await send_button.click()
-                log.debug("Prompt submitted with the send button.")
+                log.debug("Prompt submitted with the send button (%s).", source)
                 return
             except Exception as exc:  # noqa: BLE001
                 log.debug("Send button click failed (%s); pressing Enter.", exc)
+        log.debug("No send button found; submitting with Enter.")
         await self.page.keyboard.press("Enter")
 
     async def _latest_response(self) -> Any | None:
         return await self._resolve("response_container", timeout_ms=8000, last=True)
 
     async def _response_text(self) -> str:
+        """Text of the latest answer, falling back to the tail of the page body.
+
+        The fallback matters: rate-limit and refusal notices must still be seen
+        even when `response_container` matches nothing on a redesigned page.
+        """
         container = await self._latest_response()
-        if container is None:
-            return ""
+        if container is not None:
+            try:
+                return (await container.inner_text())[:4000]
+            except Exception:  # noqa: BLE001 - node replaced mid-read
+                pass
         try:
-            return (await container.inner_text())[:4000]
+            body = await self.page.evaluate("() => document.body.innerText")
         except Exception:  # noqa: BLE001
             return ""
+        return str(body)[-4000:]
 
     async def _check_page_state(self, text: str) -> None:
         lowered = text.lower()
@@ -329,6 +518,11 @@ class GeminiBrowser:
                                         timeout_ms=2000, last=True)
             if image is None:
                 image = await self._resolve("generated_image", timeout_ms=2000, last=True)
+            if image is None:
+                # No selector matched: fall back to page shape — the largest
+                # image that was not on the page before the prompt was sent.
+                image = await self._element_from_js(
+                    _JS_FIND_IMAGE, self._baseline_image_srcs)
 
             if image is not None:
                 try:
@@ -369,6 +563,12 @@ class GeminiBrowser:
                     button = await self._resolve("image_download_button", timeout_ms=4000)
                 except Exception:  # noqa: BLE001
                     button = None
+        if button is None:
+            try:
+                image_src = await image_element.get_attribute("src")
+            except Exception:  # noqa: BLE001
+                image_src = None
+            button = await self._element_from_js(_JS_FIND_DOWNLOAD, image_src)
         return await self.downloader.capture(
             self.page, self.context, image_element, stem, download_button=button
         )
@@ -409,29 +609,108 @@ class GeminiBrowser:
             log.debug("Could not save diagnostics: %s", exc)
             return None
 
-    async def inspect(self) -> dict[str, Any]:
-        """Reports which selector candidates actually resolve on the live page.
+    # Which page state each hook can even exist in. Gemini hides the send
+    # button until the composer has text, and none of the response hooks exist
+    # before an answer is on screen — so probing them on a fresh page reports a
+    # miss that means nothing.
+    PHASE_OF_KEY: dict[str, str] = {
+        "logged_in_marker": "idle",
+        "prompt_input": "idle",
+        "new_chat_button": "idle",
+        "captcha_marker": "idle",
+        "send_button": "composer_filled",
+        "stop_button": "generating",
+        "response_container": "after_response",
+        "response_complete_marker": "after_response",
+        "generated_image": "after_response",
+        "image_download_button": "after_response",
+        "image_more_options_button": "after_response",
+    }
 
-        This is how you adapt to a Gemini UI change: run `--mode inspect`, see
-        which hooks are missing, and add a working candidate to selectors.json.
-        """
-        keys: Sequence[str] = [
-            "logged_in_marker", "prompt_input", "send_button", "new_chat_button",
-            "stop_button", "response_container", "response_complete_marker",
-            "generated_image", "image_download_button", "image_more_options_button",
-            "captcha_marker",
-        ]
-        report: dict[str, Any] = {}
+    async def _probe_keys(self, keys: Sequence[str]) -> dict[str, Any]:
+        findings: dict[str, Any] = {}
         for key in keys:
-            findings = []
+            entries = []
             for spec in self.config.selector(key):
                 try:
                     locator = self._locator_from_spec(spec)
                     count = await locator.count()
                     visible = bool(count) and await locator.first.is_visible()
                 except Exception as exc:  # noqa: BLE001
-                    findings.append({"spec": spec, "error": str(exc)[:120]})
+                    entries.append({"spec": spec, "error": str(exc)[:120]})
                     continue
-                findings.append({"spec": spec, "count": count, "visible": visible})
-            report[key] = findings
+                entries.append({"spec": spec, "count": count, "visible": visible})
+            findings[key] = entries
+        return findings
+
+    async def dom_dump(self) -> dict[str, Any]:
+        """Snapshot of the real controls on the page, by shape not by name.
+
+        This is the honest way to adapt to a UI change: instead of guessing at
+        selectors, read what the page actually contains — every visible button
+        with its aria-label, every custom element tag, every image with its real
+        size — and write selectors from that.
+        """
+        try:
+            return dict(await self.page.evaluate(_JS_DOM_DUMP))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("DOM dump failed: %s", exc)
+            return {}
+
+    async def inspect(self, probe_prompt: str | None = None) -> dict[str, Any]:
+        """Reports which selector candidates resolve, per page state.
+
+        Three states are probed, because a hook that cannot exist yet must not
+        be reported as broken:
+          idle            — a fresh chat screen,
+          composer_filled — after text is typed (this is when send appears),
+          after_response  — only with `probe_prompt`, which sends one real
+                            prompt and waits for the answer.
+        """
+        report: dict[str, Any] = {
+            "phases": {}, "expected_phase": dict(self.PHASE_OF_KEY),
+            "probe_ran": False, "dom_dump": {},
+        }
+        all_keys = list(self.PHASE_OF_KEY)
+
+        report["phases"]["idle"] = await self._probe_keys(all_keys)
+
+        composer = await self._resolve("prompt_input", timeout_ms=8000)
+        if composer is not None:
+            try:
+                await composer.click()
+                await composer.fill("hello")
+                await self.page.wait_for_timeout(600)
+                report["phases"]["composer_filled"] = await self._probe_keys(
+                    ["send_button", "prompt_input"])
+                heuristic = await self._element_from_js(_JS_FIND_SEND)
+                report["heuristic_send_button"] = (
+                    await heuristic.get_attribute("aria-label") if heuristic else None
+                ) or bool(heuristic)
+                # Dump the DOM while the send control is on screen — a dump of an
+                # idle page hides exactly the control we need to identify.
+                report["dom_dump"] = await self.dom_dump()
+                await composer.fill("")
+            except Exception as exc:  # noqa: BLE001
+                log.debug("Could not probe the filled-composer state: %s", exc)
+
+        if probe_prompt:
+            log.info("Sending one probe prompt to inspect the answer state…")
+            await self.send_prompt(probe_prompt)
+            # The stop control exists only *while* the answer is streaming, so it
+            # is probed immediately after submitting, not after the image lands.
+            report["phases"]["generating"] = await self._probe_keys(
+                ["stop_button", "loading_indicator", "response_container"])
+            try:
+                await self.wait_for_image()
+            except BrowserError as exc:
+                log.warning("Probe did not produce an image (%s); "
+                            "inspecting whatever is on screen.", exc)
+            await self.page.wait_for_timeout(1500)
+            report["phases"]["after_response"] = await self._probe_keys(all_keys)
+            report["probe_ran"] = True
+            report["dom_dump"] = await self.dom_dump()
+
+        if not report["dom_dump"]:
+            report["dom_dump"] = await self.dom_dump()
         return report

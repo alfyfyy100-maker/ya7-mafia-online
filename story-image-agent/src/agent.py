@@ -321,25 +321,94 @@ class StoryImageAgent:
         story = self._require_story()
         return self.checkpoint.format_summary([p.index for p in story.parts])
 
-    async def inspect_ui(self) -> str:
-        """Opens Gemini and reports which selector candidates resolve right now."""
+    async def inspect_ui(self, probe: bool = False) -> str:
+        """Opens Gemini and reports which selector candidates resolve right now.
+
+        With `probe=True` the agent also sends one real prompt, so the hooks that
+        only exist once an answer is on screen can be checked too.
+        """
+        probe_prompt = None
+        if probe:
+            probe_prompt = (
+                "Create one simple illustrated image: a single closed wooden door "
+                "in an empty room, warm side light, no text in the image."
+            )
+
         browser = GeminiBrowser(self.config, self.downloader)
         try:
             await browser.start()
             await browser.ensure_logged_in()
-            report = await browser.inspect()
+            report = await browser.inspect(probe_prompt=probe_prompt)
         finally:
             await browser.close()
 
         out_path = self.config.path("diagnostics_dir") / "selector_report.json"
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        return self._format_selector_report(report, out_path)
+
+    @staticmethod
+    def _format_selector_report(report: dict[str, Any], out_path: Path) -> str:
+        phases: dict[str, Any] = report.get("phases", {})
+        expected: dict[str, str] = report.get("expected_phase", {})
+        probe_ran = bool(report.get("probe_ran"))
+
+        optional_keys = {"new_chat_button", "response_complete_marker",
+                         "image_more_options_button", "loading_indicator"}
 
         lines = ["Selector report", "---------------"]
-        for key, findings in report.items():
+        for key, phase in expected.items():
+            findings = None
+            for candidate_phase in ("after_response", "generating",
+                                    "composer_filled", "idle"):
+                if key in phases.get(candidate_phase, {}):
+                    findings = phases[candidate_phase][key]
+                    if any(f.get("count") for f in findings):
+                        break
+            findings = findings or []
             hits = [f for f in findings if f.get("count")]
-            status = "OK " if hits else "MISS"
-            detail = hits[0]["spec"] if hits else "no candidate matched"
-            lines.append(f"  [{status}] {key}: {detail}")
-        lines.append(f"\nFull report: {out_path}")
+
+            if key == "captcha_marker":
+                status, note = ("OK  ", "none on screen — no security check")
+                if hits:
+                    status, note = ("STOP", "a CAPTCHA / security check is showing; "
+                                            "solve it manually in the browser")
+            elif hits:
+                status, note = "OK  ", hits[0]["spec"]
+            elif phase in ("after_response", "generating") and not probe_ran:
+                status, note = "n/a ", ("only exists while/after an answer is on screen "
+                                        "— re-run with --probe to check it")
+            elif key in optional_keys:
+                status, note = "opt ", ("optional hook — the agent has a fallback "
+                                        "and works without it")
+            elif phase == "composer_filled" and "composer_filled" not in phases:
+                status, note = "n/a ", "could not type into the composer to check"
+            else:
+                status, note = "MISS", "no candidate matched"
+            lines.append(f"  [{status}] {key}: {note}")
+
+        heuristic = report.get("heuristic_send_button")
+        if heuristic:
+            lines.append(f"\n  Heuristic send control found: {heuristic}")
+
+        dump = report.get("dom_dump", {})
+        if dump:
+            buttons = [b for b in dump.get("buttons", []) if b.get("visible")]
+            lines += [
+                "",
+                "Live DOM (what the page really contains):",
+                f"  visible buttons  : {len(buttons)}",
+                "  custom elements  : "
+                + (", ".join(sorted(dump.get("custom_tags", {}))[:12]) or "—"),
+                f"  images           : {len(dump.get('images', []))}",
+            ]
+            for button in buttons[:12]:
+                label = button.get("aria_label") or button.get("title") \
+                    or button.get("text") or button.get("icon") or "(no label)"
+                lines.append(f"    · {button['tag']} — {label}")
+
+        if not probe_ran:
+            lines.append("\nTip: `--mode inspect --probe` sends one real prompt so the "
+                         "answer-state hooks can be checked too.")
+        lines.append(f"\nFull report (send this file if a hook is MISS): {out_path}")
         return "\n".join(lines)

@@ -63,6 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="run the browser headless (not recommended: sign-in is manual)")
     parser.add_argument("--config", type=Path, help="path to config.json")
     parser.add_argument("--story", type=Path, help="path to the story file (overrides config)")
+    parser.add_argument("--probe", action="store_true",
+                        help="inspect mode: also send one real prompt so the hooks that "
+                             "only exist after an answer can be checked")
     parser.add_argument("--reset", action="store_true",
                         help="clear the checkpoint before running")
     return parser
@@ -169,7 +172,8 @@ def interactive(agent: StoryImageAgent, args: argparse.Namespace) -> int:
         elif choice == "6":
             print(agent.progress_report())
         elif choice == "7":
-            print(run_async(agent.inspect_ui()))
+            answer = input("Send one real prompt to also check the answer state? [y/N]: ")
+            print(run_async(agent.inspect_ui(probe=answer.strip().lower().startswith("y"))))
         else:
             print("Unknown option.")
 
@@ -200,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
             print(agent.progress_report())
             return 0
         if args.mode == "inspect":
-            print(run_async(agent.inspect_ui()))
+            print(run_async(agent.inspect_ui(probe=args.probe)))
             return 0
         return interactive(agent, args)
     except StoryParseError as exc:

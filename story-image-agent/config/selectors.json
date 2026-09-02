@@ -5,7 +5,13 @@
     "and uses the first one that actually resolves to a visible element on the page.",
     "Locator kinds: 'role' (role + name), 'label', 'placeholder', 'testid', 'text', 'css'.",
     "'name'/'text' values are matched case-insensitively as substrings (Playwright regex),",
-    "so English and Arabic UI variants can be listed side by side."
+    "so English and Arabic UI variants can be listed side by side.",
+    "Page state matters when a hook seems missing: 'send_button' normally appears only after",
+    "text is typed into the composer, and every response hook (stop_button, response_container,",
+    "response_complete_marker, generated_image, image_download_button, image_more_options_button)",
+    "exists only while/after an answer is on screen. Run '--mode inspect --probe' to check those.",
+    "If no candidate matches, the agent falls back to DOM heuristics (the button beside the",
+    "composer, the large image that appeared after sending), so a rename degrades speed, not the run."
   ],
   "prompt_input": [
     {
@@ -65,6 +71,30 @@
     {
       "kind": "css",
       "value": "button:has(mat-icon[fonticon='send'])"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='إرسال']"
+    },
+    {
+      "kind": "css",
+      "value": "button[type='submit']"
+    },
+    {
+      "kind": "css",
+      "value": "[data-test-id*='send' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button[class*='send' i]"
+    },
+    {
+      "kind": "css",
+      "value": "[role='button'][aria-label*='Send' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button:has(svg[class*='send' i])"
     }
   ],
   "new_chat_button": [
@@ -114,6 +144,18 @@
     {
       "kind": "css",
       "value": "button:has(mat-icon[fonticon='stop'])"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='Cancel' i]"
+    },
+    {
+      "kind": "css",
+      "value": "[data-test-id*='stop' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button[class*='stop' i]"
     }
   ],
   "loading_indicator": [
@@ -146,6 +188,26 @@
     {
       "kind": "css",
       "value": "[role='article']"
+    },
+    {
+      "kind": "css",
+      "value": "[id^='model-response']"
+    },
+    {
+      "kind": "css",
+      "value": "[class*='model-response' i]"
+    },
+    {
+      "kind": "css",
+      "value": "[class*='response-container' i]"
+    },
+    {
+      "kind": "css",
+      "value": "[data-message-author-role='model']"
+    },
+    {
+      "kind": "css",
+      "value": "[class*='conversation-turn' i]"
     }
   ],
   "response_complete_marker": [
@@ -166,6 +228,22 @@
     {
       "kind": "css",
       "value": "button[aria-label*='Good response' i]"
+    },
+    {
+      "kind": "css",
+      "value": "[data-test-id*='copy' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='Share' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='Like' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='إعجاب']"
     }
   ],
   "generated_image": [
@@ -196,6 +274,26 @@
     {
       "kind": "css",
       "value": "model-response img"
+    },
+    {
+      "kind": "css",
+      "value": "img[src*='lh3.google']"
+    },
+    {
+      "kind": "css",
+      "value": "[class*='generated' i] img"
+    },
+    {
+      "kind": "css",
+      "value": "[data-test-id*='image' i] img"
+    },
+    {
+      "kind": "css",
+      "value": "img[alt*='image' i]"
+    },
+    {
+      "kind": "css",
+      "value": "img[alt*='صورة']"
     }
   ],
   "image_download_button": [
@@ -221,6 +319,22 @@
     {
       "kind": "css",
       "value": "a[download]"
+    },
+    {
+      "kind": "css",
+      "value": "[data-test-id*='download' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='Save' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='حفظ']"
+    },
+    {
+      "kind": "css",
+      "value": "a[href*='googleusercontent'][download]"
     }
   ],
   "image_more_options_button": [
@@ -237,6 +351,27 @@
     {
       "kind": "css",
       "value": "button[aria-label*='More' i]"
+    },
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "more"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='options' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='خيارات']"
+    },
+    {
+      "kind": "css",
+      "value": "button:has(mat-icon[fonticon='more_vert'])"
+    },
+    {
+      "kind": "css",
+      "value": "[data-test-id*='more' i]"
     }
   ],
   "logged_in_marker": [

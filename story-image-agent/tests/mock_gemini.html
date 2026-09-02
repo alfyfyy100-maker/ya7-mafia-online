@@ -1,59 +1,118 @@
 <!doctype html>
 <!--
   A local stand-in for the Gemini chat page, used to test the browser layer
-  without touching Google. It deliberately mirrors the DOM shapes that
-  config/selectors.json targets (ql-editor composer, send-button,
-  <model-response>, a stop button while generating, an image + download link),
-  so the tests exercise the real selector file rather than a fake one.
+  without touching Google.
+
+  Two flavours:
+   * UI "known"   — mirrors the DOM shapes config/selectors.json targets
+                    (ql-editor composer, send-button, <model-response>, a stop
+                    button while generating, an image + download link).
+   * UI "unknown" — a deliberately renamed interface where NOTHING in
+                    selectors.json matches, to prove the DOM heuristics still
+                    find the composer's send control and the generated image.
+
+  In both flavours the send control only appears once the composer has text,
+  which is how the real page behaves and why probing an empty page reports a
+  meaningless miss.
 -->
 <html lang="en">
-<head><meta charset="utf-8"><title>Mock Gemini</title></head>
+<head>
+  <meta charset="utf-8">
+  <title>Mock Gemini</title>
+  <style>
+    body { font-family: sans-serif; margin: 16px; }
+    .composer-row { display: flex; align-items: center; gap: 8px; margin-top: 24px; }
+    .editor { border: 1px solid #999; padding: 8px; min-width: 320px; min-height: 32px; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
 <body>
-  <button aria-label="New chat">New chat</button>
+  <div id="top-bar"></div>
   <div id="conversation"></div>
-
-  <rich-textarea>
-    <div class="ql-editor" contenteditable="true" role="textbox"
-         aria-label="Enter a prompt here"></div>
-  </rich-textarea>
-  <button class="send-button" aria-label="Send message">Send</button>
+  <div class="composer-row" id="composer-row"></div>
 
   <script>
     const IMAGE = "__IMAGE_DATA_URI__";
-    const MODE = "__MODE__";          // "image" | "rate_limit" | "refusal"
-    const conversation = document.getElementById("conversation");
+    const MODE = "__MODE__";   // "image" | "rate_limit" | "refusal"
+    const UI = "__UI__";       // "known" | "unknown"
 
-    document.querySelector(".send-button").addEventListener("click", () => {
-      const editor = document.querySelector(".ql-editor");
+    const conversation = document.getElementById("conversation");
+    const composerRow = document.getElementById("composer-row");
+    const topBar = document.getElementById("top-bar");
+
+    // --- build the composer -------------------------------------------------
+    let editor, sendButton;
+    if (UI === "known") {
+      topBar.innerHTML = '<a href="#" role="link" aria-label="New chat">New chat</a>';
+      const wrapper = document.createElement("rich-textarea");
+      wrapper.innerHTML = '<div class="ql-editor editor" contenteditable="true" ' +
+                          'role="textbox" aria-label="Enter a prompt here"></div>';
+      composerRow.appendChild(wrapper);
+      editor = wrapper.querySelector(".ql-editor");
+
+      sendButton = document.createElement("button");
+      sendButton.className = "send-button";
+      sendButton.setAttribute("aria-label", "Send message");
+      sendButton.textContent = "Send";
+    } else {
+      const wrapper = document.createElement("div");
+      wrapper.innerHTML = '<div class="editor" contenteditable="true" ' +
+                          'role="textbox"></div>';
+      composerRow.appendChild(wrapper);
+      editor = wrapper.querySelector(".editor");
+
+      // No recognisable label, class or icon: only position identifies it.
+      sendButton = document.createElement("button");
+      sendButton.className = "composer-action";
+      sendButton.textContent = "→";
+    }
+    sendButton.hidden = true;              // appears only once there is text
+    composerRow.appendChild(sendButton);
+
+    editor.addEventListener("input", () => {
+      sendButton.hidden = editor.innerText.trim().length === 0;
+    });
+
+    // --- respond to a submitted prompt --------------------------------------
+    const makeTurn = () => {
+      const turn = document.createElement(UI === "known" ? "model-response" : "zz-turn");
+      turn.style.display = "block";
+      conversation.appendChild(turn);
+      return turn;
+    };
+
+    const makeStop = (turn) => {
+      const stop = document.createElement("button");
+      if (UI === "known") {
+        stop.setAttribute("aria-label", "Stop response");
+        stop.textContent = "Stop";
+      } else {
+        stop.className = "busy-indicator";
+        stop.textContent = "…";
+      }
+      turn.appendChild(stop);
+      return stop;
+    };
+
+    sendButton.addEventListener("click", () => {
       const promptText = editor.innerText.trim();
       if (!promptText) { return; }
       editor.innerText = "";
+      sendButton.hidden = true;
 
-      const turn = document.createElement("model-response");
-      turn.innerHTML = '<p class="prompt-echo"></p>';
-      turn.querySelector(".prompt-echo").textContent = promptText.slice(0, 80);
-      conversation.appendChild(turn);
+      const turn = makeTurn();
+      const echo = document.createElement("p");
+      echo.textContent = promptText.slice(0, 80);
+      turn.appendChild(echo);
+      const stop = makeStop(turn);
 
-      const stop = document.createElement("button");
-      stop.setAttribute("aria-label", "Stop response");
-      stop.textContent = "Stop";
-      turn.appendChild(stop);
-
-      if (MODE === "rate_limit") {
+      if (MODE === "rate_limit" || MODE === "refusal") {
         setTimeout(() => {
           stop.remove();
           const notice = document.createElement("p");
-          notice.textContent = "You've reached your limit for image generation.";
-          turn.appendChild(notice);
-        }, 300);
-        return;
-      }
-
-      if (MODE === "refusal") {
-        setTimeout(() => {
-          stop.remove();
-          const notice = document.createElement("p");
-          notice.textContent = "Sorry, I can't generate that image.";
+          notice.textContent = MODE === "rate_limit"
+            ? "You've reached your limit for image generation."
+            : "Sorry, I can't generate that image.";
           turn.appendChild(notice);
         }, 300);
         return;
@@ -63,22 +122,24 @@
       // the agent must wait for the src to stop changing.
       const img = document.createElement("img");
       img.src = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
-      img.alt = "generated image";
+      if (UI === "known") { img.alt = "generated image"; }
       turn.appendChild(img);
 
       setTimeout(() => { img.src = IMAGE; }, 400);
       setTimeout(() => {
         stop.remove();
-        const link = document.createElement("a");
-        link.setAttribute("download", "image.png");
-        link.setAttribute("aria-label", "Download image");
-        link.href = IMAGE;
-        link.textContent = "Download";
-        turn.appendChild(link);
-        const copy = document.createElement("button");
-        copy.setAttribute("aria-label", "Copy response");
-        copy.textContent = "Copy";
-        turn.appendChild(copy);
+        if (UI === "known") {
+          const link = document.createElement("a");
+          link.setAttribute("download", "image.png");
+          link.setAttribute("aria-label", "Download image");
+          link.href = IMAGE;
+          link.textContent = "Download";
+          turn.appendChild(link);
+          const copy = document.createElement("button");
+          copy.setAttribute("aria-label", "Copy response");
+          copy.textContent = "Copy";
+          turn.appendChild(copy);
+        }
       }, 700);
     });
   </script>
