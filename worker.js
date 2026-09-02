@@ -151,7 +151,8 @@ const sanitizeGotConfig = makeConfigSanitizer(
   const VW = 616, VH = 976;
   const L = 68, T = 68, R = 548, B = 908;
   const W = R - L, H = B - T;
-  const BR = 11.5, POCKET = 25;
+  const BR = 12.5, POCKET = 22.5;   // كرة أكبر + جيب أضيق (كان 11.5 / 25)
+  const JAW = BR * 0.5;               // أعمق ما تدخله الكرة خلف خط البانوة
   const POCKETS = [
     { x: L, y: T, c: 1 }, { x: R, y: T, c: 1 },
     { x: L, y: (T + B) / 2, c: 0 }, { x: R, y: (T + B) / 2, c: 0 },
@@ -299,7 +300,13 @@ const sanitizeGotConfig = makeConfigSanitizer(
           if (dist(b.x, b.y, POCKETS[p].x, POCKETS[p].y) < POCKET) { pot(S, b); done = true; break; }
         }
         if (done) continue;
-        if (b.x < L - 16 || b.x > R + 16 || b.y < T - 16 || b.y > B + 16) pot(S, b);
+        /* فكّ الجيب: قرب الجيوب نوقف ارتداد البانوة حتى تدخل الكرة بسلاسة،
+           وكانت الكرة التي تتجاوز الخط ولم تسقط تُحسب «ساقطة» لمجرد خروجها —
+           فتختفي بجنب الجيب بلا سبب. الآن ترتد من الفكّ كما في الواقع. */
+        if (b.x < L + JAW) { b.x = L + JAW; if (b.vx < 0) { b.vx = -b.vx * E_RAIL; } }
+        else if (b.x > R - JAW) { b.x = R - JAW; if (b.vx > 0) { b.vx = -b.vx * E_RAIL; } }
+        if (b.y < T + JAW) { b.y = T + JAW; if (b.vy < 0) { b.vy = -b.vy * E_RAIL; } }
+        else if (b.y > B - JAW) { b.y = B - JAW; if (b.vy > 0) { b.vy = -b.vy * E_RAIL; } }
       }
 
       // البانوات
@@ -308,7 +315,7 @@ const sanitizeGotConfig = makeConfigSanitizer(
         if (b.potted || (b.vx === 0 && b.vy === 0)) continue;
         let near = false;
         for (let p = 0; p < POCKETS.length; p++) {
-          if (dist(b.x, b.y, POCKETS[p].x, POCKETS[p].y) < POCKET + BR + 6) { near = true; break; }
+          if (dist(b.x, b.y, POCKETS[p].x, POCKETS[p].y) < POCKET + BR) { near = true; break; }
         }
         if (near) continue;
         let hit = false;
@@ -1419,6 +1426,10 @@ export class MafiaRoom {
     if (!player.seatToken) player.seatToken = newSeatToken();
 
     this.noteAccount(url, player);
+    /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
+       المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
+    const stale0 = this.sockets.get(player.id);
+    if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
@@ -3094,6 +3105,10 @@ export class GotRoom {
     if (!player.seatToken) player.seatToken = newSeatToken();
 
     this.noteAccount(url, player);
+    /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
+       المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
+    const stale0 = this.sockets.get(player.id);
+    if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
@@ -4257,6 +4272,10 @@ export class MawwihRoom {
     }
 
     this.noteAccount(url, player);
+    /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
+       المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
+    const stale0 = this.sockets.get(player.id);
+    if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
@@ -4968,6 +4987,10 @@ export class FatinRoom {
     if (!this.room.hostId || !this.findPlayer(this.room.hostId)) this.room.hostId = player.id;
 
     this.noteAccount(url, player);
+    /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
+       المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
+    const stale0 = this.sockets.get(player.id);
+    if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
@@ -5721,6 +5744,10 @@ export class WalimaRoom {
     if (!player.seatToken) player.seatToken = newSeatToken();
 
     this.noteAccount(url, player);
+    /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
+       المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
+    const stale0 = this.sockets.get(player.id);
+    if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
@@ -6613,6 +6640,10 @@ export class DaqashRoom {
     }
 
     this.noteAccount(url, player);
+    /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
+       المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
+    const stale0 = this.sockets.get(player.id);
+    if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
@@ -8005,6 +8036,10 @@ export class DakhilRoom {
     }
 
     this.noteAccount(url, player);
+    /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
+       المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
+    const stale0 = this.sockets.get(player.id);
+    if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
@@ -8913,6 +8948,10 @@ export class KirmRoom {
     }
 
     this.noteAccount(url, player);
+    /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
+       المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
+    const stale0 = this.sockets.get(player.id);
+    if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     this.resumePhase();
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
@@ -10265,7 +10304,19 @@ export class BilliardRoom {
       if (!this.room.hostId) this.room.hostId = me.id;
     }
 
-    server.serializeAttachment({ id: me.id });
+    /* ── استلام المقعد وجيل الاتصال ──
+       اتصال جديد لنفس المقعد يغلق المقبس السابق فورًا — بلا سؤال عن
+       readyState، فالنصف-مفتوح يكذب. ولكل اتصال رقم جيل (sid): حدث
+       إغلاق متأخر من مقبس أقدم لا يلمس المقعد الحيّ. بدونها كان
+       اللاعب يظهر «منقطعًا» وهو يلعب، ويهاجر عنه المضيف بلا سبب. */
+    me.sid = ((me.sid || 0) + 1) >>> 0;
+    for (const old of this.state.getWebSockets()) {
+      if (old === server) continue;
+      const oa = old.deserializeAttachment() || {};
+      if (oa.id === me.id) { try { old.close(1000, 'takeover'); } catch {} }
+    }
+    server.serializeAttachment({ id: me.id, sid: me.sid });
+    this.migrateHost();
     await this.persist();
 
     this.send(server, {
@@ -10316,6 +10367,8 @@ export class BilliardRoom {
 
     if (m.type === 'start') {
       if (!isHost) return this.send(ws, { type: 'error', message: 'المضيف وحده يبدأ' });
+      // احتياط ثانٍ: لا تبدأ بمقعد منقطع ولو أفلت من مسار الإغلاق
+      this.room.players = this.room.players.filter(q => q.connected !== false);
       const n = this.room.players.length;
       if (n < 2) return this.send(ws, { type: 'error', message: 'نحتاج لاعبَين على الأقل' });
       this.room.seed = (crypto.getRandomValues(new Uint32Array(1))[0] >>> 0) || 1;
@@ -10341,7 +10394,11 @@ export class BilliardRoom {
       this.broadcast({ type: 'shot', seat, vx, vy });
       const res = Ya7Billiard.settle(S);            // ~0.5ms
       if (res.winner !== null) await this.finish(res);
-      else await this.persist();
+      else {
+        const moved = this.skipDisconnected();     // الدور ما يقف على منقطع
+        await this.persist();
+        if (moved) this.broadcast({ type: 'state', state: S });
+      }
       return;
     }
 
@@ -10367,12 +10424,57 @@ export class BilliardRoom {
     }
   }
 
+  /* ── نقل المضيف ──
+     كانت الغرفة تسند hostId مرة واحدة ولا تنقله أبدًا: لو خرج المضيف
+     من الردهة بقي «المضيف» مقعدًا ميتًا، والبدء عنده وحده — فالغرفة
+     تتجمّد ولا أحد يقدر يبدأ. ينتقل لأقدم متصل (الأول في الترتيب). */
+  migrateHost() {
+    const list = this.room.players || [];
+    const host = list.filter(p => p.id === this.room.hostId)[0];
+    if (host && host.connected !== false) return false;
+    const next = list.filter(p => p.connected !== false)[0];
+    if (!next || next.id === this.room.hostId) return false;
+    this.room.hostId = next.id;
+    return true;
+  }
+
+  /* ── تخطّي دور المنقطع ──
+     البلياردو بلا مؤقّت دور: لو انقطع صاحب الدور تقف الطاولة إلى الأبد،
+     ما فيه من ينوب عنه ولا مهلة تنتهي. ننقل الدور لأول متصل بعده. */
+  skipDisconnected() {
+    const S = this.room.S;
+    if (!S || this.room.phase !== 'play' || S.phase === 'over') return false;
+    const list = this.room.players || [];
+    const live = s => { const p = list[s]; return !!p && p.connected !== false; };
+    let any = false;
+    for (let s = 0; s < S.players; s++) if (live(s)) { any = true; break; }
+    if (!any) return false;                       // الكل منقطع: لا تعبث بالدور
+    let moved = false;
+    for (let i = 0; i < S.players && !live(S.turn); i++) {
+      S.turn = (S.turn + 1) % S.players;
+      moved = true;
+    }
+    return moved;
+  }
+
   async webSocketClose(ws) {
     if (!this.room) return;
     const a = ws.deserializeAttachment() || {};
     const p = (this.room.players || []).filter(q => q.id === a.id)[0];
-    if (p) { p.connected = false; await this.persist(); }
+    if (!p) return;
+    if (a.sid && p.sid && a.sid !== p.sid) return;   // إغلاق مقبس أقدم بعد عودة ناجحة
+    p.connected = false;
+    /* في الردهة يُشطب المقعد: كان يبقى «منقطعًا» فيُحسب في عدد اللاعبين
+       عند البدء، فتبدأ المباراة بمقعد شبح يقف عليه الدور بلا صاحب. */
+    if (this.room.phase === 'lobby') {
+      const i = this.room.players.indexOf(p);
+      if (i >= 0) this.room.players.splice(i, 1);
+    }
+    this.migrateHost();
+    const moved = this.skipDisconnected();
+    await this.persist();
     this.pushSeats();
+    if (moved) this.broadcast({ type: 'state', state: this.room.S });
   }
   async webSocketError(ws) { return this.webSocketClose(ws); }
 
@@ -10723,6 +10825,10 @@ export class BtaqatiRoom {
     }
 
     this.noteAccount(url, player);
+    /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
+       المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
+    const stale0 = this.sockets.get(player.id);
+    if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
@@ -13710,7 +13816,18 @@ export class BalootRoom {
       if (!this.room.hostId) this.room.hostId = me.id;
     }
 
-    server.serializeAttachment({ id: me.id });
+    /* استلام المقعد: أغلق أي مقبس أقدم لنفس المقعد فورًا، ورقّم كل
+       اتصال بجيل (sid) يميّزه في حدث الإغلاق المتأخر. كان الحارس
+       يقارن «أول مقبس يطابق المعرّف» — وترتيب getWebSockets غير
+       مضمون، فقد يرجع القديم فيطفئ اتصالًا حيًّا. */
+    me.sid = ((me.sid || 0) + 1) >>> 0;
+    for (const old of this.state.getWebSockets()) {
+      if (old === server) continue;
+      const oa = old.deserializeAttachment() || {};
+      if (oa.id === me.id) { try { old.close(1000, 'takeover'); } catch {} }
+    }
+    server.serializeAttachment({ id: me.id, sid: me.sid });
+    this.migrateHost();
     await this.persist();
 
     this.send(server, {
@@ -13901,7 +14018,11 @@ export class BalootRoom {
     if (m.type === 'start') {
       if (!isHost) return this.send(ws, { type: 'error', message: 'المضيف وحده يبدأ' });
       if (this.room.phase !== 'lobby') return;
-      /* البلوت أربعة مقاعد بالضبط — ما نقص يكمله بوت */
+      /* البلوت أربعة مقاعد بالضبط — ما نقص يكمله بوت.
+         المنقطع لا يحتفظ بمقعده هنا: كان يبدأ بمقعد إنسان غائب تنتظره
+         الطاولة كل دور حتى تنتهي مهلته. البوت يلعب مكانه فورًا. */
+      this.room.players = this.room.players.filter(q => q.connected !== false);
+      if (!this.room.players.some(q => q.id === this.room.hostId)) this.migrateHost();
       const list = this.room.players;
       while (list.length < BAL_MAX) {
         list.push({
@@ -13972,15 +14093,34 @@ export class BalootRoom {
     if (G.phase === 'gameEnd') await this.finish(G);
   }
 
+  /* المضيف ينتقل لأقدم متصل. بدونها: خروج المضيف من الردهة يعني
+     لا أحد يقدر يبدأ — الغرفة حيّة وميّتة في آن. */
+  migrateHost() {
+    const list = this.room.players || [];
+    const host = list.filter(p => p.id === this.room.hostId)[0];
+    if (host && host.connected !== false && !host.isBot) return false;
+    const next = list.filter(p => p.connected !== false && !p.isBot)[0];
+    if (!next || next.id === this.room.hostId) return false;
+    this.room.hostId = next.id;
+    return true;
+  }
+
   async webSocketClose(ws) {
     if (!this.room) return;
     const a = ws.deserializeAttachment() || {};
-    /* حارس الهوية (درس v112): حدث الإغلاق يصل مؤجَّلًا، فلو كان اللاعب
-       قد عاد بسوكِت جديد لا نطفئ اتصاله الحيّ. */
-    const live = this.wsOf(a.id);
-    if (live && live !== ws) return;
     const p = (this.room.players || []).filter(q => q.id === a.id)[0];
-    if (p) { p.connected = false; await this.persist(); }
+    if (!p) return;
+    /* حارس الجيل (درس v112، مصحَّحًا): حدث الإغلاق يصل مؤجَّلًا، فإن كان
+       من مقبس أقدم من الحيّ لا يلمس المقعد. */
+    if (a.sid && p.sid && a.sid !== p.sid) return;
+    p.connected = false;
+    /* في الردهة يُشطب المقعد بدل أن يبقى شبحًا يملأ الطاولة الرباعية */
+    if (this.room.phase === 'lobby') {
+      const i = this.room.players.indexOf(p);
+      if (i >= 0) this.room.players.splice(i, 1);
+    }
+    this.migrateHost();
+    await this.persist();
     this.pushAll();
     /* دوره وهو غائب: قصّر المهلة فلا تتجمّد الطاولة على المنقطع */
     const G = this.g();
