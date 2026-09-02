@@ -1,0 +1,86 @@
+<!doctype html>
+<!--
+  A local stand-in for the Gemini chat page, used to test the browser layer
+  without touching Google. It deliberately mirrors the DOM shapes that
+  config/selectors.json targets (ql-editor composer, send-button,
+  <model-response>, a stop button while generating, an image + download link),
+  so the tests exercise the real selector file rather than a fake one.
+-->
+<html lang="en">
+<head><meta charset="utf-8"><title>Mock Gemini</title></head>
+<body>
+  <button aria-label="New chat">New chat</button>
+  <div id="conversation"></div>
+
+  <rich-textarea>
+    <div class="ql-editor" contenteditable="true" role="textbox"
+         aria-label="Enter a prompt here"></div>
+  </rich-textarea>
+  <button class="send-button" aria-label="Send message">Send</button>
+
+  <script>
+    const IMAGE = "__IMAGE_DATA_URI__";
+    const MODE = "__MODE__";          // "image" | "rate_limit" | "refusal"
+    const conversation = document.getElementById("conversation");
+
+    document.querySelector(".send-button").addEventListener("click", () => {
+      const editor = document.querySelector(".ql-editor");
+      const promptText = editor.innerText.trim();
+      if (!promptText) { return; }
+      editor.innerText = "";
+
+      const turn = document.createElement("model-response");
+      turn.innerHTML = '<p class="prompt-echo"></p>';
+      turn.querySelector(".prompt-echo").textContent = promptText.slice(0, 80);
+      conversation.appendChild(turn);
+
+      const stop = document.createElement("button");
+      stop.setAttribute("aria-label", "Stop response");
+      stop.textContent = "Stop";
+      turn.appendChild(stop);
+
+      if (MODE === "rate_limit") {
+        setTimeout(() => {
+          stop.remove();
+          const notice = document.createElement("p");
+          notice.textContent = "You've reached your limit for image generation.";
+          turn.appendChild(notice);
+        }, 300);
+        return;
+      }
+
+      if (MODE === "refusal") {
+        setTimeout(() => {
+          stop.remove();
+          const notice = document.createElement("p");
+          notice.textContent = "Sorry, I can't generate that image.";
+          turn.appendChild(notice);
+        }, 300);
+        return;
+      }
+
+      // Gemini shows a low-resolution preview before the final asset lands;
+      // the agent must wait for the src to stop changing.
+      const img = document.createElement("img");
+      img.src = "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+      img.alt = "generated image";
+      turn.appendChild(img);
+
+      setTimeout(() => { img.src = IMAGE; }, 400);
+      setTimeout(() => {
+        stop.remove();
+        const link = document.createElement("a");
+        link.setAttribute("download", "image.png");
+        link.setAttribute("aria-label", "Download image");
+        link.href = IMAGE;
+        link.textContent = "Download";
+        turn.appendChild(link);
+        const copy = document.createElement("button");
+        copy.setAttribute("aria-label", "Copy response");
+        copy.textContent = "Copy";
+        turn.appendChild(copy);
+      }, 700);
+    });
+  </script>
+</body>
+</html>

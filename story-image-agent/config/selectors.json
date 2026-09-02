@@ -1,0 +1,315 @@
+{
+  "_comment": [
+    "Every Gemini UI hook lives in this file so a UI change never requires touching Python code.",
+    "Each entry is an ordered list of candidate locators; the browser layer tries them in order",
+    "and uses the first one that actually resolves to a visible element on the page.",
+    "Locator kinds: 'role' (role + name), 'label', 'placeholder', 'testid', 'text', 'css'.",
+    "'name'/'text' values are matched case-insensitively as substrings (Playwright regex),",
+    "so English and Arabic UI variants can be listed side by side."
+  ],
+  "prompt_input": [
+    {
+      "kind": "role",
+      "role": "textbox",
+      "name": "prompt"
+    },
+    {
+      "kind": "role",
+      "role": "textbox",
+      "name": "طلب"
+    },
+    {
+      "kind": "label",
+      "value": "Enter a prompt here"
+    },
+    {
+      "kind": "css",
+      "value": "div.ql-editor[contenteditable='true']"
+    },
+    {
+      "kind": "css",
+      "value": "rich-textarea div[contenteditable='true']"
+    },
+    {
+      "kind": "css",
+      "value": "[contenteditable='true'][role='textbox']"
+    },
+    {
+      "kind": "css",
+      "value": "textarea"
+    }
+  ],
+  "send_button": [
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "send"
+    },
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "إرسال"
+    },
+    {
+      "kind": "label",
+      "value": "Send message"
+    },
+    {
+      "kind": "css",
+      "value": "button.send-button"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='Send' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button:has(mat-icon[fonticon='send'])"
+    }
+  ],
+  "new_chat_button": [
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "new chat"
+    },
+    {
+      "kind": "role",
+      "role": "link",
+      "name": "new chat"
+    },
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "محادثة جديدة"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='New chat' i]"
+    },
+    {
+      "kind": "css",
+      "value": "[data-test-id='new-chat-button']"
+    }
+  ],
+  "stop_button": [
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "stop"
+    },
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "إيقاف"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='Stop' i]"
+    },
+    {
+      "kind": "css",
+      "value": "button.stop-button"
+    },
+    {
+      "kind": "css",
+      "value": "button:has(mat-icon[fonticon='stop'])"
+    }
+  ],
+  "loading_indicator": [
+    {
+      "kind": "css",
+      "value": "model-response .loading-indicator"
+    },
+    {
+      "kind": "css",
+      "value": "[role='progressbar']"
+    },
+    {
+      "kind": "css",
+      "value": ".generating, .thinking-indicator, .response-loading"
+    }
+  ],
+  "response_container": [
+    {
+      "kind": "css",
+      "value": "model-response"
+    },
+    {
+      "kind": "css",
+      "value": "message-content"
+    },
+    {
+      "kind": "css",
+      "value": "[data-response-index]"
+    },
+    {
+      "kind": "css",
+      "value": "[role='article']"
+    }
+  ],
+  "response_complete_marker": [
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "copy"
+    },
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "نسخ"
+    },
+    {
+      "kind": "css",
+      "value": "message-actions button"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='Good response' i]"
+    }
+  ],
+  "generated_image": [
+    {
+      "kind": "css",
+      "value": "model-response img[src*='googleusercontent.com']"
+    },
+    {
+      "kind": "css",
+      "value": "generated-image img"
+    },
+    {
+      "kind": "css",
+      "value": "single-image img"
+    },
+    {
+      "kind": "css",
+      "value": "image-preview img"
+    },
+    {
+      "kind": "css",
+      "value": "model-response img[src^='blob:']"
+    },
+    {
+      "kind": "css",
+      "value": "model-response img[src^='data:image']"
+    },
+    {
+      "kind": "css",
+      "value": "model-response img"
+    }
+  ],
+  "image_download_button": [
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "download"
+    },
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "تنزيل"
+    },
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "تحميل"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='Download' i]"
+    },
+    {
+      "kind": "css",
+      "value": "a[download]"
+    }
+  ],
+  "image_more_options_button": [
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "more options"
+    },
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "خيارات"
+    },
+    {
+      "kind": "css",
+      "value": "button[aria-label*='More' i]"
+    }
+  ],
+  "logged_in_marker": [
+    {
+      "kind": "css",
+      "value": "div.ql-editor[contenteditable='true']"
+    },
+    {
+      "kind": "css",
+      "value": "rich-textarea div[contenteditable='true']"
+    },
+    {
+      "kind": "role",
+      "role": "textbox",
+      "name": "prompt"
+    },
+    {
+      "kind": "css",
+      "value": "[contenteditable='true'][role='textbox']"
+    }
+  ],
+  "login_required_marker": [
+    {
+      "kind": "role",
+      "role": "link",
+      "name": "sign in"
+    },
+    {
+      "kind": "role",
+      "role": "button",
+      "name": "sign in"
+    },
+    {
+      "kind": "role",
+      "role": "link",
+      "name": "تسجيل الدخول"
+    },
+    {
+      "kind": "css",
+      "value": "a[href*='accounts.google.com']"
+    }
+  ],
+  "captcha_marker": [
+    {
+      "kind": "css",
+      "value": "iframe[src*='recaptcha']"
+    },
+    {
+      "kind": "css",
+      "value": "iframe[title*='captcha' i]"
+    },
+    {
+      "kind": "css",
+      "value": "#captcha, .g-recaptcha"
+    }
+  ],
+  "rate_limit_text": [
+    "you've reached your limit",
+    "you have reached your limit",
+    "try again later",
+    "please wait a moment",
+    "too many requests",
+    "rate limit",
+    "quota",
+    "وصلت إلى الحد",
+    "حاول مرة أخرى لاحقًا",
+    "يرجى الانتظار"
+  ],
+  "refusal_text": [
+    "i can't generate",
+    "i cannot generate",
+    "i'm not able to generate",
+    "unable to create that image",
+    "لا أستطيع إنشاء"
+  ]
+}

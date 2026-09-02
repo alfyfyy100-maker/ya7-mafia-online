@@ -1,0 +1,6 @@
+# Runtime
+playwright>=1.44,<2.0        # browser automation (Chrome/Chromium)
+Pillow>=10.0                 # optional: converts JPEG/WEBP results to .png
+
+# Development / tests
+pytest>=8.0

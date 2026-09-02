@@ -1,0 +1,93 @@
+{
+  "paths": {
+    "story_file": "input/story.txt",
+    "output_dir": "output",
+    "images_dir": "output/images",
+    "prompts_dir": "output/prompts",
+    "metadata_dir": "output/metadata",
+    "logs_dir": "output/logs",
+    "diagnostics_dir": "output/logs/diagnostics",
+    "state_file": "output/state.json",
+    "failed_parts_file": "output/failed_parts.json",
+    "character_bible_file": "output/character_bible.json",
+    "browser_profile_dir": ".browser_profile"
+  },
+  "story": {
+    "part_keywords": [
+      "part",
+      "scene",
+      "chapter",
+      "جزء",
+      "الجزء",
+      "مشهد",
+      "المشهد",
+      "فصل",
+      "الفصل",
+      "قسم",
+      "القسم"
+    ],
+    "fallback_chunk_paragraphs": 3,
+    "min_part_chars": 20
+  },
+  "browser": {
+    "channel": "chrome",
+    "fallback_to_chromium": true,
+    "executable_path": "",
+    "headless": false,
+    "gemini_url": "https://gemini.google.com/app",
+    "viewport": {
+      "width": 1440,
+      "height": 900
+    },
+    "slow_mo_ms": 0,
+    "locale": "en-US"
+  },
+  "timeouts": {
+    "page_load_ms": 60000,
+    "login_wait_ms": 600000,
+    "prompt_submit_ms": 30000,
+    "generation_ms": 300000,
+    "generation_poll_ms": 2000,
+    "generation_settle_ms": 4000,
+    "download_ms": 120000
+  },
+  "retry": {
+    "max_retries": 3,
+    "initial_backoff_s": 5,
+    "backoff_multiplier": 2.0,
+    "max_backoff_s": 120
+  },
+  "pacing": {
+    "delay_between_parts_s": 8,
+    "rate_limit_cooldown_s": 900,
+    "on_rate_limit": "pause"
+  },
+  "image": {
+    "format": "png",
+    "filename_pattern": "part_{index:03d}",
+    "min_bytes": 8000
+  },
+  "style_bible": {
+    "name": "Cinematic Illustrated Realism",
+    "medium": "highly detailed digital painting, cinematic illustration",
+    "rendering": "semi-realistic, painterly brushwork, clean edges, rich texture detail",
+    "color_palette": "warm amber and desaturated teal, deep shadows, film-grade color grading",
+    "lighting_style": "dramatic cinematic lighting, soft volumetric light, natural falloff",
+    "camera": "35mm cinematic lens look, shallow depth of field",
+    "aspect_ratio": "16:9",
+    "quality_tags": "high detail, sharp focus, professional composition, consistent character design",
+    "negative": "no text, no captions, no watermarks, no logos, no signatures, no extra limbs, no distorted faces, no collage, no split frames",
+    "extra_notes": ""
+  },
+  "prompt": {
+    "language": "en",
+    "include_negative_section": true,
+    "max_scene_summary_chars": 700,
+    "max_characters_per_prompt": 4
+  },
+  "logging": {
+    "level": "INFO",
+    "console_level": "INFO",
+    "file_name": "agent.log"
+  }
+}

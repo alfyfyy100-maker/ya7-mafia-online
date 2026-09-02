@@ -1,0 +1,27 @@
+# Browser session — contains your Google login. NEVER commit this.
+.browser_profile/
+*.har
+
+# Generated output
+output/images/*
+output/prompts/*
+output/metadata/*
+output/logs/*
+!output/*/.gitkeep
+output/state.json
+output/failed_parts.json
+output/character_bible.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
