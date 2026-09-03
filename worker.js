@@ -838,7 +838,7 @@ function applyRoomCommon(cls, gameKey) {
           const sock = this.sockets && this.sockets.get(target);
           if (sock) {
             try { sock.send(JSON.stringify({ type: 'error', message: 'طردك المضيف من الغرفة' })); } catch {}
-            try { sock.close(); } catch {}
+            try { sock.close(4002, 'kicked'); } catch {}
           }
           if (this.sockets) this.sockets.delete(target);
           const i = list.indexOf(victim);
@@ -5829,7 +5829,7 @@ export class WalimaRoom {
         if (target) {
           this.sendPrivate(tid, { type: 'kicked' });
           const sock = this.sockets.get(tid);
-          if (sock) { try { sock.close(); } catch {} this.sockets.delete(tid); }
+          if (sock) { try { sock.close(4002, 'kicked'); } catch {} this.sockets.delete(tid); }
           this.room.players = this.room.players.filter(x => x.id !== tid);
           await this.persist();
           this.broadcastState();
