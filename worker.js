@@ -733,6 +733,7 @@ function roomNS(env, g) {
        لكن السقوط الافتراضي على مافيا يعني أن أي مسار مشترك يُضاف لاحقًا
        سيصيب الغرفة الخطأ بصمت بدل أن يفشل بوضوح. */
     case 'shifra':   return env.SHIFRA_ROOM;
+    case 'mutarada': return env.HUNT_ROOM;
     default:         return env.MAFIA_ROOM;
   }
 }
@@ -6250,8 +6251,11 @@ function allowSocket(ip) {
 
 /* لودو تعمل بالاستطلاع لا بالسوكِت، فمساراتها كانت بلا أي خنق: تُمسح
    رموز الغرف بالتخمين مجانًا وكل محاولة توقظ Durable Object. الحدّ واسع
-   لأن اللاعب الواحد يستطلع كل ١.٢ ثانية (≈٥٠ طلبًا/دقيقة). */
-const LUDO_HTTP_LIMIT = 400;
+   لأن اللاعب الواحد يستطلع كل ١.٢ ثانية (≈٥٠ طلبًا/دقيقة).
+   ٤٠٠ كانت تكفي غرفة واحدة فقط: مفتاح IPv4 هو العنوان نفسه، وشبكات الجوال
+   هنا خلف NAT مشترك — غرفتان (أو غرفة ومنتظرون في الردهة) من عنوان واحد
+   كانتا تتجاوزانه فيقف اللوح عند الجميع بلا أي مؤشّر. */
+const LUDO_HTTP_LIMIT = 1000;
 const ludoHits = new Map();
 function allowLudoOp(ip) {
   const key = ipKey(ip);
@@ -6399,7 +6403,13 @@ function noteCreate(ip) {
   if (!s) return;
   s.r.n++;
   createHits.set(s.key, s.r);
-  if (createHits.size > 5000) createHits.clear();   // سقف ذاكرة
+  /* سقف ذاكرة: كان clear() يصفّر عدّادات الجميع دفعة واحدة — أي أن ٥٠٠٠
+     بادئة مختلفة (شبكة /48 واحدة) تمسح الحدّ عن كل الناس. نكنس المنتهي
+     ثم الأقدم، كبقية الخوانق. */
+  if (createHits.size > 5000) {
+    for (const [k, v] of createHits) if (s.now - v.t > CREATE_WINDOW_MS) createHits.delete(k);
+    while (createHits.size > 5000) createHits.delete(createHits.keys().next().value);
+  }
 }
 
 // رد موحّد لتجاوز الحدّ: يحمل المهلة عشان العميل يعرض «باقي كذا دقيقة»
@@ -7723,7 +7733,6 @@ export class LudoRoom {
       return J({ code: d.code, seat: 0, names: d.names, token: d.tokens[0] });
     }
     if (path === '/join') {
-      if (d.started) return J({ error: 'اللعبة بدأت' }, 400);
       if (!d.names.length) return J({ error: 'غرفة غير موجودة' }, 404);
       d.tokens = d.tokens || [];
       const want = cleanName(body.name);
@@ -7733,10 +7742,14 @@ export class LudoRoom {
       const t = body.token ? String(body.token) : '';
       const mine = t ? d.tokens.findIndex(x => x && tokenEquals(x, t)) : -1;
       if (mine !== -1) {
-        if (want && d.names[mine] !== want && !d.names.includes(want)) d.names[mine] = want;
+        if (!d.started && want && d.names[mine] !== want && !d.names.includes(want)) d.names[mine] = want;
         await this.save();
-        return J({ seat: mine, names: d.names, token: d.tokens[mine] });
+        return J({ seat: mine, names: d.names, token: d.tokens[mine], started: !!d.started });
       }
+      /* «اللعبة بدأت» كانت تُفحص قبل التوكن، فمن حدّث صفحته أثناء المباراة
+         ما يقدر يرجع لمقعده أبدًا — ودوره يجمّد اللوح على الجميع. الرفض
+         الآن للمقعد الجديد وحده؛ العائد يدخل ويعيد بناء اللوح من السجل. */
+      if (d.started) return J({ error: 'اللعبة بدأت' }, 400);
       if (d.names.length >= LUDO_MAX_PLAYERS) return J({ error: 'الغرفة ممتلئة' }, 400);
       // الاسم المكرر يُميَّز برقم بدل ما يلتبس لاعبان على اللوح
       let nm = want;
@@ -7760,8 +7773,11 @@ export class LudoRoom {
     if (path === '/start') {
       if (!needSeat() || mySeat !== 0) return J({ error: 'المضيف بس يبدأ' }, 403);
       if (d.names.length < 2) return J({ error: 'لازم لاعبين على الأقل' }, 400);
-      d.lieLimit = body.lieLimit === -1 ? -1 : Math.max(0, Number(body.lieLimit ?? 1));
-      d.lies = d.names.map(() => d.lieLimit);
+      /* الكذب أُلغي من اللعبة (العميل يرسل lieLimit=0 ولا يعرض كشفًا ولا
+         نقضًا). كانت القيمة تُؤخذ من جسم المضيف: عميل معدَّل يرسل -1 فيعلن
+         ستّة كل رمية ولا أحد يقدر يكشفه. الخادم يقرّرها الآن. */
+      d.lieLimit = 0;
+      d.lies = d.names.map(() => 0);
       d.started = true;
       await this.save();
       return J({ ok: true });
@@ -7778,6 +7794,14 @@ export class LudoRoom {
       if (d.secret != null && d.seat !== mySeat
           && Date.now() - (d.rollAt || 0) < LUDO_ROLL_LOCK_MS) {
         return J({ error: 'مو دورك — فيه رمية معلّقة' }, 403);
+      }
+      /* رمية معلّقة لصاحبها نفسه تُعاد كما هي: كان يقدر يرمي فوقها حتى
+         يعجبه الرقم — بضغطة مكرّرة (إعادة الرسم كل ١.٢ ثانية تعيد بناء زر
+         الرمي مفعّلًا) أو بعميل معدَّل يكرّر /roll حتى تطلع ستّة. */
+      if (d.secret != null && d.seat === mySeat && !d.declared
+          && Date.now() - (d.rollAt || 0) < LUDO_ROLL_LOCK_MS) {
+        return J({ value: d.secret, lieLimit: d.lieLimit,
+                   liesLeft: d.lieLimit === -1 ? -1 : (d.lies[mySeat] ?? 0) });
       }
       d.rollAt = Date.now();
       d.declared = false;
@@ -8862,6 +8886,10 @@ export class KirmRoom {
     if (r.phase !== 'aim') return;
     r.msg = (this.cur() ? this.cur().name : '') + ' تأخّر — انتقل الدور';
     this.nextTurn();
+    /* بلا إعادة التسليح يبقى turnEndsAt في الماضي بلا مؤقّت: أول رسالة أو
+       اتصال بعدها ينادي resumePhase فيطلق مهلة صفرية تتخطّى اللاعب التالي
+       فورًا — أو، إن سكت الجميع، تتجمّد الطاولة على من تأخّر بعده. */
+    this.armTurn();
     await this.persist();
     this.broadcastState();
   }
@@ -8957,6 +8985,19 @@ export class KirmRoom {
     server.addEventListener('message', evt => this.onMessage(player.id, evt));
     server.addEventListener('close', () => this.onClose(player.id, server));
 
+    /* ردهة بلا مضيف متصل: المضيف قفل التبويب وهو وحده فبقي hostId له،
+       ومن يدخل بعده كان يجد «بانتظار المضيف يبدأ…» إلى الأبد. */
+    {
+      const h = this.findPlayer(this.room.hostId);
+      if (!h || !h.connected) {
+        const next = this.room.players.find(q => q.connected);
+        if (next && next.id !== this.room.hostId) {
+          this.room.hostId = next.id;
+          this.broadcast({ type: 'hostChanged', hostId: next.id });
+        }
+      }
+    }
+
     await this.persist();
     this.sendPrivate(player.id, {
       type: 'welcome', playerId: player.id,
@@ -8976,6 +9017,13 @@ export class KirmRoom {
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
+    /* في الردهة يُشطب مقعد المنقطع: كان يبقى connected:false ويُحسب في
+       سقف الأربعة — أربعة دخلوا واثنان خرجوا = «الغرفة ممتلئة» لمن بعدهم.
+       بعد البدء لا يُشطب أحد: دوره ومقعده محفوظان (onStart تصفّيهم). */
+    if (p && this.room.phase === 'lobby') {
+      const gi = this.room.players.indexOf(p);
+      if (gi >= 0) this.room.players.splice(gi, 1);
+    }
     const wasHost = this.room.hostId === playerId;
     const host = this.findPlayer(this.room.hostId);
     if (!host || !host.connected) {
@@ -8989,6 +9037,7 @@ export class KirmRoom {
     if (this.room.phase === 'aim' && this.cur() && this.cur().id === playerId) {
       this.room.msg = (p ? p.name : '') + ' انقطع — انتقل الدور';
       this.nextTurn();
+      this.armTurn();          // نفس علّة turnTimeout: دور جديد بلا مؤقّت
     } else if (this.room.phase === 'placing' && this.room.place
                && this.room.players[this.room.place.i]
                && this.room.players[this.room.place.i].id === playerId) {
@@ -9413,6 +9462,35 @@ const KirmLogic = {
     r.striker && (r.striker.alive = true);
     this.placeStriker();
   },
+  /* ── الطرد: المسار العام (applyRoomCommon) لا يعرف الدور، فطرد صاحب
+     الضربة كان يترك الطاولة تنتظر مهلته كاملة — وبلا مؤقّت أحيانًا لأن
+     sockets.delete يسبق الإغلاق فيرجع onClose من حارسه بلا nextTurn. ── */
+  async kickPlayer(targetId) {
+    const r = this.room;
+    const v = this.findPlayer(targetId);
+    if (!v) return;
+    v.kicked = true; v.connected = false;
+    v.seatToken = 'kicked-' + newSeatToken();
+    const sock = this.sockets.get(targetId);
+    if (sock) {
+      try { sock.send(JSON.stringify({ type: 'error', message: 'طردك المضيف من الغرفة' })); } catch {}
+      try { sock.close(4002, 'kicked'); } catch {}
+    }
+    this.sockets.delete(targetId);
+    if (r.phase === 'lobby' || r.phase === 'over') {
+      const i = r.players.indexOf(v);
+      if (i >= 0) r.players.splice(i, 1);
+    } else if (r.phase === 'aim' && this.cur() && this.cur().id === targetId) {
+      r.msg = v.name + ' طُرد — انتقل الدور';
+      this.nextTurn();
+      this.armTurn();
+    } else if (r.phase === 'placing' && r.place && r.players[r.place.i]
+               && r.players[r.place.i].id === targetId) {
+      await this.skipPlacer(v.name + ' طُرد');
+    }
+    await this.persist();
+    this.broadcastState();
+  },
   checkRoundEnd() {
     const r = this.room;
     const colorMode = this.colorMode();
@@ -9611,12 +9689,21 @@ export default {
       url.searchParams.delete('acc');
       url.searchParams.delete('did');
       if (accTok) {
-        const who = await verifyToken(env, accTok);
+        let who = await verifyToken(env, accTok);
+        const isWs = (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket';
+        const isLudoJoin = /^\/ludo\/room\/[A-Z0-9]{6}\/join$/i.test(url.pathname);
+        /* التوقيع وحده لا يكفي عند مداخل المقاعد: الخروج والحظر وتجديد رمز
+           الاسترجاع كلها ترفع token_ver أو banned في D1، وهذا المسار كان
+           يصدّق التوقيع فقط — فالمحظور والخارج يبقى «متصلًا» عند أصدقائه
+           وتُسجَّل نتائجه للأبد. قراءة واحدة عند الدخول (لا عند استطلاع لودو
+           كل ١.٢ ثانية) مع كاش دقيقة في ذاكرة العامل. */
+        if (who && env.DB && (isWs || isLudoJoin) && !(await accountLive(env, accTok, who))) who = null;
         if (who) {
           url.searchParams.set('did', who.deviceId);
           /* نبضة حضور عند دخول الغرفة فقط — لا على كل طلب: لودو تستطلع
-             كل ١.٢ ثانية، فوضعها هنا بلا شرط = عاصفة كتابات في D1 */
-          if (env.DB && (request.headers.get('Upgrade') || '').toLowerCase() === 'websocket' && ctx && ctx.waitUntil) {
+             كل ١.٢ ثانية، فوضعها هنا بلا شرط = عاصفة كتابات في D1.
+             ومرة في الدقيقة لكل حساب: كانت كل محاولة ترقية تكتب صفًّا. */
+          if (env.DB && isWs && ctx && ctx.waitUntil && memHit(seenHits, who.deviceId, 1)) {
             ctx.waitUntil(touchSeen(env, who.deviceId, Date.now()));
           }
         }
@@ -9651,7 +9738,7 @@ export default {
           DAQASH_ROOM: !!env.DAQASH_ROOM, WALIMA_ROOM: !!env.WALIMA_ROOM,
           LUDO_ROOM: !!env.LUDO_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
           BTAQATI_ROOM: !!env.BTAQATI_ROOM, KIRM_ROOM: !!env.KIRM_ROOM,
-          BILLIARD_ROOM: !!env.BILLIARD_ROOM,
+          BILLIARD_ROOM: !!env.BILLIARD_ROOM, HUNT_ROOM: !!env.HUNT_ROOM,
           BALOOT_ROOM: !!env.BALOOT_ROOM, SHIFRA_ROOM: !!env.SHIFRA_ROOM,
           PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
           CHAT_ROOM: !!env.CHAT_ROOM,
@@ -10094,7 +10181,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v164';
+const WORKER_VERSION = 'v170';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -11498,7 +11585,10 @@ async function rateLimit(env, key, limit, windowMs, failClosed = false) {
 function clientKey(request) {
   const ip = request.headers.get('CF-Connecting-IP') || '';
   if (!ip) return 'noip:' + (request.headers.get('CF-Ray') || Math.random());
-  if (ip.includes(':')) return ip.split(':').slice(0, 4).join(':');
+  /* كان split(':').slice(0,4) — والصيغة المضغوطة (2001:db8::1) تعطي
+     ['2001','db8','','1'] فيصير المفتاح العنوان كله لا بادئة /64، وكل
+     عنوان في الشبكة نفسها يأخذ دلوًا جديدًا. ipKey تطبّع الصيغتين. */
+  if (ip.includes(':')) return ipKey(ip);
   return ip;
 }
 
@@ -12079,6 +12169,12 @@ async function handleAccountInner(request, env, url, ctx) {
     const auth = String((s.keys || {}).auth || '');
     if (!/^https:\/\//.test(endpoint) || !p256dh || !auth)
       return fail(request, 'bad-sub');
+    /* مفتاحا الاشتراك لهما طول ثابت في المعيار (p256dh نقطة غير مضغوطة
+       ٦٥ بايت، auth ١٦ بايت). ما لا يطابق لا يُشفَّر له شيء أصلًا،
+       فلا داعي لتخزينه ولا لمحاولة الدفع إليه. */
+    try {
+      if (ub64u(p256dh).length !== 65 || ub64u(auth).length !== 16) return fail(request, 'bad-sub');
+    } catch { return fail(request, 'bad-sub'); }
     if (!await rateLimit(env, 'push:' + me.device_id, 10, 60 * 60 * 1000, true))
       return fail(request, 'rate');
     try {
@@ -12402,6 +12498,29 @@ async function touchSeen(env, deviceId, now) {
     await env.DB.prepare('UPDATE players SET last_seen = ?2 WHERE device_id = ?1')
       .bind(deviceId, now || Date.now()).run();
   } catch {}
+}
+const seenHits = new Map();          // deviceId → نبضة حضور واحدة في الدقيقة
+
+/* هل ما زال هذا التوكن حيًّا في D1؟ (token_ver مطابق ولا حظر ولا حذف)
+   يُنادى عند فتح مقعد فقط. تعثّر D1 لا يقطع اللعب — نرجع لسلوك التوقيع
+   وحده كما كان، لأن قفل القراءة يعني أن تعثّرًا عابرًا يمنع الجميع. */
+const accLiveCache = new Map();      // token → { ok, t }
+async function accountLive(env, tok, who) {
+  const now = Date.now();
+  const c = accLiveCache.get(tok);
+  if (c && now - c.t < 60000) return c.ok;
+  let ok = true;
+  try {
+    const row = await env.DB.prepare('SELECT token_ver, banned FROM players WHERE device_id = ?1')
+      .bind(who.deviceId).first();
+    ok = !!row && !row.banned && Number(row.token_ver || 1) === who.ver;
+  } catch { ok = true; }
+  accLiveCache.set(tok, { ok, t: now });
+  if (accLiveCache.size > 5000) {
+    for (const [k, v] of accLiveCache) if (now - v.t > 60000) accLiveCache.delete(k);
+    while (accLiveCache.size > 5000) accLiveCache.delete(accLiveCache.keys().next().value);
+  }
+  return ok;
 }
 
 async function friendsOf(env, deviceId) {
@@ -13023,9 +13142,12 @@ async function adminPanelInner(request, env, url, body) {
         LUDO_ROOM: !!env.LUDO_ROOM, DAKHIL_ROOM: !!env.DAKHIL_ROOM,
         BTAQATI_ROOM: !!env.BTAQATI_ROOM, PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
         BALOOT_ROOM: !!env.BALOOT_ROOM, SHIFRA_ROOM: !!env.SHIFRA_ROOM,
+        KIRM_ROOM: !!env.KIRM_ROOM, BILLIARD_ROOM: !!env.BILLIARD_ROOM,
+        HUNT_ROOM: !!env.HUNT_ROOM,
         CHAT_ROOM: !!env.CHAT_ROOM, DB: !!env.DB,
         ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
         ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
+        VAPID_PUBLIC_KEY: !!env.VAPID_PUBLIC_KEY, VAPID_PRIVATE_D: !!env.VAPID_PRIVATE_D,
       },
     });
   }
@@ -13053,8 +13175,10 @@ async function adminPanelInner(request, env, url, body) {
     if (!q) return Response.json({ ok: false, ar: 'اكتب استعلامًا.' });
     if (q.length > 2000) return Response.json({ ok: false, ar: 'الاستعلام طويل.' });
     if (q.includes(';')) return Response.json({ ok: false, ar: 'جملة واحدة فقط.' });
-    if (!/^(select|pragma|with)\b/i.test(q))
-      return Response.json({ ok: false, ar: 'قراءة فقط: ابدأ بـ SELECT أو PRAGMA.' });
+    /* PRAGMA أُزيلت (مؤجَّلة من v165 إلى أول تعديل حقيقي للووركر): بعضها
+       يكتب (journal_mode, user_version…) رغم أنه «قراءة» في الشكل. */
+    if (!/^(select|with)\b/i.test(q))
+      return Response.json({ ok: false, ar: 'قراءة فقط: ابدأ بـ SELECT.' });
     if (/\b(insert|update|delete|drop|alter|create|replace|attach|detach|vacuum|reindex|analyze)\b/i.test(q))
       return Response.json({ ok: false, ar: 'قراءة فقط: ما فيه تعديل من هنا.' });
     const r = await env.DB.prepare(q).all();
