@@ -794,7 +794,7 @@ class MapView {
     for (const c of $$('.dot-core', this.layers.dots)) { c.setAttribute('r', 6 * k); c.setAttribute('stroke-width', 1.5 * k); }
     for (const c of $$('[data-mark=rep]', this.layers.reps)) { c.setAttribute('r', 9 * k); c.setAttribute('stroke-width', 1.2 * k); }
     for (const t of $$('[data-marktext=rep]', this.layers.reps)) { t.setAttribute('font-size', 12 * k); t.setAttribute('dy', 4 * k); t.setAttribute('stroke-width', 0); }
-    for (const t of $$('[data-dotlabel]', this.layers.dots)) { t.setAttribute('font-size', 12 * k); t.setAttribute('dy', -10 * k); t.setAttribute('stroke-width', 3 * k); }
+    for (const t of $$('[data-dotlabel]', this.layers.dots)) { const stacked = +t.parentNode.dataset.k; t.setAttribute('font-size', 12 * k); t.setAttribute('dy', (stacked % 2 ? 22 : -10) * k); t.setAttribute('stroke-width', 3 * k); }   // المتراكبة: فوق ثم تحت
     for (const p of $$('.ring', this.layers.rings)) p.setAttribute('stroke-width', (p.dataset.ring === 'exact' ? 2.5 : 1.2) * k);
     for (const p of $$('.r-out', this.layers.rout)) p.setAttribute('stroke-width', 1.6 * k);
     for (const p of $$('.trail', this.layers.trail)) { p.setAttribute('stroke-width', 2.5 * k); p.setAttribute('stroke-dasharray', `${6 * k} ${4 * k}`); }
