@@ -579,6 +579,23 @@ const RoomCommon = {
     const p = this.room.players.find(q => tokenEquals(q.seatToken, token)) || null;
     return (p && p.kicked) ? null : p;
   },
+
+  /* ── مضيف حيّ عند كل دخول ──
+     نقل المضيف كان يُنادى من الإغلاق وحده. المضيف الذي يقفل التبويب وهو
+     وحده في الردهة يبقى hostId له (لا أحد ينقله إليه)، ومن يدخل بعده
+     يجد «بانتظار المضيف يبدأ…» إلى الأبد. الغرف التي تملك
+     migrateHostIfNeeded تُنادى هي (تبثّ hostChanged بنفسها). */
+  hostAlive() {
+    const r = this.room;
+    if (!r || !Array.isArray(r.players)) return false;
+    if (typeof this.migrateHostIfNeeded === 'function') return !!this.migrateHostIfNeeded();
+    const host = r.players.find(p => p.id === r.hostId);
+    if (host && host.connected && !host.kicked) return false;
+    const next = r.players.find(p => p.connected && !p.isBot && !p.kicked);
+    if (!next || next.id === r.hostId) return false;
+    r.hostId = next.id;
+    return true;
+  },
 };
 
 /* أبجدية كود الغرفة: 31 حرفًا (بلا I و L و O لالتباسها).
@@ -1432,6 +1449,7 @@ export class MafiaRoom {
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
+    this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
@@ -1604,6 +1622,9 @@ export class MafiaRoom {
   async startGame() {
     // بدون هذا الشرط يقدر المضيف يعيد توزيع الأدوار في نص اللعبة
     if (this.room.phase !== 'lobby' && this.room.phase !== 'over') return;
+    /* المنقطع في الردهة لا يأخذ دورًا: كان يُحسب في n ويستلم دورًا (الطبيب
+       مثلًا) لا يلعبه أحد طوال السهرة. البلياردو والبلوت تصفّيانه منذ v168. */
+    this.room.players = this.room.players.filter(p => p.isBot || p.connected);
     const n = this.room.players.length;
     if (n < 4) {
       this.sendPrivate(this.room.hostId, { type: 'error', message: 'أقل عدد للبدء ٤ لاعبين' });
@@ -3111,6 +3132,7 @@ export class GotRoom {
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
+    this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
@@ -3358,6 +3380,8 @@ export class GotRoom {
   async startGame() {
     // بدون هذا الشرط يقدر المضيف يعيد توزيع الأدوار في نص اللعبة
     if (this.room.phase !== 'lobby' && this.room.phase !== 'over') return;
+    /* المنقطع في الردهة لا يأخذ دورًا — نفس تصفية مافيا والبلياردو والبلوت */
+    this.room.players = this.room.players.filter(p => p.isBot || p.connected);
     const n = this.room.players.length;
     if (n < 4) { this.sendPrivate(this.room.hostId, { type:'error', message:'أقل عدد للبدء ٤ لاعبين' }); return; }
     const roles = gotBuildRoles(n, this.room.config);
@@ -4278,6 +4302,7 @@ export class MawwihRoom {
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
+    this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
@@ -4449,6 +4474,8 @@ export class MawwihRoom {
   async startGame() {
     // بدونها يقدر المضيف يعيد اللعبة من الصفر في نص جولة جارية
     if (this.room.phase !== 'lobby' && this.room.phase !== 'over') return;
+    /* المنقطع في الردهة لا يبدأ معنا: كان يبقى مقعدًا صامتًا تنتظره كل جولة */
+    this.room.players = this.room.players.filter(p => p.connected);
     if (this.room.players.length < 3) { this.sendPrivate(this.room.hostId, { type: 'error', message: 'تحتاجون ٣ لاعبين على الأقل' }); return; }
     if (this.room.teams > 0) {
       if (this.room.players.length < this.room.teams) { this.sendPrivate(this.room.hostId, { type: 'error', message: 'اللاعبون أقل من عدد الفرق' }); return; }
@@ -4993,6 +5020,7 @@ export class FatinRoom {
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
+    this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
@@ -5750,6 +5778,7 @@ export class WalimaRoom {
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
+    this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
@@ -6655,6 +6684,7 @@ export class DaqashRoom {
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
+    this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
@@ -8065,6 +8095,7 @@ export class DakhilRoom {
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
+    this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
@@ -10917,6 +10948,7 @@ export class BtaqatiRoom {
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
+    this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
@@ -11148,7 +11180,15 @@ export class BtaqatiRoom {
   nextTurn() {
     const r = this.room;
     const n = r.players.length;
+    /* المنقطع يُتخطّى ما دام غيره حيًّا متصلًا — كانت الجولة تقف عليه إلى
+       الأبد: لا مؤقّت في «خمّن من؟» ولا زر تخطٍّ. لو لم يبقَ متصل، نرجع
+       للدوران على الأحياء كما كان. */
+    let found = false;
     for (let k = 1; k <= n; k++) {
+      const i = (r.turn + k) % n;
+      if (!r.players[i].dead && r.players[i].connected !== false) { r.turn = i; found = true; break; }
+    }
+    if (!found) for (let k = 1; k <= n; k++) {
       const i = (r.turn + k) % n;
       if (!r.players[i].dead) { r.turn = i; break; }
     }
@@ -11219,12 +11259,24 @@ export class BtaqatiRoom {
     this.sockets.delete(playerId);
     if (p) p.connected = false;
     this.state.blockConcurrencyWhile(async () => {
+      const r = this.room;
       // في اللوبي فقط نزيل المنقطع؛ أثناء اللعب نبقيه ليعود بمقعده
-      if (this.room.phase === 'lobby') {
-        this.room.players = this.room.players.filter(x => x.id !== playerId);
-        if (this.room.hostId === playerId && this.room.players.length) {
-          this.room.hostId = this.room.players[0].id;
+      if (r.phase === 'lobby') {
+        r.players = r.players.filter(x => x.id !== playerId);
+      } else if (p) {
+        /* أثناء اللعب: لو كان الدور عليه، أو كان طرفًا في سؤال معلّق،
+           ننقل الدور — كانت الجولة تتجمّد عليه بلا مؤقّت ولا تخطٍّ. */
+        const me = r.players.indexOf(p);
+        if (r.phase === 'play' && me >= 0) {
+          if (r.pending && (r.pending.target === me || r.pending.asker === me)) r.pending = null;
+          if (r.turn === me) { this.nextTurn(); r.note = p.name + ' انقطع — انتقل الدور'; }
         }
+      }
+      /* المضيف ينتقل في أي طور لا في الردهة وحدها: «الجولة التالية» و«إعادة»
+         له وحده، فانقطاعه بعد البدء كان يوقف اللعبة عند نهاية الجولة. */
+      if (r.hostId === playerId) {
+        const next = r.players.find(x => x.connected !== false && x.id !== playerId);
+        if (next) r.hostId = next.id;
       }
       await this.persist();
       this.broadcastState();
@@ -15013,6 +15065,14 @@ export class HuntRoom {
       if (m2 && m2.t === 'hb') {
         try { ws.send('{"t":"hb"}'); } catch {}
         if (seatSweep(this.g, this.sockets)) { this.hostCheck(); this.broadcast(); }
+        /* نبضة اللوبي: الإدراج كان يتجدّد عند الدخول والخروج فقط، ومدخل
+           «الغرف المفتوحة» يسقط بعد ٨ دقائق بلا نبض — فمضيف ينتظر ربع ساعة
+           تختفي غرفته من القائمة وهو ما زال فيها. نبضة العميل كل ٢٥ ثانية
+           تكفي لتجديده مرة كل دقيقتين. */
+        if (this.listed && this.g.phase === 'lobby' && Date.now() - (this._lobbyPing || 0) > 120000) {
+          this._lobbyPing = Date.now();
+          this.lobbySync('ping');
+        }
         return;
       }
       /* خروج معلن: أفضل من انتظار المهلة — المقعد يُشطب في الردهة
