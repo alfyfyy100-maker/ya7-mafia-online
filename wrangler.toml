@@ -2,6 +2,7 @@
 ##  ya7-mafia-online — wrangler.toml  (نسخة v85 كاملة)
 ##  ⚠️ لا تحذف ولا تعدّل وسوم الترحيل v8 / v9 / v10 / v11 — الحذف = خطأ 10074
 ##  الجديد في v85: ربط KIRM_ROOM + وسم الترحيل v12 (لعبة الكِيرَم أونلاين)
+##  الجديد في v171: ربط SQUARES_ROOM + وسم الترحيل v17 (سباق المربعات أونلاين)
 ## ════════════════════════════════════════════════════════════════
 
 name = "ya7-mafia-online"
@@ -80,6 +81,11 @@ class_name = "BalootRoom"
 name = "HUNT_ROOM"
 class_name = "HuntRoom"
 
+# ── جديد في v171: غرفة سباق المربعات ──
+[[durable_objects.bindings]]
+name = "SQUARES_ROOM"
+class_name = "SquaresRoom"
+
 ## ── قاعدة D1 ──
 [[d1_databases]]
 binding = "DB"
@@ -135,6 +141,13 @@ new_sqlite_classes = ["BalootRoom"]
 [[migrations]]
 tag = "v16"
 new_sqlite_classes = ["HuntRoom"]
+
+# ── جديد في v171: سباق المربعات ──
+# v16 محجوز للمطاردة، فسباق المربعات يأخذ v17. الوسوم تُضاف فقط ولا تُعدَّل —
+# تعديل وسم قديم أو تكراره يفشل النشر كله (خطأ 10074).
+[[migrations]]
+tag = "v17"
+new_sqlite_classes = ["SquaresRoom"]
 
 ## ════════════════════════════════════════════════════════════════
 ##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:

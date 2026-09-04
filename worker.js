@@ -751,6 +751,7 @@ function roomNS(env, g) {
        سيصيب الغرفة الخطأ بصمت بدل أن يفشل بوضوح. */
     case 'shifra':   return env.SHIFRA_ROOM;
     case 'mutarada': return env.HUNT_ROOM;
+    case 'squares':  return env.SQUARES_ROOM;
     default:         return env.MAFIA_ROOM;
   }
 }
@@ -9771,6 +9772,7 @@ export default {
           BTAQATI_ROOM: !!env.BTAQATI_ROOM, KIRM_ROOM: !!env.KIRM_ROOM,
           BILLIARD_ROOM: !!env.BILLIARD_ROOM, HUNT_ROOM: !!env.HUNT_ROOM,
           BALOOT_ROOM: !!env.BALOOT_ROOM, SHIFRA_ROOM: !!env.SHIFRA_ROOM,
+          SQUARES_ROOM: !!env.SQUARES_ROOM,
           PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
           CHAT_ROOM: !!env.CHAT_ROOM,
           DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
@@ -10170,10 +10172,10 @@ export default {
       }), origin);
     }
 
-    const match = url.pathname.match(/^\/(baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra|mutarada)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra|mutarada|squares)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='baloot' ? env.BALOOT_ROOM : g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : g==='shifra' ? env.SHIFRA_ROOM : g==='mutarada' ? env.HUNT_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='baloot' ? env.BALOOT_ROOM : g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : g==='shifra' ? env.SHIFRA_ROOM : g==='mutarada' ? env.HUNT_ROOM : g==='squares' ? env.SQUARES_ROOM : env.MAFIA_ROOM;
       if (!gameNS) {
         return withCors(new Response(
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
@@ -10197,7 +10199,7 @@ export default {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، لودو، الشفرة، والمطاردة أونلاين — استوديو يا٧ · /health للفحص',
+      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، لودو، الشفرة، المطاردة، وسباق المربعات أونلاين — استوديو يا٧ · /health للفحص',
       { status: 200 }), origin);
   },
 };
@@ -10212,7 +10214,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v170';
+const WORKER_VERSION = 'v171';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10227,6 +10229,7 @@ const LOBBY_GAMES = {
   btaqati: { name: 'خمّن من؟',      path: '/btaqati/' },
   bilyardo:{ name: 'بلياردو',       path: '/bilyardo/' },
   mutarada:{ name: 'مطاردة الحواري', path: '/mutarada/' },
+  squares: { name: 'سباق المربعات', path: '/squares/' },
 };
 
 /* أسماء كل الألعاب للعرض، لا الأونلاين وحدها: سجل اللاعب يشمل ما لعبه
@@ -10263,6 +10266,7 @@ const GAME_NAMES = {
   'blocked-road': 'الطريق المسدود', guest13: 'الضيف الثالث عشر', juraa: 'جرعة',
   sukoon: 'سُكون', ramad: 'رماد', murawagha: 'مُراوَغة', darbah: 'ضربة', snake: 'أفعى نيون',
   bilyardo: 'بلياردو',
+  squares: 'سباق المربعات',
 };
 
 /* ═══════════════════════ البلياردو (BilliardRoom) ═══════════════════════
@@ -13195,7 +13199,7 @@ async function adminPanelInner(request, env, url, body) {
         BTAQATI_ROOM: !!env.BTAQATI_ROOM, PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
         BALOOT_ROOM: !!env.BALOOT_ROOM, SHIFRA_ROOM: !!env.SHIFRA_ROOM,
         KIRM_ROOM: !!env.KIRM_ROOM, BILLIARD_ROOM: !!env.BILLIARD_ROOM,
-        HUNT_ROOM: !!env.HUNT_ROOM,
+        HUNT_ROOM: !!env.HUNT_ROOM, SQUARES_ROOM: !!env.SQUARES_ROOM,
         CHAT_ROOM: !!env.CHAT_ROOM, DB: !!env.DB,
         ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
         ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
@@ -15598,3 +15602,366 @@ export class HuntRoom {
 }
 
 function huntAr(n) { return String(n).replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]); }
+
+
+/* ══════════════════════ سباق المربعات أونلاين (SquaresRoom) ══════════════════════
+   سباق مربعات تُشاهَد نتيجته: كل لاعب يختار مربعًا من التسعة، والمضيف يبدأ
+   الجولة. السباق نفسه محاكاة حتمية في الصفحة (خطوة ثابتة ١/١٢٠ ث وعشوائية
+   مبذورة)، فيكفي أن يوزّع الخادم **بذرة واحدة** ليشغّل كل جهاز السباق
+   ذاته حرفيًا. ما يمسكه الخادم: المقاعد والألوان والنقاط وبذرة الجولة،
+   والنتيجة الرسمية — يرفعها المضيف (أو أي لاعب إن انقطع المضيف أو تأخّر)،
+   وتُسجَّل في حسابات اللاعبين.
+
+   يتبع نمط المطاردة حرفيًا: الغرفة تُنشأ بأول اتصال WebSocket، وعقد المقعد
+   المشترك (cid/sid/الكنس بالنبضة) هو نفسه، ورسائل العميل: you · state · hb
+   · host · kicked · err.                                                    */
+
+const SQ_MAX_PLAYERS = 9;
+const SQ_COLORS = ['red', 'green', 'blue', 'yellow', 'black', 'white', 'orange', 'purple', 'teal'];
+const SQ_COLOR_AR = { red: 'الأحمر', green: 'الأخضر', blue: 'الأزرق', yellow: 'الأصفر', black: 'الأسود',
+                      white: 'الأبيض', orange: 'البرتقالي', purple: 'البنفسجي', teal: 'التركواز' };
+const SQ_RESULT_FALLBACK_MS = 75000;   // بعدها يُقبل تقرير أي لاعب لا المضيف وحده
+
+export class SquaresRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.GAME = 'squares';
+    this.listed = false;
+    this.sockets = new Map();
+    this.kicked = new Set();
+    this.g = null;
+    this._rate = new Map();
+  }
+
+  allowMsg(playerId) {
+    const now = Date.now();
+    const r = this._rate.get(playerId) || { n: 0, t: now };
+    if (now - r.t > 1000) { r.n = 0; r.t = now; }
+    r.n++;
+    this._rate.set(playerId, r);
+    return r.n <= MSG_PER_SEC;
+  }
+
+  /* الفوز لمن كان مربعه هو الفائز. من بلا حساب يُتجاوَز، وكل حساب مرّة. */
+  async recordRound() {
+    if (!this.env || !this.env.DB || !this.g || !this.g.result) return;
+    const done = new Set();
+    for (const p of this.g.players) {
+      if (!p || !p.did || !p.color || done.has(p.did)) continue;
+      done.add(p.did);
+      try { await recordResult(this.env, p.did, p.color === this.g.result.winner, this.GAME); } catch {}
+    }
+  }
+
+  async lobbySync(op) {
+    if (!this.env || !this.env.PUBLIC_LOBBY || !this.g || !this.g.pub) return;
+    if (op !== 'add' && !this.listed) return;
+    try {
+      const lob = this.env.PUBLIC_LOBBY.get(this.env.PUBLIC_LOBBY.idFromName('global'));
+      const here = this.g.players.filter(p => p.connected !== false).length;
+      await lob.fetch(new Request('https://ya7.internal/lobby/' + op, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Ya7-Internal': '1' },
+        body: JSON.stringify({
+          game: this.GAME, code: this.g.code,
+          host: this.nameOf(this.g.hostId) || 'لاعب',
+          players: Math.max(1, here), max: SQ_MAX_PLAYERS,
+          note: this.g.mode === 'fall' ? 'سقوط حر' : 'معركة السكين',
+        }),
+      }));
+      this.listed = (op !== 'remove');
+    } catch (e) {}
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const m = url.pathname.match(/\/room\/([A-Z0-9]{6})\/ws$/i);
+    const code = m ? m[1].toUpperCase() : '';
+    const name = cleanName(url.searchParams.get('name'));
+    let pid = url.searchParams.get('pid') || null;
+    const tok = url.searchParams.get('tok') || '';
+    const did = url.searchParams.get('did') || '';
+    const cid = seatCid(url.searchParams.get('cid'));
+    const wantsPublic = url.searchParams.get('pub') === '1';
+
+    if (request.headers.get('Upgrade') !== 'websocket')
+      return new Response('expected websocket', { status: 426 });
+
+    const pair = new WebSocketPair();
+    const ws = pair[1];
+    ws.accept();
+
+    const brandNew = !this.g;
+    if (!this.g) this.init(code);
+    if (brandNew) this.g.pub = wantsPublic;
+
+    seatSweep(this.g, this.sockets);
+
+    if ((pid && this.kicked.has(pid)) || (cid && this.kicked.has(cid))) {
+      ws.send(JSON.stringify({ t: 'kicked' }));
+      ws.close(1000);
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
+    let p = seatFind(this.g, pid, tok, cid);
+    if (p) {
+      pid = p.id;
+      p.connected = true;
+      p.quit = false;
+      p.left = 0;
+      p.name = name || p.name;
+      if (cid) p.cid = cid;
+      if (did) p.did = String(did).slice(0, 64);
+    } else {
+      if (this.g.phase === 'race') {
+        ws.send(JSON.stringify({ t: 'err', m: 'الجولة جارية — انتظر نهايتها ثم ادخل.' }));
+        ws.close(1000);
+        return new Response(null, { status: 101, webSocket: pair[0] });
+      }
+      if (this.g.players.length >= SQ_MAX_PLAYERS) {
+        ws.send(JSON.stringify({ t: 'err', m: 'الغرفة ممتلئة — تسعة لاعبين كحد أقصى.' }));
+        ws.close(1000);
+        return new Response(null, { status: 101, webSocket: pair[0] });
+      }
+      pid = crypto.randomUUID();
+      p = this.blankPlayer(pid, uniqueName(this.g, name), did);
+      p.cid = cid || '';
+      this.g.players.push(p);
+      if (!this.g.hostId) this.g.hostId = pid;
+    }
+
+    const sid = (this._sid = (this._sid || 0) + 1);
+    p.sid = sid;
+    p.lastSeen = Date.now();
+    seatTakeover(this.sockets, pid, ws);
+    ws.send(JSON.stringify({ t: 'you', pid, tok: p.tok, pub: !!this.g.pub }));
+    this.hostCheck();
+    this.lobbySync(this.listed ? 'ping' : 'add');
+
+    ws.addEventListener('message', ev => {
+      let m2; try { m2 = JSON.parse(ev.data); } catch { return; }
+      const q0 = this.g.players.find(x => x.id === pid);
+      if (q0) { q0.lastSeen = Date.now(); q0.hb = q0.hb || (m2 && m2.t === 'hb'); }
+      if (m2 && m2.t === 'hb') {
+        try { ws.send('{"t":"hb"}'); } catch {}
+        if (seatSweep(this.g, this.sockets)) { this.hostCheck(); this.broadcast(); }
+        if (this.listed && this.g.phase === 'lobby' && Date.now() - (this._lobbyPing || 0) > 120000) {
+          this._lobbyPing = Date.now();
+          this.lobbySync('ping');
+        }
+        return;
+      }
+      if (m2 && m2.t === 'bye') {
+        if (q0) q0.quit = true;
+        try { ws.close(1000); } catch {}
+        return;
+      }
+      if (!this.allowMsg(pid)) return;
+      try { this.onMsg(pid, m2); }
+      catch (e) { try { ws.send(JSON.stringify({ t: 'err', m: String(e.message || e) })); } catch {} }
+      this.broadcast();
+    });
+    const bye = () => {
+      const q = this.g.players.find(x => x.id === pid);
+      if (!q || q.sid !== sid) return;
+      q.connected = false;
+      q.left = Date.now();
+      q.sid = 0;
+      if (this.sockets.get(pid) === ws) this.sockets.delete(pid);
+      if (this.g.phase === 'lobby' && q.quit) {
+        this.g.players = this.g.players.filter(x => x !== q);
+      }
+      seatSweep(this.g, this.sockets);
+      this.hostCheck();
+      const here = this.g.players.filter(x => x.connected !== false).length;
+      this.lobbySync(here === 0 ? 'remove' : 'ping');
+      this.broadcast();
+    };
+    ws.addEventListener('close', bye);
+    ws.addEventListener('error', bye);
+
+    this.broadcast();
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  blankPlayer(pid, name, did) {
+    return {
+      id: pid, name, connected: true,
+      tok: crypto.randomUUID().replace(/-/g, ''),
+      cid: '', sid: 0, lastSeen: 0, hb: false, quit: false, left: 0,
+      did: did ? String(did).slice(0, 64) : null,
+      color: null, score: 0,
+    };
+  }
+
+  init(code) {
+    this.g = {
+      code,
+      pub: false,
+      hostId: null,
+      players: [],
+      phase: 'lobby',          // lobby | race | over
+      round: 0,
+      mode: 'royale',          // royale | fall
+      map: 0,                  // 0 الأصلية · 1 الحلزون · 2 القاعتان
+      seed: 0,
+      raceAt: 0,
+      result: null,            // { winner, order, by }
+      log: [],
+    };
+  }
+
+  freeColor() {
+    const used = new Set(this.g.players.map(p => p.color).filter(Boolean));
+    const free = SQ_COLORS.filter(c => !used.has(c));
+    return free.length ? free[randInt(free.length)] : null;
+  }
+
+  onMsg(pid, m) {
+    const g = this.g;
+    if (!m || typeof m !== 'object') return;
+    const me = g.players.find(x => x.id === pid);
+    if (!me) return;
+    const isHost = g.hostId === pid;
+    const idle = g.phase === 'lobby' || g.phase === 'over';
+
+    switch (m.t) {
+      case 'pick': {
+        if (!idle) return;
+        if (m.color === null || m.color === '') { me.color = null; return; }
+        const c = typeof m.color === 'string' ? m.color : '';
+        if (!SQ_COLORS.includes(c)) throw new Error('لون غير معروف.');
+        const taken = g.players.find(p => p.color === c && p.id !== pid);
+        if (taken) throw new Error(`${SQ_COLOR_AR[c]} مع ${taken.name}.`);
+        me.color = c;
+        return;
+      }
+
+      case 'opts': {
+        if (!isHost || !idle) return;
+        if (m.mode === 'royale' || m.mode === 'fall') g.mode = m.mode;
+        if (Number.isInteger(m.map)) g.map = Math.max(0, Math.min(2, m.map));
+        return;
+      }
+
+      case 'start': {
+        if (!isHost || !idle) return;
+        const here = g.players.filter(p => p.connected);
+        if (here.length < 2) throw new Error('تحتاجون لاعبَين على الأقل.');
+        /* من لم يختر مربعًا يُعطى واحدًا متاحًا: الجولة ما تنتظر أحدًا */
+        for (const p of here) if (!p.color) p.color = this.freeColor();
+        g.round++;
+        g.seed = randInt(0x7fffffff) + 1;       // عشوائية الخادم، وبذرة واحدة للجميع
+        g.raceAt = Date.now();
+        g.result = null;
+        g.phase = 'race';
+        g.log.unshift(`بدأت الجولة ${g.round}`);
+        this.lobbySync('remove');
+        return;
+      }
+
+      case 'result': {
+        if (g.phase !== 'race') return;
+        if ((m.round | 0) !== g.round) return;
+        const host = g.players.find(p => p.id === g.hostId);
+        const hostGone = !host || !host.connected;
+        const late = Date.now() - g.raceAt > SQ_RESULT_FALLBACK_MS;
+        if (!isHost && !hostGone && !late) return;
+        const winner = typeof m.winner === 'string' && SQ_COLORS.includes(m.winner) ? m.winner : '';
+        if (!winner) throw new Error('نتيجة غير صالحة.');
+        const order = [];
+        for (const c of (Array.isArray(m.order) ? m.order : [])) {
+          if (typeof c === 'string' && SQ_COLORS.includes(c) && !order.includes(c)) order.push(c);
+          if (order.length >= SQ_COLORS.length) break;
+        }
+        if (order[0] !== winner) { const i = order.indexOf(winner); if (i > 0) order.splice(i, 1); order.unshift(winner); }
+        g.result = { winner, order, by: me.name };
+        g.phase = 'over';
+        for (const p of g.players) if (p.color === winner) p.score = (p.score | 0) + 1;
+        g.log.unshift(`فاز ${SQ_COLOR_AR[winner]} في الجولة ${g.round}`);
+        this.state.waitUntil
+          ? this.state.waitUntil(this.recordRound())
+          : this.recordRound().catch(() => {});
+        return;
+      }
+
+      case 'again': {
+        if (!isHost || g.phase !== 'over') return;
+        g.phase = 'lobby';
+        g.result = null;
+        g.seed = 0;
+        this.lobbySync('add');
+        return;
+      }
+
+      case 'kick': {
+        if (!isHost || !idle) return;
+        if (m.target === pid) return;
+        const t = g.players.find(p => p.id === m.target);
+        if (!t) return;
+        g.players = g.players.filter(p => p.id !== m.target);
+        g.log.unshift(`طُرد ${t.name} من الغرفة`);
+        const sock = this.sockets.get(m.target);
+        if (sock) {
+          try { sock.send(JSON.stringify({ t: 'kicked' })); sock.close(1000); } catch (e) {}
+          this.sockets.delete(m.target);
+        }
+        this.kicked.add(m.target);
+        if (t.cid) this.kicked.add(t.cid);
+        this.hostCheck();
+        return;
+      }
+    }
+  }
+
+  ensureHost() {
+    const g = this.g;
+    if (g.hostId && g.players.some(p => p.id === g.hostId && p.connected)) return;
+    const nxt = g.players.find(p => p.connected);
+    g.hostId = nxt ? nxt.id : null;
+  }
+
+  hostCheck() {
+    const g = this.g;
+    const before = g.hostId;
+    this.ensureHost();
+    if (!g.hostId || g.hostId === before) return;
+    g.log.unshift(`انتقلت الاستضافة إلى ${this.nameOf(g.hostId)}`);
+    const s = this.sockets.get(g.hostId);
+    if (s) { try { s.send(JSON.stringify({ t: 'host' })); } catch {} }
+  }
+
+  nameOf(id) { const p = this.g.players.find(x => x.id === id); return p ? p.name : '—'; }
+
+  /* البذرة تُبَثّ للجميع عمدًا: ليست سرًّا — بها يشغّل كل جهاز السباق
+     نفسه. التوكن وcid لا يخرجان أبدًا. */
+  viewFor(pid) {
+    const g = this.g;
+    const me = g.players.find(p => p.id === pid);
+    return {
+      t: 'state',
+      code: g.code,
+      pub: !!g.pub,
+      phase: g.phase,
+      round: g.round,
+      hostId: g.hostId,
+      mode: g.mode,
+      map: g.map,
+      seed: g.phase === 'lobby' ? 0 : g.seed,
+      raceAt: g.raceAt,
+      result: g.result,
+      log: g.log.slice(0, 5),
+      players: g.players.map(p => ({
+        id: p.id, name: p.name, connected: p.connected, color: p.color, score: p.score | 0,
+      })),
+      me: me ? { id: me.id, name: me.name, color: me.color, score: me.score | 0 } : null,
+    };
+  }
+
+  broadcast() {
+    for (const [pid, ws] of this.sockets) {
+      try { ws.send(JSON.stringify(this.viewFor(pid))); } catch { this.sockets.delete(pid); }
+    }
+  }
+}
