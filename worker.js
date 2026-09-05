@@ -10214,7 +10214,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v171';
+const WORKER_VERSION = 'v172';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10267,6 +10267,7 @@ const GAME_NAMES = {
   sukoon: 'سُكون', ramad: 'رماد', murawagha: 'مُراوَغة', darbah: 'ضربة', snake: 'أفعى نيون',
   bilyardo: 'بلياردو',
   squares: 'سباق المربعات',
+  redvsblue: 'أحمر ضد أزرق',
 };
 
 /* ═══════════════════════ البلياردو (BilliardRoom) ═══════════════════════
