@@ -15941,6 +15941,7 @@ export class SquaresRoom {
     const me = g.players.find(p => p.id === pid);
     return {
       t: 'state',
+      now: Date.now(),          // ساعة الخادم: بها تتزامن الأجهزة على لحظة البدء نفسها
       code: g.code,
       pub: !!g.pub,
       phase: g.phase,
