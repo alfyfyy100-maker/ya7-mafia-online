@@ -10214,7 +10214,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v171';
+const WORKER_VERSION = 'v172';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10265,6 +10265,7 @@ const GAME_NAMES = {
   throne: 'عرش الذئب', westeros: 'ويستروس', island: 'الجزيرة',
   'blocked-road': 'الطريق المسدود', guest13: 'الضيف الثالث عشر', juraa: 'جرعة',
   sukoon: 'سُكون', ramad: 'رماد', murawagha: 'مُراوَغة', darbah: 'ضربة', snake: 'أفعى نيون',
+  ghazw: 'غَزْو',
   bilyardo: 'بلياردو',
   squares: 'سباق المربعات',
 };
@@ -11379,6 +11380,7 @@ const RESERVED_USERNAMES = [
   'mafia', 'khawana', 'dakhil', 'walima', 'ludo', 'daqash', 'mawwih',
   'fatin', 'fateel', 'kalimat', 'sukoon', 'snake', 'ramad', 'murawagha',
   'liar', 'juraa', 'island', 'throne', 'westeros', 'darbah', 'guest13',
+  'ghazw',
 ];
 
 /* ── محجوزة للمالك: تُمنح يدويًا عبر D1 ──
