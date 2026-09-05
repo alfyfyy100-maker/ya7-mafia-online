@@ -56,7 +56,18 @@
     padding: 12px; box-shadow: none; border: 1px solid rgba(255,255,255,.12);
   }
   .btn.wide { width: 100%; }
-  .stats { margin-top: 14px; color: #7f86a3; font-size: 13px; }
+  .stats { margin-top: 14px; color: #7f86a3; font-size: 13px; white-space: pre-line; line-height: 1.7; }
+  .tabs { display: flex; gap: 4px; background: rgba(255,255,255,.06); border-radius: 14px; padding: 4px; margin-bottom: 16px; }
+  .tab {
+    flex: 1; border: 0; cursor: pointer; font: inherit; font-weight: 700; font-size: 15px;
+    color: #aab0c8; background: transparent; padding: 10px 6px; border-radius: 11px;
+    transition: background .2s ease, color .2s ease;
+  }
+  .tab[aria-selected="true"] { background: #2a2f4d; color: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
+  .tab:focus-visible, .btn:focus-visible, .corner:focus-visible { outline: 2px solid #8ed3ff; outline-offset: 2px; }
+  .mode[hidden] { display: none; }
+  .hint { margin: 0 0 14px; color: #aab0c8; font-size: 14px; line-height: 1.6; }
+  .hint b { color: #fff; }
   #resTitle { font-size: 30px; margin: 0 0 6px; }
   #resPred { font-size: 18px; margin: 0 0 18px; min-height: 26px; font-weight: 700; }
   #resPred.ok { color: #3ddc84; } #resPred.bad { color: #ff7b7b; }
@@ -83,12 +94,26 @@
 <div id="start" class="panel show" role="dialog" aria-labelledby="startTitle">
   <div class="card">
     <h1 id="startTitle"><span class="r">أحمر</span> ضد <span class="b">أزرق</span></h1>
-    <p class="sub">كرتان داخل حلبة، أسلحة تنزل من السماء، وعشرة قلوب لكل وحدة.<br>توقّع مين يفوز قبل ما تبدأ المعركة!</p>
-    <div class="pick">
-      <button class="btn red" type="button" data-pick="0">🔴 الأحمر</button>
-      <button class="btn blue" type="button" data-pick="1">🔵 الأزرق</button>
+    <p class="sub">كرتان داخل حلبة، أسلحة تنزل من السماء، وعشرة قلوب لكل وحدة.</p>
+    <div class="tabs" role="tablist" aria-label="طريقة اللعب">
+      <button class="tab" type="button" role="tab" id="tabWatch" data-tab="watch" aria-selected="true">👀 مشاهدة وتوقّع</button>
+      <button class="tab" type="button" role="tab" id="tabPlay" data-tab="play" aria-selected="false">🎮 تحكّم بنفسك</button>
     </div>
-    <button class="btn ghost wide" type="button" data-pick="-1">شاهد بدون توقّع</button>
+    <div class="mode" id="modeWatch" role="tabpanel">
+      <p class="hint">توقّع مين يفوز قبل ما تبدأ المعركة!</p>
+      <div class="pick">
+        <button class="btn red" type="button" data-pick="0">🔴 الأحمر</button>
+        <button class="btn blue" type="button" data-pick="1">🔵 الأزرق</button>
+      </div>
+      <button class="btn ghost wide" type="button" data-pick="-1">شاهد بدون توقّع</button>
+    </div>
+    <div class="mode" id="modePlay" role="tabpanel" hidden>
+      <p class="hint"><b>اضغط أو اسحب</b> في أي مكان: كرتك تندفع نحو إصبعك.<br>على الحاسب: الأسهم أو WASD.</p>
+      <div class="pick">
+        <button class="btn red" type="button" data-play="0">🔴 العب بالأحمر</button>
+        <button class="btn blue" type="button" data-play="1">🔵 العب بالأزرق</button>
+      </div>
+    </div>
     <div class="stats" id="startStats"></div>
   </div>
 </div>
@@ -243,6 +268,11 @@ const G = {
   winner: -1,
   overT: 0,
   prediction: -1,
+  player: -1,           // -1 مشاهدة، 0/1 الكرة التي يتحكم بها اللاعب
+  pushCd: 0,            // زمن الانتظار بين دفعتين
+  ptr: null,            // مؤشر اللمس/الفأرة أثناء السحب {x,y}
+  keys: { x: 0, y: 0 }, // اتجاه الأسهم المضغوطة
+  taps: [],             // علامات اللمس المرسومة
   statsDone: false,
   banner: null,         // { text, t, life }
   stats: { shots: {}, hits: {} },
@@ -270,19 +300,22 @@ function resetWorld() {
   G.casings.length = 0; G.drops.length = 0;
   G.t = 0; G.spawnT = 1.2; G.appleT = 0; G.shake = 0; G.flash = 0;
   G.stats = { shots: {}, hits: {} };
+  G.pushCd = 0; G.ptr = null; G.taps.length = 0;
   G.winner = -1; G.overT = 0; G.statsDone = false; G.banner = null;
 }
 
 /* ═══════════════ الإحصاءات (توقعات اللاعب) ═══════════════ */
 function loadStats() {
   try { const s = JSON.parse(localStorage.getItem('rvb_stats') || 'null'); if (s && typeof s === 'object') return s; } catch (e) {}
-  return { total: 0, correct: 0, streak: 0, best: 0 };
+  return { total: 0, correct: 0, streak: 0, best: 0, pw: 0, pl: 0 };
 }
 function saveStats(s) { try { localStorage.setItem('rvb_stats', JSON.stringify(s)); } catch (e) {} }
 function statsText() {
   const s = loadStats();
-  if (!s.total) return 'ما لك توقعات بعد — جرّب حظك!';
-  return `توقعاتك الصحيحة: ${AR(s.correct)} من ${AR(s.total)} · سلسلة: ${AR(s.streak)} · الأفضل: ${AR(s.best)}`;
+  const parts = [];
+  if (s.total) parts.push(`توقعاتك الصحيحة: ${AR(s.correct)} من ${AR(s.total)} · سلسلة: ${AR(s.streak)} · الأفضل: ${AR(s.best)}`);
+  if (s.pw || s.pl) parts.push(`مبارياتك: فوز ${AR(s.pw || 0)} · خسارة ${AR(s.pl || 0)}`);
+  return parts.length ? parts.join('\n') : 'ما لك توقعات ولا مباريات بعد — جرّب حظك!';
 }
 
 /* ═══════════════ التخطيط ═══════════════ */
@@ -409,8 +442,11 @@ function heal(b, n) {
   addParticles(b.x, b.y, 18, '#3ddc84', { minV: 0.2, maxV: 0.8, g: -0.9, drag: 1.2, minL: 0.5, maxL: 0.9 });
   Sound.play('heal');
 }
-function spawnPickup(type) {
-  // موقع لا يلامس الكرتين ولا بقية العناصر
+/* في وضع التحكم يقدر اللاعب يطارد الأسلحة والكرة الآلية لا؛ للتعويض
+   تميل الأسلحة الجديدة قليلًا نحو الكرة الآلية (تُختار أقرب نقطة من
+   مرشحَين بنسبة AI_BIAS). */
+const TUNE = { aiBias: 0.7, aiSteer: 2.6, aiMelee: 2.0, pushCd: 0.6, pushV: 1.0 };
+function randomSpot() {
   let x = 0, y = 0;
   for (let tries = 0; tries < 24; tries++) {
     const a = rnd(0, TAU), d = Math.sqrt(Math.random()) * 0.66;
@@ -419,6 +455,14 @@ function spawnPickup(type) {
     for (const b of G.balls) if (Math.hypot(b.x - x, b.y - y) < 0.36) ok = false;
     for (const p of G.pickups) if (Math.hypot(p.x - x, p.y - y) < 0.4) ok = false;
     if (ok) break;
+  }
+  return { x, y };
+}
+function spawnPickup(type) {
+  let { x, y } = randomSpot();
+  if (G.player >= 0 && type !== 'apple' && Math.random() < TUNE.aiBias) {
+    const ai = G.balls[1 - G.player], alt = randomSpot();
+    if (Math.hypot(alt.x - ai.x, alt.y - ai.y) < Math.hypot(x - ai.x, y - ai.y)) { x = alt.x; y = alt.y; }
   }
   G.pickups.push({ type, x, y, t: 0, life: type === 'apple' ? PICKUP_LIFE + 3 : PICKUP_LIFE, bob: rnd(0, TAU) });
 }
@@ -451,7 +495,15 @@ function stepBall(b, dt) {
   const o = otherBall(b);
   if (b.dead) { b.deadT += dt; b.vx *= Math.max(0, 1 - 3 * dt); b.vy *= Math.max(0, 1 - 3 * dt); b.x += b.vx * dt; b.y += b.vy * dt; }
   else {
-    // فيزياء بحتة: لا مطاردة ولا مراوغة — الكرة ترتد من الجدار ومن الخصم فقط
+    // فيزياء بحتة: لا مطاردة ولا مراوغة — الكرة ترتد من الجدار ومن الخصم فقط.
+    // الاستثناء الوحيد: في وضع التحكم تميل الكرة الآلية بخفة نحو أقرب سلاح
+    // (وتجاه اللاعب إن حملت سكينًا أو درعًا) لتعوّض تحكّم اللاعب بكرته.
+    if (G.player >= 0 && b.id !== G.player && G.phase === 'fight') {
+      let tx = null, ty = null, best = 1.1, k = TUNE.aiSteer;
+      for (const pk of G.pickups) { const d = Math.hypot(pk.x - b.x, pk.y - b.y); if (d < best) { best = d; tx = pk.x; ty = pk.y; } }
+      if (b.weapon && b.weapon.def.kind !== 'gun' && !o.dead) { tx = o.x; ty = o.y; k = TUNE.aiMelee; }
+      if (tx != null) { const d = Math.hypot(tx - b.x, ty - b.y) || 1; b.vx += (tx - b.x) / d * k * dt; b.vy += (ty - b.y) / d * k * dt; }
+    }
     // حركة + تثبيت السرعة تدريجيًا عند الأساس
     b.x += b.vx * dt; b.y += b.vy * dt;
     let sp = Math.hypot(b.vx, b.vy);
@@ -663,7 +715,31 @@ function stepFx(dt) {
   if (G.banner) { G.banner.t += dt; if (G.banner.t > G.banner.life) G.banner = null; }
 }
 
+/* دفعة اللاعب: تغيير اتجاه فوري مع زيادة سرعة قصيرة، والفيزياء تبقى
+   كما هي (السرعة تعود للأساس تدريجيًا، والارتداد من الجدار والخصم). */
+
+function pushToward(dx, dy) {
+  if (G.player < 0 || G.phase !== 'fight') return false;
+  const b = G.balls[G.player];
+  if (b.dead || G.pushCd > 0) return false;
+  const n = Math.hypot(dx, dy); if (n < 1e-4) return false;
+  const ux = dx / n, uy = dy / n;
+  b.vx = ux * TUNE.pushV + b.vx * 0.15; b.vy = uy * TUNE.pushV + b.vy * 0.15;
+  G.pushCd = TUNE.pushCd;
+  addParticles(b.x - ux * BALL_R, b.y - uy * BALL_R, 6, b.c.light, { vx: -ux * 0.5, vy: -uy * 0.5, minV: 0.05, maxV: 0.35, g: 0, drag: 3, minR: 0.006, maxR: 0.016, minL: 0.15, maxL: 0.3 });
+  return true;
+}
+function stepPlayer(dt) {
+  G.pushCd = Math.max(0, G.pushCd - dt);
+  for (let i = G.taps.length - 1; i >= 0; i--) { G.taps[i].t += dt; if (G.taps[i].t > 0.45) G.taps.splice(i, 1); }
+  if (G.player < 0 || G.phase !== 'fight') return;
+  const b = G.balls[G.player];
+  if (G.ptr) pushToward(G.ptr.x - b.x, G.ptr.y - b.y);
+  else if (G.keys.x || G.keys.y) pushToward(G.keys.x, G.keys.y);
+}
+
 function update(dt) {
+  stepPlayer(dt);
   if (G.phase === 'countdown') {
     const before = G.countdownT;
     G.countdownT -= dt;
@@ -1009,6 +1085,28 @@ function drawHeldWeapon(b, r) {
   ctx.restore();
 }
 
+function drawPlayerMarks() {
+  if (G.player < 0) return;
+  for (const tp of G.taps) {
+    const k = tp.t / 0.45;
+    ctx.globalAlpha = (1 - k) * 0.8; ctx.strokeStyle = tp.color; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(CX + tp.x * R, CY + tp.y * R, R * (0.03 + k * 0.09), 0, TAU); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  const b = G.balls[G.player];
+  if (b.dead || G.phase === 'idle') return;
+  const x = CX + b.x * R, y = CY + b.y * R, r = BALL_R * R;
+  const pulse = 1 + Math.sin(performance.now() / 180) * 0.05;
+  ctx.strokeStyle = b.c.light; ctx.lineWidth = Math.max(1.5, r * 0.08); ctx.setLineDash([r * 0.35, r * 0.25]);
+  ctx.beginPath(); ctx.arc(x, y, r * 1.35 * pulse, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+  if (G.t < 4 || G.phase === 'countdown') {
+    ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.font = `800 ${clamp(r * 0.7, 12, 18)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText('أنت', x, y - r * 1.55);
+    ctx.fillStyle = '#fff'; ctx.fillText('أنت', x, y - r * 1.55);
+  }
+}
+
 function drawBanner() {
   let text = null, scale = 1, alpha = 1, color = '#fff';
   if (G.phase === 'countdown') {
@@ -1044,6 +1142,7 @@ function render() {
   const order = G.balls.slice().sort((a, b) => (a.dead ? -1 : 0) - (b.dead ? -1 : 0));
   for (const b of order) drawBall(b);
   drawParticles();
+  drawPlayerMarks();
   drawRing();
   drawHUD();
   drawBanner();
@@ -1077,14 +1176,15 @@ syncMute();
 
 function showStart() {
   resetWorld();
-  G.phase = 'idle'; G.prediction = -1;
+  G.phase = 'idle'; G.prediction = -1; G.player = -1;
   document.getElementById('startStats').textContent = statsText();
   overEl.classList.remove('show'); startEl.classList.add('show');
   restartBtn.classList.remove('show');
 }
-function begin(pick) {
+function begin(pick, player) {
   Sound.unlock();
   G.prediction = pick;
+  G.player = player == null ? -1 : player;
   resetWorld();
   G.phase = 'countdown'; G.countdownT = 3;
   startEl.classList.remove('show'); overEl.classList.remove('show');
@@ -1095,7 +1195,12 @@ function showResult() {
   const win = G.balls[G.winner];
   resTitle.innerHTML = `${G.winner === 0 ? '🔴' : '🔵'} فاز <span style="color:${win.c.main}">${win.c.name}</span>`;
   const s = loadStats();
-  if (G.prediction >= 0) {
+  if (G.player >= 0) {
+    const won = G.winner === G.player;
+    if (won) { s.pw = (s.pw || 0) + 1; resPred.textContent = 'فزت! 🎉'; resPred.className = 'ok'; }
+    else { s.pl = (s.pl || 0) + 1; resPred.textContent = 'خسرت 😅 جرّب مرة ثانية'; resPred.className = 'bad'; }
+    saveStats(s);
+  } else if (G.prediction >= 0) {
     s.total++;
     if (G.prediction === G.winner) { s.correct++; s.streak++; s.best = Math.max(s.best, s.streak); resPred.textContent = 'توقعك صح! 🎉'; resPred.className = 'ok'; }
     else { s.streak = 0; resPred.textContent = 'توقعك خطأ 😅 جرّب مرة ثانية'; resPred.className = 'bad'; }
@@ -1105,7 +1210,47 @@ function showResult() {
   overEl.classList.add('show');
   restartBtn.classList.remove('show');
 }
-for (const btn of startEl.querySelectorAll('[data-pick]')) btn.addEventListener('click', () => begin(Number(btn.dataset.pick)));
+for (const btn of startEl.querySelectorAll('[data-pick]')) btn.addEventListener('click', () => begin(Number(btn.dataset.pick), -1));
+for (const btn of startEl.querySelectorAll('[data-play]')) btn.addEventListener('click', () => begin(-1, Number(btn.dataset.play)));
+// تبويبا شاشة البداية، مع تذكّر آخر اختيار
+function selectTab(name) {
+  for (const t of startEl.querySelectorAll('.tab')) t.setAttribute('aria-selected', t.dataset.tab === name ? 'true' : 'false');
+  document.getElementById('modeWatch').hidden = name !== 'watch';
+  document.getElementById('modePlay').hidden = name !== 'play';
+  try { localStorage.setItem('rvb_tab', name); } catch (e) {}
+}
+for (const t of startEl.querySelectorAll('.tab')) t.addEventListener('click', () => selectTab(t.dataset.tab));
+try { if (localStorage.getItem('rvb_tab') === 'play') selectTab('play'); } catch (e) {}
+
+// تحكّم اللاعب: لمس/سحب على اللوحة، أو الأسهم على الحاسب
+function ptrPos(e) { return { x: (e.clientX - CX) / R, y: (e.clientY - CY) / R }; }
+canvas.addEventListener('pointerdown', e => {
+  if (G.player < 0 || G.phase !== 'fight') return;
+  e.preventDefault();
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  G.ptr = ptrPos(e);
+  G.taps.push({ x: G.ptr.x, y: G.ptr.y, t: 0, color: G.balls[G.player].c.light });
+  const b = G.balls[G.player];
+  pushToward(G.ptr.x - b.x, G.ptr.y - b.y);
+});
+canvas.addEventListener('pointermove', e => { if (G.ptr) G.ptr = ptrPos(e); });
+const endPtr = () => { G.ptr = null; };
+canvas.addEventListener('pointerup', endPtr);
+canvas.addEventListener('pointercancel', endPtr);
+window.addEventListener('blur', () => { G.ptr = null; G.keys.x = 0; G.keys.y = 0; });
+const KEYS = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0], w: [0, -1], s: [0, 1], a: [-1, 0], d: [1, 0], W: [0, -1], S: [0, 1], A: [-1, 0], D: [1, 0] };
+const held = new Set();
+function syncKeys() {
+  let x = 0, y = 0;
+  for (const k of held) { x += KEYS[k][0]; y += KEYS[k][1]; }
+  G.keys.x = Math.sign(x); G.keys.y = Math.sign(y);
+}
+window.addEventListener('keydown', e => {
+  if (!KEYS[e.key] || G.player < 0) return;
+  e.preventDefault();
+  if (!held.has(e.key)) { held.add(e.key); syncKeys(); pushToward(G.keys.x, G.keys.y); }
+});
+window.addEventListener('keyup', e => { if (held.delete(e.key)) syncKeys(); });
 document.getElementById('again').addEventListener('click', showStart);
 restartBtn.addEventListener('click', showStart);
 window.addEventListener('resize', resize);
@@ -1113,13 +1258,32 @@ window.addEventListener('orientationchange', () => setTimeout(resize, 120));
 
 /* منفذ اختبار: تشغيل محاكاة كاملة بلا رسم، يعيد المدة والفائز */
 window.RVB = {
-  G, update, resetWorld, giveWeapon, spawnPickup,
+  G, update, resetWorld, giveWeapon, spawnPickup, TUNE,
   simulate(maxT) {
-    resetWorld(); G.phase = 'fight'; G.prediction = -1;
+    resetWorld(); G.phase = 'fight'; G.prediction = -1; G.player = -1;
     const lim = maxT || 240;
     while (G.phase === 'fight' && G.t < lim) update(STEP);
     const r = { t: G.t, winner: G.winner, hp: G.balls.map(b => b.hp), stats: G.stats };
     resetWorld(); G.phase = 'idle';
+    return r;
+  },
+  /* لاعب آلي جشع: يطارد أقرب سلاح، ومع السكين يطارد الخصم، ويهرب من فوهته */
+  simulatePlay(player, maxT) {
+    resetWorld(); G.phase = 'fight'; G.prediction = -1; G.player = player;
+    const lim = maxT || 240;
+    const me = G.balls[player], o = G.balls[1 - player];
+    while (G.phase === 'fight' && G.t < lim) {
+      if (G.pushCd <= 0) {
+        let tx = null, ty = null, best = 9;
+        for (const p of G.pickups) { const d = Math.hypot(p.x - me.x, p.y - me.y); if (d < best) { best = d; tx = p.x; ty = p.y; } }
+        if (me.weapon && me.weapon.def.kind !== 'gun') { tx = o.x; ty = o.y; }
+        else if (tx == null && o.weapon) { tx = me.x - (o.x - me.x); ty = me.y - (o.y - me.y); }
+        if (tx != null) pushToward(tx - me.x, ty - me.y);
+      }
+      update(STEP);
+    }
+    const r = { t: G.t, winner: G.winner, won: G.winner === player, hp: G.balls.map(b => b.hp) };
+    resetWorld(); G.phase = 'idle'; G.player = -1;
     return r;
   },
 };
