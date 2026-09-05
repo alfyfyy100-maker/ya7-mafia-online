@@ -10008,6 +10008,11 @@ export default {
       return withCors(resp, origin);
     }
 
+    // ── لوحة صدارة الأركيد (v172) ──
+    if (url.pathname.startsWith('/lb/')) {
+      return handleLeaderboard(request, env, url);
+    }
+
     // ── الحسابات: يوزر + رمز استرجاع (D1) ──
     if (url.pathname.startsWith('/account/')) {
       return handleAccount(request, env, url, ctx);
@@ -11810,6 +11815,116 @@ const cleanAvatar = (v, fallback) =>
    ترويسات CORS، فيحجبه المتصفح ويظهر عند اللاعب كـ«ما قدرنا نوصل
    للخادم» — أي بلاغ كذب يوجّهه لفحص شبكته بدل السبب الحقيقي.
    أشهر سبب: جدول لم يُنشأ بعد في D1. الآن يُقال له ذلك صراحة. */
+/* ═══════════════ لوحة صدارة الأركيد (v172) ═══════════════
+   «غَزْو» تسجّل نتائجها هنا لا في وركر ya7-leaderboard الخارجي، فيبقى
+   المسار كله في مستودع واحد ومحميًّا بحارس المصدر والخانق نفسه.
+   العقد مطابق لما تعرفه ألعاب الأركيد: جلسة موقّعة تُستهلك مرة واحدة —
+   POST /lb/session {game} → {sid, secret}
+   POST /lb/submit  {game, name, score, sid, sig}  sig = HMAC-SHA256(secret, game|name|score|sid) hex
+   GET  /lb/top?game=&limit= → {ok, scores:[{name, score}]}
+   الجلسة بلا تخزين: sid = game.ts.nonce، والسر مشتق منه بـ ACCOUNT_SECRET،
+   فالخادم يعيد اشتقاقه عند الرفع ويتحقق من العمر (٣ ساعات). منع الإعادة
+   عبر rate_limits (نفس النافذة) — صف واحد لكل جلسة مستهلكة، ينظّف نفسه.
+   الجدول يُنشأ عند أول استعمال فلا SQL يدوي. صف واحد لكل (لعبة، اسم):
+   الاسم المكرّر يرفع أفضل نتيجته بدل أن يملأ اللوحة بنفسه.           */
+const LB_GAMES = new Set(['ghazw']);
+const LB_TTL_MS = 3 * 60 * 60 * 1000;
+const LB_NAME_MAX = 14;
+const LB_SCORE_MAX = 10000000;
+let _lbSchema = null;
+function lbSchema(env) {
+  if (!_lbSchema) _lbSchema = env.DB.prepare(
+    `CREATE TABLE IF NOT EXISTS arcade_scores (
+       game  TEXT    NOT NULL,
+       name  TEXT    NOT NULL,
+       score INTEGER NOT NULL,
+       at    INTEGER NOT NULL,
+       ipk   TEXT,
+       PRIMARY KEY (game, name)
+     )`).run().catch(e => { _lbSchema = null; throw e; });
+  return _lbSchema;
+}
+async function hmacHex(secret, msg) {
+  const key = await crypto.subtle.importKey('raw', te.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, te.encode(msg)));
+  let out = '';
+  for (let i = 0; i < sig.length; i++) out += (sig[i] < 16 ? '0' : '') + sig[i].toString(16);
+  return out;
+}
+function lbCleanName(raw) {
+  return String(raw == null ? '' : raw)
+    .replace(/[<>&"'`\\]/g, '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, LB_NAME_MAX);
+}
+async function handleLeaderboard(request, env, url) {
+  const sub = url.pathname.slice('/lb'.length);
+  if (!env.DB || !env.ACCOUNT_SECRET) return fail(request, 'binding-missing', null, 501);
+  const ip = clientKey(request);
+  try {
+    if (sub === '/top' && request.method === 'GET') {
+      const game = String(url.searchParams.get('game') || '');
+      if (!LB_GAMES.has(game)) return fail(request, 'bad-game', 'لعبة غير معروفة');
+      const limit = Math.max(1, Math.min(50, Number(url.searchParams.get('limit')) || 10));
+      await lbSchema(env);
+      const r = await env.DB.prepare(
+        'SELECT name, score FROM arcade_scores WHERE game = ?1 ORDER BY score DESC, at ASC LIMIT ?2'
+      ).bind(game, limit).all();
+      const scores = ((r && r.results) || []).map(x => ({ name: x.name, score: x.score }));
+      return new Response(JSON.stringify({ ok: true, scores }), {
+        headers: Object.assign(corsHeaders(request), { 'Cache-Control': 'public, max-age=20' }),
+      });
+    }
+    if (request.method !== 'POST') return fail(request, 'method', 'الطريقة غير مدعومة', 405);
+    const body = await readBody(request);
+    if (!body) return fail(request, 'db', 'طلب غير صالح');
+    const game = String(body.game || '');
+    if (!LB_GAMES.has(game)) return fail(request, 'bad-game', 'لعبة غير معروفة');
+
+    if (sub === '/session') {
+      if (!await rateLimit(env, 'lbo:' + ip, 120, 60 * 60 * 1000)) return fail(request, 'rate');
+      const nonce = b64urlFromBytes(crypto.getRandomValues(new Uint8Array(12)));
+      const sid = game + '.' + Date.now() + '.' + nonce;
+      const secret = await hmac(env.ACCOUNT_SECRET, 'lb:' + sid);
+      return J(request, { ok: true, sid, secret });
+    }
+    if (sub === '/submit') {
+      const sid = String(body.sid || ''), sig = String(body.sig || '');
+      const parts = sid.split('.');
+      if (parts.length !== 3 || parts[0] !== game || !/^[A-Za-z0-9_-]{8,24}$/.test(parts[2])) return fail(request, 'bad-session');
+      const ts = Number(parts[1]);
+      if (!isFinite(ts) || ts > Date.now() + 60 * 1000 || Date.now() - ts > LB_TTL_MS) return fail(request, 'no_session', 'انتهت الجلسة، جرّب مرة ثانية');
+      const name = lbCleanName(body.name);
+      const score = Math.round(Number(body.score));
+      if (!name) return fail(request, 'bad-name', 'اكتب اسمك');
+      if (!isFinite(score) || score <= 0 || score > LB_SCORE_MAX) return fail(request, 'bad-score');
+      const secret = await hmac(env.ACCOUNT_SECRET, 'lb:' + sid);
+      const expect = await hmacHex(secret, game + '|' + name + '|' + score + '|' + sid);
+      if (!/^[0-9a-f]{64}$/.test(sig) || !timingSafeEqual(sig, expect)) return fail(request, 'bad-sig');
+      /* يفشل مقفلًا: مسار كتابة، والجلسة المستهلكة لا تُقبل مرتين */
+      if (!await rateLimit(env, 'lbs:' + parts[2], 1, LB_TTL_MS, true)) return fail(request, 'used');
+      if (!await rateLimit(env, 'lbw:' + ip, 40, 60 * 60 * 1000, true)) return fail(request, 'rate', 'نتائج كثيرة، جرّب بعدين');
+      await lbSchema(env);
+      await env.DB.prepare(
+        `INSERT INTO arcade_scores (game, name, score, at, ipk) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(game, name) DO UPDATE SET
+           score = CASE WHEN excluded.score > arcade_scores.score THEN excluded.score ELSE arcade_scores.score END,
+           at    = CASE WHEN excluded.score > arcade_scores.score THEN excluded.at    ELSE arcade_scores.at    END`
+      ).bind(game, name, score, Date.now(), String(ip).slice(0, 48)).run();
+      const rank = await env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM arcade_scores WHERE game = ?1 AND score > ?2'
+      ).bind(game, score).first();
+      return J(request, { ok: true, rank: ((rank && rank.n) || 0) + 1 });
+    }
+    return fail(request, 'unknown', null, 404);
+  } catch (e) {
+    return fail(request, 'server', 'صار خطأ في الخادم، جرّب بعد شوي', 500);
+  }
+}
+
 async function handleAccount(request, env, url, ctx) {
   try {
     return await handleAccountInner(request, env, url, ctx);
