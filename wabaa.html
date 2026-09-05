@@ -159,6 +159,21 @@ button:focus-visible{outline:2px solid var(--plasma);outline-offset:2px}
 .cpop .tags i.red{color:var(--hot);border-color:#4d1f25;background:#1a0d10}
 .cpop .tags i.blue{color:var(--cure);border-color:#1e4468;background:#0a1926}
 .cpop .close{position:absolute;top:6px;inset-inline-end:8px;font-size:14px;color:var(--dim2)}
+.cpop .acts{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-top:8px}
+.cpop .act{background:#0c1d24;border:1px solid #1d4050;border-radius:9px;padding:5px 3px;text-align:center}
+.cpop .act b{display:block;font-size:10px;color:#d6ecf2}
+.cpop .act span{display:block;font-size:8.5px;color:var(--dna);margin-top:1px}
+.cpop .act.off{opacity:.45}
+.cpop .act.off span{color:var(--dim2)}
+.achbox{margin-top:10px;background:var(--panel);border:1px solid var(--edge);border-radius:12px;padding:9px 10px}
+.achhead{font-size:12px;color:var(--dim);margin-bottom:7px;display:flex;justify-content:space-between}
+.achhead b{color:var(--dna)}
+.ach{display:flex;gap:8px;align-items:baseline;padding:4px 0;border-top:1px dotted #1c333c;opacity:.42}
+.ach:first-of-type{border-top:none}
+.ach.on{opacity:1}
+.ach b{font-size:11.5px;min-width:88px}
+.ach.on b{color:var(--plasma)}
+.ach span{font-size:10px;color:var(--dim2)}
 
 /* ─────────── إحصاءات ورسوم ─────────── */
 .stats{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:10px}
@@ -488,6 +503,8 @@ const UPS=[
  {id:'blo1',c:T,nm:'الانتقال بالدم',cost:15,e:{blo:3,inf:3},ds:'ينتقل بالدم والإبر ونقل الدم.'},
  {id:'blo2',c:T,nm:'دم صامت',cost:22,r:['blo1'],e:{blo:3,inf:2,stealth:.1},ds:'يبقى في الدم دون أعراض لأسابيع.'},
  {id:'ext1',c:T,nm:'تكيّف متطرّف',cost:28,r:['air2','wat2'],e:{air:2,wat:2,inf:4},ds:'يجمع بين الهواء والماء في كل بيئة.'},
+ {id:'inc1',c:T,nm:'حضانة صامتة',cost:11,e:{inc:2,stealth:.12},ds:'يبقى في الجسد أيامًا قبل أن يظهر أثره، فينتقل قبل أن يُكتشف.'},
+ {id:'inc2',c:T,nm:'كمون طويل',cost:19,r:['inc1'],e:{inc:3,stealth:.18},ds:'أسابيع من العدوى الصامتة قبل أول عرَض.'},
 
  /* الأعراض */
  {id:'snz',c:S,nm:'العطاس',cost:4,e:{inf:3,sev:1},ds:'رذاذ يقذف آلاف الجسيمات.'},
@@ -523,6 +540,9 @@ const UPS=[
  {id:'dr1',c:A,nm:'مقاومة الأدوية ١',cost:14,e:{dres:1.1},ds:'يبطل مفعول المضادات في الدول الفقيرة.'},
  {id:'dr2',c:A,nm:'مقاومة الأدوية ٢',cost:23,r:['dr1'],e:{dres:1.6},ds:'حتى المستشفيات الغنية تعجز.'},
  {id:'stb',c:A,nm:'استقرار جيني',cost:13,e:{stab:1},ds:'يوقف الطفرات العشوائية التي تفضحك.'},
+ {id:'imm1',c:A,nm:'كبت مناعي ١',cost:16,e:{immSup:.30},ds:'يُضعف جهاز المناعة فيبطئ تعافي المصابين.'},
+ {id:'imm2',c:A,nm:'كبت مناعي ٢',cost:26,r:['imm1'],e:{immSup:.30},ds:'الجسد يعجز عن طرد المرض، فيبقى المصاب معديًا شهورًا.'},
+ {id:'hos1',c:A,nm:'إرهاق المستشفيات',cost:20,e:{hosP:.35},ds:'يملأ الأسرّة فينهار نظام الرعاية وترتفع الوفيات.'},
  {id:'rsf',c:A,nm:'إعادة ترتيب جيني',cost:26,r:['gn3'],e:{back:14},ds:'يُلغي جزءًا من عمل مختبرات اللقاح.'},
  {id:'sab',c:A,nm:'تخريب المختبرات',cost:32,rep:1,e:{back:9},ds:'يمكن شراؤه مرارًا، وتزيد كلفته في كل مرة.'},
  /* قدرات خاصة بكل نوع */
@@ -535,7 +555,8 @@ const UPS=[
 const UPMAP={}; UPS.forEach(u=>UPMAP[u.id]=u);
 const EFF_LABEL={inf:'عدوى',sev:'شدّة',let:'فتك',air:'جوّي',wat:'مائي',lnd:'قوارض',ins:'حشرات',bir:'طيور',
  blo:'دم',liv:'ماشية',hres:'حرّ',cres:'برد',dres:'دواء',stab:'ثبات',back:'يُرجع اللقاح',cure:'يبطّئ اللقاح',
- stealth:'تخفٍّ',spore:'أبواغ',dnaUp:'حمض نووي',ur:'مدن',mutRand:'طفرة'};
+ stealth:'تخفٍّ',spore:'أبواغ',dnaUp:'حمض نووي',ur:'مدن',mutRand:'طفرة',
+ inc:'حضانة',immSup:'كبت مناعي',hosP:'إرهاق المستشفيات'};
 
 /* ══════════════════ ٧. الجغرافيا وبناء العالم ══════════════════ */
 const $=id=>document.getElementById(id);
@@ -640,9 +661,10 @@ for(const L of LINKS){LINKS_OF[L.a].push(L);LINKS_OF[L.b].push(L);}
 /* ══════════════════ ٨. حالة اللعبة ══════════════════ */
 function newGame(cfg){
   rng=makeRng(hashSeed(cfg.seed)); vrng=makeRng(hashSeed(cfg.seed)^0x5bf03635);
-  const regs=REGS.map(r=>({...r,inf:0,dead:0,aware:false,seen:false,
+  const regs=REGS.map(r=>({...r,inf:0,exp:0,rec:0,dead:0,aware:false,seen:false,
     airOpen:r.airT>0,portOpen:r.portT>0,borderOpen:true,lock:false,collapse:false,
-    dotsOn:0,research:0}));
+    dotsOn:0,research:0,beta:0,load:0,boost:0,sabT:0,mutT:0,
+    hc:Math.min(.92,.22+r.wealth*.62+r.res*.10)}));
   const gm=DIFF[cfg.diff];
   G={cfg,name:cfg.name,type:cfg.type,diff:gm,diffKey:cfg.diff,seed:cfg.seed,genes:cfg.genes,
     day:1,frames:0,tick:0,speed:1,over:null,
@@ -650,7 +672,8 @@ function newGame(cfg){
     cure:0,cureRate:0,known:false,knownDay:0,awareness:0,globalPanic:0,
     regs,byId:{},bubbles:[],bubId:1,travelers:[],parts:[],ripples:[],flash:0,shake:0,
     logs:[],hist:[],stats:null,sel:null,tab:'dis',sub:T,
-    labs:[],cureFund:0,pop0:0,maxCountries:0,start:null};
+    labs:[],cureFund:0,pop0:0,maxCountries:0,start:null,
+    alert:0,abil:{surge:0,sab:0,mut:0},abilCd:0,peakInf:0,newAch:[],stallDead:0,stallDay:1,stallCn:0};
   regs.forEach(r=>{G.byId[r.id]=r;G.pop0+=r.pop;});
   applyGenes(); recalc();
   return G;
@@ -666,7 +689,8 @@ function applyGenes(){
 }
 function recalc(){
   const s={inf:0,sev:0,let:0,air:0,wat:0,lnd:0,ins:0,bir:0,blo:0,liv:0,
-           hres:0,cres:0,dres:0,stab:0,cureSlow:0,stealth:0,dnaUp:0,ur:0};
+           hres:0,cres:0,dres:0,stab:0,cureSlow:0,stealth:0,dnaUp:0,ur:0,
+           inc:0,immSup:0,hosP:0};
   for(const id in G.owned){
     const u=UPMAP[id]; if(!u)continue; const n=G.owned[id];
     for(const k in u.e){
@@ -705,9 +729,15 @@ function fmtShort(n){n=Math.floor(n);
   if(n>=1e3)return (n/1e3).toFixed(0)+' ألف';
   return String(n);}
 const dayLabel=()=>'يوم '+G.day;
-function totals(){let inf=0,dead=0,pop=0,cn=0;
-  for(const r of G.regs){inf+=r.inf;dead+=r.dead;pop+=r.pop;if(r.inf>=1)cn++;}
-  return {inf,dead,pop,alive:pop-dead,healthy:pop-dead-inf,countries:cn};}
+function totals(){
+  let inf=0,exp=0,rec=0,dead=0,pop=0,cn=0;
+  for(const r of G.regs){
+    inf+=r.inf; exp+=r.exp; rec+=r.rec; dead+=r.dead; pop+=r.pop;
+    if(r.inf+r.exp>=1)cn++;
+  }
+  const alive=pop-dead;
+  return {inf,exp,rec,dead,pop,alive,carriers:inf+exp,
+    healthy:Math.max(0,alive-inf-exp-rec),countries:cn};}
 function log(txt,kind){
   G.logs.unshift({t:dayLabel(),txt,kind:kind||''});
   if(G.logs.length>140)G.logs.pop();
@@ -758,29 +788,85 @@ function sporeBurst(){
 function stepDay(){
   if(G.over)return;
   G.day++;
+  if(G.abilCd>0)G.abilCd--;
   const S_=G.stats, ge=G.gene, ty=TYPES[G.type].mods;
 
-  /* أ. النمو داخل كل بلد */
-  const base=(.155+S_.inf*.0102+S_.air*.0045+S_.wat*.0045)*(1+ge.infMul)*(ty.slowSpread||1);
+  /* أ. وباء حقيقي داخل كل بلد: معرَّض ← معدٍ ← (متعافٍ بمناعة | ميت)
+     مع فترة حضانة، وطاقة استيعاب للمستشفيات تنهار تحت الضغط.        */
+  const beta0=(.300+S_.inf*.0200+S_.air*.0085+S_.wat*.0085)*(1+ge.infMul)*(ty.slowSpread||1);
+  const incub=Math.max(1.4,3.6+(S_.inc||0));             // أيام الحضانة
+  const lethal=S_.let*.00265;
+  const immSup=Math.min(.75,S_.immSup||0);               // كبت المناعة يبطّئ الشفاء
+  const hosPen=Math.min(.8,S_.hosP||0);                  // إرهاق المستشفيات
+  const cureF=G.cure/100;
   for(const r of G.regs){
     const alive=r.pop-r.dead;
-    if(alive<1){r.dead=r.pop;r.inf=0;continue;}
-    if(r.inf<.0001)continue;
-    const healthy=Math.max(0,alive-r.inf);
+    if(alive<1){r.dead=r.pop;r.inf=r.exp=0;continue;}
+    const carriers=r.inf+r.exp;
+    if(carriers<.0001&&r.rec<1)continue;
+    const susc=Math.max(0,alive-r.inf-r.exp-r.rec);
+    /* معامل الانتقال المحلي */
     let m=1;
-    m*=1-r.wealth*.30;                                   // الرعاية الصحية
-    m*=.72+r.urban*(.62+ge.urbanMul)+ (1-r.urban)*ge.ruralMul;
+    m*=.70+(1-r.hc)*.55;                                  // جودة الرعاية الصحية
+    m*=.72+r.urban*(.62+ge.urbanMul)+(1-r.urban)*ge.ruralMul;
     const heatPen=r.heat*Math.max(0,1-S_.hres)*.48, coldPen=r.cold*Math.max(0,1-S_.cres)*.48;
     m*=Math.max(.15,1-heatPen-coldPen);
-    m*=1+S_.ins*.013*r.heat + S_.lnd*.009*(1-r.urban) + S_.liv*.010*(1-r.urban)
-       + S_.blo*.009 + S_.bir*.007 + S_.wat*.006*r.hum + ge.aridMul*r.arid*.5;
-    if(r.lock)m*=.32;
-    if(r.aware)m*=.86;
+    m*=1+S_.ins*.013*r.heat+S_.lnd*.009*(1-r.urban)+S_.liv*.010*(1-r.urban)
+       +S_.blo*.009+S_.bir*.007+S_.wat*.006*r.hum+ge.aridMul*r.arid*.5;
+    if(r.lock)m*=.34;
+    if(r.aware)m*=.88;
+    if(G.alert>=2)m*=.94;                                 // تباعد وتوعية
+    if(G.alert>=4)m*=.88;
     if(r.collapse)m*=1.35;
-    if(G.cure>0)m*=Math.max(.35,1-G.cure/210*(1/(1+S_.dres*.22)));
-    let add=r.inf*base*m*(healthy/alive);
-    if(r.inf<50&&healthy>1)add=Math.max(add,base*m*.45);
-    r.inf=Math.min(alive,r.inf+Math.min(add,healthy));
+    if(r.boost>0)m*=1.55;                                 // قدرة اللاعب: بؤرة تفشٍّ
+    if(cureF>0)m*=Math.max(.42,1-cureF*.55/(1+S_.dres*.22));
+    r.beta=beta0*m;
+    /* عدوى جديدة */
+    let newE=r.beta*r.inf*(susc/alive);
+    if(carriers>0&&carriers<60&&susc>1)newE=Math.max(newE,r.beta*.55);
+    newE=Math.min(susc,newE);
+    /* ضغط المستشفيات */
+    const sevF=Math.min(1,.25+S_.sev/26);
+    const capacity=alive*(.0035+r.wealth*.0125)*(1-hosPen);
+    const load=capacity>0?(r.inf*sevF)/capacity:9;
+    r.load=load;
+    const over=Math.max(0,Math.min(3.2,load-1));
+    /* شفاء ووفاة */
+    let recR=(.042+r.hc*.052)/(1+over*.75)*(1-immSup);
+    recR*=1+cureF*1.35*(.35+r.wealth);                    // العلاج يسرّع الشفاء
+    if(r.collapse)recR*=.55;
+    let dieR=lethal*(1+over*.62)*(1-r.hc*.34);
+    dieR*=Math.max(.35,1-cureF*.5);
+    const toInf=r.exp/incub;
+    const heal=Math.min(r.inf,r.inf*recR);
+    const die=Math.min(r.inf-heal,r.inf*dieR);
+    r.exp=Math.max(0,r.exp+newE-toInf);
+    r.inf=Math.max(0,r.inf+toInf-heal-die);
+    r.rec+=heal; r.dead+=die;
+    /* المناعة تضعف مع الوقت، وكبت المناعة يعجّل ضياعها */
+    if(r.rec>0){
+      const wane=(1/205)*(1+immSup*2.6)*(cureF>.5?.32:1);
+      r.rec=Math.max(0,r.rec-r.rec*wane);
+    }
+    /* انقراض محلّي: أقلّ من حالة واحدة يعني انتهاء التفشّي هنا */
+    if(r.inf+r.exp<1){r.inf=0;r.exp=0;}
+    /* تطعيم عالمي في آخر مراحل اللقاح */
+    if(cureF>.55&&r.aware&&!r.collapse){
+      const v=Math.min(susc,alive*(cureF-.55)*.011*(.35+r.wealth));
+      r.rec+=v;
+    }
+    if(r.boost>0)r.boost--;
+    if(r.sabT>0)r.sabT--;
+    if(r.mutT>0)r.mutT--;
+    if(r.pop-r.dead<600&&r.inf+r.exp>0){r.dead=r.pop;r.inf=r.exp=r.rec=0;}
+    if(r.pop-r.dead<1){r.dead=r.pop;r.inf=r.exp=r.rec=0;}
+    if(r.collapse&&!r.borderOpen){                      // لا حكومة تحرس الحدود
+      r.borderOpen=true; if(r.airT>0)r.airOpen=true; if(r.portT>0)r.portOpen=true;
+      G.netDirty=true;
+    }
+    if(!r.collapse&&r.dead/r.pop>.28){r.collapse=true;r.lock=false;
+      ripple(r.lon,r.lat,'#7a1218',true); burst(r.lon,r.lat,'#3a0d12',12,1.6);
+      log(`انهيار كامل للدولة في ${r.nm}. لا حكومة ولا مستشفيات.`,'good');}
   }
 
   /* ب. الانتقال بين البلدان */
@@ -788,24 +874,27 @@ function stepDay(){
     const a=G.byId[L.a], b=G.byId[L.b];
     for(let d=0;d<2;d++){
       const from=d?b:a, to=d?a:b;
-      if(from.inf<1)continue;
-      const frac=from.inf/Math.max(1,from.pop-from.dead);
+      if(from.inf+from.exp<1)continue;
+      const frac=(from.inf+from.exp*.6)/Math.max(1,from.pop-from.dead);
+      if(from.mutT>0||to.mutT>0)var mutBonus=1.35; else var mutBonus=1;
       let ch=0, open=true;
       if(L.t==='air'){
         open=from.airOpen&&to.airOpen;
-        ch=.0290*(.55+S_.air*.085+S_.bir*.06)*(.45+from.wealth)*(.45+to.wealth)*L.w;
+        ch=.0350*(.55+S_.air*.085+S_.bir*.06)*(.45+from.wealth)*(.45+to.wealth)*L.w;
       }else if(L.t==='sea'){
         open=from.portOpen&&to.portOpen;
-        ch=.0255*(.55+S_.wat*.085+S_.lnd*.03+S_.liv*.03)*(.6+from.portT*.2)*L.w;
+        ch=.0310*(.55+S_.wat*.085+S_.lnd*.03+S_.liv*.03)*(.6+from.portT*.2)*L.w;
       }else{
         open=from.borderOpen&&to.borderOpen;
-        ch=.0370*(.55+S_.lnd*.08+S_.ins*.055+S_.air*.02+S_.liv*.04)*L.w;
+        ch=.0450*(.55+S_.lnd*.08+S_.ins*.055+S_.air*.02+S_.liv*.04)*L.w;
       }
       if(!open)ch*=Math.max(.03,.045+ge.borderBypass*.12);
       if(L.t!=='land')ch*=(ty.crossPenalty!==undefined?ty.crossPenalty:1);
       if(L.t==='air')ch*=1+ge.airMul; if(L.t==='sea')ch*=1+ge.seaMul;
-      ch*=Math.min(1,Math.max(.06,frac*28));
+      ch*=Math.min(1,Math.max(.06,frac*28))*mutBonus;
       if(to.lock)ch*=.5;
+      if(G.alert>=2&&L.t==='air')ch*=.80;                 // فحص المسافرين في المطارات
+      if(G.alert>=3)ch*=.86;                              // قيود سفر عالمية
       if(rng()<ch){
         /* لا تُصاب الدولة فورًا: تنطلق طائرة أو سفينة أو قافلة تحمل العدوى،
            والإصابة تقع لحظة وصولها — كما في اللعبة الأصلية. */
@@ -815,26 +904,14 @@ function stepDay(){
     }
   }
 
-  /* ج. الوفيات */
-  const lethal=S_.let*.00152;
-  if(lethal>0)for(const r of G.regs){
-    if(r.inf<1)continue;
-    let d=r.inf*lethal*(1-r.wealth*.28);
-    if(G.cure>0)d*=Math.max(.28,1-G.cure/240);
-    d=Math.min(d,r.inf); r.inf-=d; r.dead+=d;
-    if(r.pop-r.dead-r.inf<1&&r.inf<1){r.dead=r.pop;r.inf=0;}
-    if(!r.collapse&&r.dead/r.pop>.28){r.collapse=true;r.lock=false;
-      ripple(r.lon,r.lat,'#7a1218',true); burst(r.lon,r.lat,'#3a0d12',12,1.6);
-      log(`انهيار كامل للدولة في ${r.nm}. لا حكومة ولا مستشفيات.`,'good');}
-  }
-
   const t=totals();
   if(t.countries>G.maxCountries)G.maxCountries=t.countries;
 
   /* د. الاكتشاف العالمي */
   if(!G.known){
     const stealth=1+S_.stealth;
-    if(t.inf>1.5e6*stealth||t.dead>500*stealth||(S_.sev>=13&&t.inf>1e5*stealth)){
+    const seen=t.inf*Math.min(1,.25+S_.sev/22);
+    if(seen>1.2e6*stealth||t.dead>500*stealth||(S_.sev>=13&&seen>9e4*stealth)){
       G.known=true; G.knownDay=G.day; G.flash=48; G.shake=16;
       if(ge.cureBack)G.cure=Math.max(0,G.cure-ge.cureBack);
       log('منظمة الصحة العالمية تعلن حالة طوارئ صحية عالمية. بدأ سباق اللقاح.','bad');
@@ -846,7 +923,22 @@ function stepDay(){
   G.awareness=G.known?Math.min(1,(t.inf/t.pop)*3.0+(t.dead/t.pop)*8+S_.sev/62):0;
   G.globalPanic=Math.min(1,G.awareness*1.2+t.dead/t.pop*4);
 
-  /* هـ. ردود فعل الحكومات */
+  /* هـ-١. مستوى الاستجابة العالمية (٠ إلى ٥) */
+  const prevAlert=G.alert;
+  G.alert=!G.known?0
+    :G.awareness>.72||t.dead/t.pop>.06?5
+    :G.awareness>.50||t.dead/t.pop>.02?4
+    :G.awareness>.30||t.dead>2e6?3
+    :G.awareness>.12||t.dead>2e5?2:1;
+  if(G.alert>prevAlert){
+    const NM=['','ترصّد عالمي','فحص المسافرين في المطارات','قيود سفر دولية',
+              'إغلاقات واسعة وحظر تجوّل','أحكام عرفية وحملة تطعيم عالمية'];
+    log(`ارتفع مستوى الاستجابة العالمية إلى ${G.alert}: ${NM[G.alert]}.`,'bad');
+    popAlert('مستوى الاستجابة '+G.alert+' — '+NM[G.alert]);
+    G.flash=22;
+  }
+
+  /* هـ-٢. ردود فعل الحكومات */
   if(G.known)for(const r of G.regs){
     const frac=r.inf/Math.max(1,r.pop-r.dead);
     if(!r.aware&&(frac>.0006||rng()<.018*G.awareness)){
@@ -854,7 +946,7 @@ function stepDay(){
       if(frac>.0006&&rng()<.5)log(`${r.nm} تُعلن أول حالة مؤكدة.`,'warn');
     }
     if(!r.aware||r.collapse)continue;
-    const sev=S_.sev, aw=G.awareness, gv=G.diff.gov*(1-ge.govSlow);
+    const sev=S_.sev, aw=G.awareness, gv=G.diff.gov*(1-ge.govSlow)*(.45+G.alert*.22);
     if(r.airOpen&&rng()<(.0030+sev*.00055+aw*.011)*gv){r.airOpen=false;G.netDirty=true;
       log(`${r.nm} تُغلق مجالها الجوي.`,'bad');}
     if(r.portOpen&&rng()<(.0025+sev*.00045+aw*.009)*gv){r.portOpen=false;G.netDirty=true;
@@ -874,6 +966,7 @@ function stepDay(){
       let c=0;
       if(r.aware&&!r.collapse){
         c=cap*Math.pow(Math.max(0,r.pop-r.dead)/r.pop,.6)*(r.lock?1.10:1)*(1+G.awareness*.35);
+        if(r.sabT>0)c*=.25;                                 // مختبر مُخرَّب
         rp+=c;
       }
       r.research=c;
@@ -930,19 +1023,27 @@ function stepDay(){
 
   /* ي. أحداث عالمية */
   if(rng()<.020)worldEvent();
+  checkAchievements(t);
 
   /* ك. نقاط العدوى المرئية */
   for(const r of G.regs){
-    const f=Math.min(1,(r.inf+r.dead)/Math.max(1,r.pop));
+    const f=Math.min(1,(r.inf+r.exp+r.rec+r.dead)/Math.max(1,r.pop));
     r.dotsOn=Math.round(Math.min(r.dots.length,r.dots.length*Math.pow(f,.55)*1.05));
   }
 
-  G.hist.push({d:G.day,i:t.inf,x:t.dead,c:G.cure});
+  G.hist.push({d:G.day,i:t.inf+t.exp,x:t.dead,c:G.cure,v:t.rec});
   if(G.hist.length>2200)G.hist.shift();
-  if(t.alive<=.5||(t.alive<2500&&t.healthy<1))return endGame(true,'انقرض الجنس البشري.');
+  if(t.alive<=1000)return endGame(true,'انقرض الجنس البشري.');
+  if(t.alive<t.pop*.0012&&t.carriers>=1)return endGame(true,'لم يبقَ من البشر ما يكفي لإعادة البناء.');
+  /* جمود حقيقي: لا انتشار ولا وفيات ولا مناعة جديدة لمئتي يوم */
+  const prog=t.dead+t.carriers+t.rec;
+  if(prog>G.stallDead*1.004||t.countries>G.stallCn){G.stallDead=prog;G.stallCn=t.countries;G.stallDay=G.day;}
+  if(G.day-G.stallDay>220&&t.carriers>=1&&G.cure<99&&G.day>300)
+    return endGame(false,'احتوى العالم الوباء: توقّف انتشاره ولم يعد يقتل أحدًا.');
   if(G.cure>=100)return endGame(false,'اكتمل اللقاح ووُزّع على كل بلد.');
-  if(t.inf<1&&t.dead>0)return endGame(false,'مات آخر حامل للمرض. انتهت السلالة.');
-  if(G.day>3600)return endGame(false,'خمد الوباء بمرور السنين.');
+  if(t.carriers<1&&(t.dead>0||t.rec>0))
+    return endGame(false,'انطفأ الوباء: تعافى آخر مصاب ولم يبقَ حامل واحد.');
+  if(G.day>1500)return endGame(false,'مرّت السنون واحتوى العالم الوباء.');
 }
 
 /* ───── 12. الأحداث العالمية ───── */
@@ -985,11 +1086,12 @@ function worldEvent(){
 function endGame(win,reason){
   if(G.over)return;
   const t=totals();
-  const infPct=(t.inf+t.dead)/t.pop*100, deadPct=t.dead/t.pop*100;
+  const infPct=Math.min(100,(t.inf+t.exp+t.rec+t.dead)/t.pop*100), deadPct=t.dead/t.pop*100;
   let score=deadPct*6+infPct*2+Math.max(0,100-G.cure)*.8+Math.max(0,900-G.day)/12;
   if(!win)score*=.45;
   score=Math.round(score*{easy:.7,norm:1,hard:1.3,brut:1.6}[G.diffKey]);
   const grade=score>=800?'S':score>=620?'A':score>=450?'B':score>=280?'C':score>=130?'D':'E';
+  if(win)achOnWin();
   G.over={win,reason,score,grade,infPct,deadPct,days:G.day,cure:G.cure,
     countries:Math.max(G.maxCountries,t.countries)};
   G.speed=0; showEnd();
@@ -1890,7 +1992,7 @@ function syncTop(){
   $('bdead').style.width=Math.min(100,t.dead/t.pop*100)+'%';
   $('bcure').style.width=G.cure+'%';
   $('vname').textContent=G.name;
-  $('vsub').textContent=`يوم ${G.day} · ${G.known?'مكتشَف':'غير مكتشَف'} · ${t.countries} بلدًا`;
+  $('vsub').textContent=`يوم ${G.day} · ${G.known?'استجابة '+G.alert:'غير مكتشَف'} · ${t.countries} بلدًا`;
   const afford=UPS.filter(u=>visibleUp(u)&&unlocked(u)&&(!owns(u.id)||u.rep)&&G.dna>=costOf(u)).length;
   const bd=$('bdgDis'); bd.classList.toggle('hide',!(afford>0&&G.tab!=='dis')); bd.textContent=afford;
   const bc=$('bdgCur'); bc.classList.toggle('hide',!(G.cure>=25&&G.tab!=='cur'));
@@ -1907,35 +2009,49 @@ function showCountry(r,sx,sy){
     sx=q[0]; sy=q[1];
   }
   const alive=Math.max(1,r.pop-r.dead);
-  const pct=(r.inf/alive)*100, dpct=r.dead/r.pop*100;
+  const carriers=r.inf+r.exp;
+  const pct=carriers/alive*100, dpct=r.dead/r.pop*100, ipct=r.rec/alive*100;
   const clim=r.arid>.6?'قاحل':r.cold>.6?'بارد':r.hum>.7?'رطب':r.heat>.7?'حارّ':'معتدل';
   const wealth=r.wealth>.75?'غني':r.wealth>.45?'متوسط':'فقير';
+  const hos=r.load>2.4?['منهار','red']:r.load>1?['مكتظّ','red']:r.load>.4?['تحت ضغط','']:['مستقرّ',''];
   let tags='';
   if(r.airT>0)tags+=`<i class="${r.airOpen?'':'red'}">${r.airOpen?'مطار مفتوح':'مطار مغلق'}</i>`;
   if(r.portT>0)tags+=`<i class="${r.portOpen?'':'red'}">${r.portOpen?'ميناء مفتوح':'ميناء مغلق'}</i>`;
   tags+=`<i class="${r.borderOpen?'':'red'}">${r.borderOpen?'حدود مفتوحة':'حدود مغلقة'}</i>`;
   if(r.lock)tags+='<i class="red">إغلاق شامل</i>';
   if(r.collapse)tags+='<i class="red">دولة منهارة</i>';
-  if(r.research>0)tags+='<i class="blue">مختبر لقاح</i>';
-  if(!r.aware&&r.inf>0)tags+='<i>لم تكتشف بعد</i>';
+  if(carriers>=1)tags+=`<i class="${hos[1]}">المستشفيات: ${hos[0]}</i>`;
+  if(r.research>0)tags+=`<i class="blue">${r.sabT>0?'مختبر مُعطَّل '+Math.round(r.sabT)+'ي':'مختبر لقاح'}</i>`;
+  if(r.boost>0)tags+='<i class="red">بؤرة نشطة</i>';
+  if(r.mutT>0)tags+='<i>طفرة موضعية</i>';
+  if(!r.aware&&carriers>0)tags+='<i>لم تكتشف بعد</i>';
+  const acts=Object.keys(ABILS).map(k=>{
+    const why=abilReady(k,r), c=abilCost(k);
+    return `<button class="act${why?' off':''}" data-act="${k}" data-reg="${r.id}"
+      title="${ABILS[k].ds}"><b>${ABILS[k].nm}</b><span>${why||c+' حمض'}</span></button>`;
+  }).join('');
   cpop.innerHTML=`<button class="close" id="cpx">✕</button>
     <h3>${r.nm}</h3>
-    <div class="sub">${wealth} · مناخ ${clim} · تحضّر ${Math.round(r.urban*100)}٪</div>
+    <div class="sub">${wealth} · مناخ ${clim} · تحضّر ${Math.round(r.urban*100)}٪ · رعاية ${Math.round(r.hc*100)}٪</div>
     <div class="kv">
-      <div><span>السكان</span><b>${fmt(r.pop)}</b></div>
-      <div><span>الأحياء</span><b>${fmt(alive)}</b></div>
-      <div><span>مصابون</span><b style="color:#ff6b53">${fmt(r.inf)}</b></div>
-      <div><span>وفيات</span><b style="color:#e0353f">${fmt(r.dead)}</b></div>
+      <div><span>السكان</span><b>${fmtShort(r.pop)}</b></div>
+      <div><span>سليمون</span><b>${fmtShort(Math.max(0,alive-carriers-r.rec))}</b></div>
+      <div><span>مصابون</span><b style="color:#ff6b53">${fmtShort(r.inf)}</b></div>
+      <div><span>في الحضانة</span><b style="color:#f2b23c">${fmtShort(r.exp)}</b></div>
+      <div><span>متعافون</span><b style="color:#48b7ff">${fmtShort(r.rec)}</b></div>
+      <div><span>وفيات</span><b style="color:#e0353f">${fmtShort(r.dead)}</b></div>
       <div><span>نسبة الإصابة</span><b>${pct<1&&pct>0?'<1':pct.toFixed(0)}٪</b></div>
-      <div><span>نسبة الوفيات</span><b>${dpct<1&&dpct>0?'<1':dpct.toFixed(0)}٪</b></div>
+      <div><span>مناعة</span><b>${ipct<1&&ipct>0?'<1':ipct.toFixed(0)}٪</b></div>
     </div>
-    <div class="tags">${tags}</div>`;
+    <div class="tags">${tags}</div>
+    <div class="acts">${acts}</div>`;
   cpop.classList.remove('hide');
-  const w=cpop.offsetWidth||236, h=cpop.offsetHeight||160;
+  const w=cpop.offsetWidth||248, h=cpop.offsetHeight||210;
   let x=Math.min(Math.max(8,sx-w/2),window.innerWidth-w-8);
   let y=sy-h-16; if(y<70)y=Math.min(sy+18,window.innerHeight-h-70);
   cpop.style.left=x+'px'; cpop.style.top=y+'px';
   $('cpx').onclick=()=>{hideCountry();G.sel=null;baseDirty=true;};
+  cpop.querySelectorAll('[data-act]').forEach(b=>b.onclick=()=>useAbility(b.dataset.act,b.dataset.reg));
 }
 
 /* ───── 19. اللوحة السفلية ───── */
@@ -2000,18 +2116,18 @@ function panelDis(){
   const dm=$('devmode'); if(dm)dm.onclick=()=>{devMode=!devMode;renderSheet();};
 }
 function panelWorld(){
-  const arr=G.regs.slice().sort((a,b)=>((b.inf+b.dead)/b.pop)-((a.inf+a.dead)/a.pop));
+  const arr=G.regs.slice().sort((a,b)=>((b.inf+b.exp+b.dead)/b.pop)-((a.inf+a.exp+a.dead)/a.pop));
   let h='<div class="rows">';
   for(const r of arr){
     const alive=Math.max(1,r.pop-r.dead);
-    const pct=Math.min(100,(r.inf/alive+r.dead/r.pop)*100);
+    const pct=Math.min(100,((r.inf+r.exp)/alive+r.dead/r.pop)*100);
     let flags='';
     if(r.airT>0)flags+=`<i class="${r.airOpen?'':'hot'}">✈</i>`;
     if(r.portT>0)flags+=`<i class="${r.portOpen?'':'hot'}">⚓</i>`;
     flags+=`<i class="${r.borderOpen?'':'hot'}">⛔</i>`;
     if(r.lock)flags+='<i class="hot">🔒</i>';
     h+=`<button class="row" data-reg="${r.id}">
-      <div class="nm"><b>${r.nm}</b><span>${fmtShort(r.pop)} نسمة · مصابون ${fmtShort(r.inf)} · وفيات ${fmtShort(r.dead)}</span></div>
+      <div class="nm"><b>${r.nm}</b><span>${fmtShort(r.pop)} نسمة · مصابون ${fmtShort(r.inf+r.exp)} · وفيات ${fmtShort(r.dead)} · مناعة ${fmtShort(r.rec)}</span></div>
       <div class="flags">${flags}</div>
       <div class="mini"><div class="track"><i class="f-inf" style="width:${pct}%"></i></div></div>
       <div class="pct num" style="color:${pct>60?'#e0353f':pct>5?'#f2b23c':'#7a949c'}">${pct<1&&pct>0?'<1':Math.round(pct)}٪</div></button>`;
@@ -2056,23 +2172,31 @@ function panelNews(){
     `<div class="log ${l.kind}"><time>${l.t}</time><span>${l.txt}</span></div>`).join('')+'</div>';
 }
 function panelStats(){
-  const t=totals(), s=G.stats;
+  const t=totals(), st=G.stats;
+  const ALERT=['هادئ','ترصّد','فحص المطارات','قيود سفر','إغلاقات واسعة','أحكام عرفية'];
+  const achDone=ACHS.filter(a=>ACH[a.id]).length;
   sheetBody.innerHTML=`<div class="stats">
     <div class="stat"><span>مصابون الآن</span><b class="num">${fmt(t.inf)}</b></div>
+    <div class="stat"><span>في فترة الحضانة</span><b class="num" style="color:var(--amber)">${fmt(t.exp)}</b></div>
     <div class="stat"><span>وفيات</span><b class="num" style="color:var(--virus)">${fmt(t.dead)}</b></div>
+    <div class="stat"><span>متعافون بمناعة</span><b class="num" style="color:var(--cure)">${fmt(t.rec)}</b></div>
     <div class="stat"><span>سليمون</span><b class="num">${fmt(t.healthy)}</b></div>
     <div class="stat"><span>بلدان مصابة</span><b class="num">${t.countries} / ${G.regs.length}</b></div>
-    <div class="stat"><span>العدوى</span><b class="num" style="color:var(--plasma)">${s.inf}</b></div>
-    <div class="stat"><span>الشدّة</span><b class="num" style="color:var(--amber)">${s.sev}</b></div>
-    <div class="stat"><span>الفتك</span><b class="num" style="color:var(--virus)">${s.let}</b></div>
-    <div class="stat"><span>مقاومة الأدوية</span><b class="num" style="color:var(--serum)">${s.dres.toFixed(1)}</b></div>
+    <div class="stat"><span>مستوى الاستجابة</span><b class="num" style="color:var(--amber)">${G.alert} · ${ALERT[G.alert]}</b></div>
+    <div class="stat"><span>الشدّة / الفتك</span><b class="num">${st.sev} / ${st.let}</b></div>
+    <div class="stat"><span>العدوى</span><b class="num" style="color:var(--plasma)">${st.inf}</b></div>
+    <div class="stat"><span>الحضانة</span><b class="num">${(3.6+(st.inc||0)).toFixed(1)} يوم</b></div>
   </div>
   <div class="chartbox"><div class="legend">
-    <i style="color:var(--virus)">مصابون</i><i style="color:#8c2b33">وفيات</i><i style="color:var(--cure)">اللقاح</i></div>
+    <i style="color:var(--virus)">مصابون</i><i style="color:#8c2b33">وفيات</i>
+    <i style="color:#3ea0e0">متعافون</i><i style="color:var(--cure)">اللقاح</i></div>
     <canvas class="chart" id="chart"></canvas></div>
+  <div class="achbox">
+    <div class="achhead">الإنجازات <b>${achDone}/${ACHS.length}</b></div>
+    ${ACHS.map(a=>`<div class="ach${ACH[a.id]?' on':''}"><b>${a.nm}</b><span>${a.ds}</span></div>`).join('')}
+  </div>
   <div class="hint">النوع: ${TYPES[G.type].nm} · الصعوبة: ${G.diff.k} · البذرة <span class="num">${G.seed}</span><br>
     الجينات: ${Object.keys(GENES).map(k=>{const o=GENES[k].opts.find(o=>o.id===G.genes[k]);return o?o.nm:'—';}).join(' · ')}<br>
-    نفس البذرة ونفس الخيارات تُعيد نفس العالم بالضبط.<br><br>
     الخريطة: حدود Natural Earth 110m · صور الأرض: NASA Blue Marble وEarth at Night (مجال عام).<br>
     الخط: Cairo (رخصة SIL OFL).</div>`;
   drawChart();
@@ -2099,20 +2223,103 @@ function drawChart(){
   };
   line(h=>h.i/pop,'#e0353f','rgba(224,53,63,.10)');
   line(h=>h.x/pop,'#8c2b33',null);
+  line(h=>(h.v||0)/pop,'#3ea0e0',null);
   line(h=>h.c/100,'#48b7ff',null);
 }
 
+/* ══════════════════ ١٩. القدرات النشطة على الدول ══════════════════
+   تُستخدم من بطاقة الدولة: تكلفة بالحمض النووي، وزمن تهيئة مشترك،
+   وكلفة متصاعدة مع كل استخدام.                                        */
+const ABILS={
+  surge:{nm:'بؤرة تفشٍّ',ds:'موجة عدوى مركّزة داخل هذه الدولة لأربعين يومًا.',
+    base:12,step:6,cd:16,col:'#ff6b53'},
+  mut:{nm:'طفرة موضعية',ds:'تُسهّل انتقال المرض من هذه الدولة وإليها لخمسين يومًا.',
+    base:10,step:5,cd:14,col:'#f2b23c'},
+  sab:{nm:'تخريب مختبر',ds:'يشلّ أبحاث اللقاح في هذه الدولة سبعين يومًا.',
+    base:18,step:9,cd:22,col:'#48b7ff'}
+};
+const abilCost=k=>ABILS[k].base+ABILS[k].step*(G.abil[k]||0);
+function abilReady(k,r){
+  if(G.abilCd>0)return 'تحتاج '+G.abilCd+' يومًا';
+  if(G.dna<abilCost(k))return 'حمض نووي غير كافٍ';
+  if(k==='surge'&&r.inf+r.exp<1)return 'لا مصابين هنا';
+  if(k==='sab'&&!(r.research>0))return 'لا مختبر هنا';
+  if(k==='sab'&&r.sabT>0)return 'مُخرَّب أصلًا';
+  if(k==='mut'&&r.mutT>0)return 'نشطة أصلًا';
+  return null;
+}
+function useAbility(k,id){
+  const r=G.byId[id]; if(!r||!ABILS[k])return;
+  const why=abilReady(k,r); if(why)return toast(why);
+  const c=abilCost(k);
+  G.dna-=c; G.abil[k]=(G.abil[k]||0)+1; G.abilCd=ABILS[k].cd;
+  if(k==='surge'){
+    r.boost=40;
+    const alive=Math.max(1,r.pop-r.dead);
+    const susc=Math.max(0,alive-r.inf-r.exp-r.rec);
+    r.exp+=Math.min(susc,Math.max(60,r.inf*.7+alive*.00035));
+    log(`بؤرة تفشٍّ في ${r.nm}: ارتفعت الإصابات فجأة.`,'good');
+  }else if(k==='mut'){
+    r.mutT=50;
+    log(`طفرة موضعية في ${r.nm}: صار المرض أسهل انتقالًا من هذه الدولة وإليها.`,'good');
+  }else{
+    r.sabT=70; G.cure=Math.max(0,G.cure-1.2);
+    log(`تخريب مختبر ${r.nm}: توقّف بحث اللقاح فيها.`,'good');
+  }
+  burst(r.lon,r.lat,ABILS[k].col,16,2.2); ripple(r.lon,r.lat,ABILS[k].col,true);
+  G.flash=18; flashDna(); syncUI(); showCountry(r);
+}
+
+/* ══════════════════ الإنجازات (تُحفظ بين الجولات) ══════════════════ */
+const ACH_KEY='ya7_wabaa_ach_v1';
+const ACHS=[
+  {id:'first',nm:'المريض صفر',ds:'ابدأ أول تفشٍّ لك.'},
+  {id:'all68',nm:'لا مهرب',ds:'أوصل المرض إلى كل بلدان العالم.'},
+  {id:'silent',nm:'شبح',ds:'أصب ٢٠ بلدًا قبل أن يكتشفك أحد.'},
+  {id:'bil',nm:'مليار',ds:'اقتل مليار إنسان في جولة واحدة.'},
+  {id:'fast',nm:'عاصفة',ds:'انتصر قبل اليوم ٣٥٠.'},
+  {id:'win',nm:'نهاية البشرية',ds:'أنهِ الجنس البشري مرة واحدة.'},
+  {id:'hard',nm:'وحشي',ds:'انتصر على الصعوبة الوحشية.'},
+  {id:'nokill',nm:'صبر طويل',ds:'أصب نصف البشرية قبل أن يموت أول إنسان.'},
+  {id:'labs',nm:'إطفاء الأنوار',ds:'خرّب خمسة مختبرات في جولة واحدة.'},
+  {id:'immune',nm:'ضد المناعة',ds:'اقتل مليون إنسان بعد أن يتجاوز اللقاح ٥٠٪.'}
+];
+function loadAch(){try{return JSON.parse(localStorage.getItem(ACH_KEY))||{};}catch(e){return {};}}
+function saveAch(o){try{localStorage.setItem(ACH_KEY,JSON.stringify(o));}catch(e){}}
+let ACH=loadAch();
+function grantAch(id){
+  if(ACH[id])return;
+  const a=ACHS.find(x=>x.id===id); if(!a)return;
+  ACH[id]={d:Date.now()}; saveAch(ACH);
+  popAlert('إنجاز: '+a.nm);
+  log(`إنجاز جديد: ${a.nm} — ${a.ds}`,'good');
+}
+function checkAchievements(t){
+  if(t.countries>=G.regs.length)grantAch('all68');
+  if(!G.known&&t.countries>=20)grantAch('silent');
+  if(t.dead>=1e9)grantAch('bil');
+  if(t.dead<1&&(t.inf+t.exp+t.rec)>t.pop*.5)grantAch('nokill');
+  if(G.regs.filter(r=>r.sabT>0).length>=5)grantAch('labs');
+  if(G.cure>=50&&t.dead-(G.deadAt50||0)>1e6&&G.deadAt50!==undefined)grantAch('immune');
+  if(G.cure>=50&&G.deadAt50===undefined)G.deadAt50=t.dead;
+}
+function achOnWin(){
+  grantAch('win');
+  if(G.day<350)grantAch('fast');
+  if(G.diffKey==='brut')grantAch('hard');
+}
+
 /* ───── 22. الحفظ التلقائي والاستئناف ───── */
-const SAVE_KEY='ya7_wabaa_save_v2';
+const SAVE_KEY='ya7_wabaa_save_v3';
 function saveGame(){
   if(!G||G.over)return;
   try{
-    const s={v:2,cfg:G.cfg,mapMode,nightMode,start:G.start,day:G.day,dna:G.dna,owned:G.owned,cure:G.cure,known:G.known,knownDay:G.knownDay,
+    const s={v:3,cfg:G.cfg,mapMode,nightMode,start:G.start,alert:G.alert,abil:G.abil,abilCd:G.abilCd,day:G.day,dna:G.dna,owned:G.owned,cure:G.cure,known:G.known,knownDay:G.knownDay,
       sabCount:G.sabCount,devolves:G.devolves,sporeCount:G.sporeCount,cureFund:G.cureFund,
       logs:G.logs.slice(0,40),hist:G.hist.filter((h,i)=>i%4===0).slice(-420),
       rs:rng.get(),vs:vrng.get(),
       regs:G.regs.map(r=>[r.id,r.inf,r.dead,r.aware?1:0,r.seen?1:0,r.airOpen?1:0,r.portOpen?1:0,
-        r.borderOpen?1:0,r.lock?1:0,r.collapse?1:0])};
+        r.borderOpen?1:0,r.lock?1:0,r.collapse?1:0,r.exp,r.rec,r.boost,r.sabT,r.mutT])};
     localStorage.setItem(SAVE_KEY,JSON.stringify(s));
   }catch(e){}
 }
@@ -2120,7 +2327,7 @@ function hasSave(){try{return !!localStorage.getItem(SAVE_KEY);}catch(e){return 
 function clearSave(){try{localStorage.removeItem(SAVE_KEY);}catch(e){}}
 function loadGame(){
   let s; try{s=JSON.parse(localStorage.getItem(SAVE_KEY));}catch(e){return false;}
-  if(!s||s.v!==2)return false;
+  if(!s||s.v!==3)return false;
   veil.style.display='none'; $('stage').hidden=false;
   cfg=s.cfg; newGame(s.cfg);
   mapMode=s.mapMode||'flat'; nightMode=!!s.nightMode; G.start=s.start||null;
@@ -2129,12 +2336,14 @@ function loadGame(){
   G.day=s.day; G.dna=s.dna; G.owned=s.owned||{}; G.cure=s.cure; G.known=s.known; G.knownDay=s.knownDay||0;
   G.sabCount=s.sabCount||0; G.devolves=s.devolves||0; G.sporeCount=s.sporeCount||0; G.cureFund=s.cureFund||0;
   G.logs=s.logs||[]; G.hist=s.hist||[];
+  G.alert=s.alert||0; G.abil=s.abil||{surge:0,sab:0,mut:0}; G.abilCd=s.abilCd||0;
   rng.set(s.rs); vrng.set(s.vs);
   for(const a of s.regs){
     const r=G.byId[a[0]]; if(!r)continue;
     r.inf=a[1];r.dead=a[2];r.aware=!!a[3];r.seen=!!a[4];r.airOpen=!!a[5];r.portOpen=!!a[6];
     r.borderOpen=!!a[7];r.lock=!!a[8];r.collapse=!!a[9];
-    const f=Math.min(1,(r.inf+r.dead)/Math.max(1,r.pop));
+    r.exp=a[10]||0; r.rec=a[11]||0; r.boost=a[12]||0; r.sabT=a[13]||0; r.mutT=a[14]||0;
+    const f=Math.min(1,(r.inf+r.exp+r.rec+r.dead)/Math.max(1,r.pop));
     r.dotsOn=Math.round(Math.min(r.dots.length,r.dots.length*Math.pow(f,.55)*1.05));
   }
   recalc(); resize(); syncProj(); fitView(); drawBase();
@@ -2317,6 +2526,7 @@ function startFrom(id,auto){
   G.flash=26; G.shake=10;
   if(!auto)focusRegion(s,54);
   running=true; setSpeed(1);
+  grantAch('first');
   popAlert('المريض صفر: '+s.nm);
   toast('بدأ التفشّي في '+s.nm);
   setTimeout(()=>openSheet('dis'),900);
