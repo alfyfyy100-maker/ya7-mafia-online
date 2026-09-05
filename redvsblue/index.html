@@ -259,7 +259,6 @@ function makeBall(i) {
     hurtT: 0, healT: 0,
     sqN: 0, sqX: 1, sqY: 0,   // انبعاج عند الجدار
     blinkT: rnd(2, 5), blink: 0,
-    jukeT: 0, juke: 1,
     hearts: Array.from({ length: MAX_HP }, () => ({ s: 1, gone: 0 })),
     prevHp: MAX_HP,
   };
@@ -452,25 +451,12 @@ function stepBall(b, dt) {
   const o = otherBall(b);
   if (b.dead) { b.deadT += dt; b.vx *= Math.max(0, 1 - 3 * dt); b.vy *= Math.max(0, 1 - 3 * dt); b.x += b.vx * dt; b.y += b.vy * dt; }
   else {
-    // توجيه: حامل السكين أو الدرع يطارد، وخصمه يهرب بخفة
-    const dx = o.x - b.x, dy = o.y - b.y, d = Math.hypot(dx, dy) || 1;
-    let chase = 0;
-    if (b.weapon && b.weapon.def.kind !== 'gun' && !o.dead) chase = 2.4;
-    else if (o.weapon && o.weapon.def.kind !== 'gun') chase = -0.9;
-    else if (o.weapon && o.weapon.def.kind === 'gun' && !b.weapon) chase = -0.35;
-    if (chase) { b.vx += dx / d * chase * dt; b.vy += dy / d * chase * dt; }
-    // مراوغة: من يُصوَّب عليه يغيّر اتجاهه جانبيًا بين حين وآخر
-    if (o.weapon && o.weapon.def.kind === 'gun' && !o.dead) {
-      b.jukeT -= dt;
-      if (b.jukeT <= 0) { b.jukeT = rnd(0.45, 0.9); b.juke = Math.random() < 0.5 ? -1 : 1; }
-      b.vx += -dy / d * b.juke * 1.7 * dt; b.vy += dx / d * b.juke * 1.7 * dt;
-    }
+    // فيزياء بحتة: لا مطاردة ولا مراوغة — الكرة ترتد من الجدار ومن الخصم فقط
     // حركة + تثبيت السرعة تدريجيًا عند الأساس
     b.x += b.vx * dt; b.y += b.vy * dt;
     let sp = Math.hypot(b.vx, b.vy);
     if (sp < 1e-4) { const a = rnd(0, TAU); b.vx = Math.cos(a) * BASE_SPEED; b.vy = Math.sin(a) * BASE_SPEED; sp = BASE_SPEED; }
-    const target = chase > 0 ? BASE_SPEED * 1.25 : BASE_SPEED;
-    const ns = sp + (target - sp) * Math.min(1, 2.6 * dt);
+    const ns = sp + (BASE_SPEED - sp) * Math.min(1, 2.6 * dt);
     b.vx *= ns / sp; b.vy *= ns / sp;
   }
   // جدار الحلبة
