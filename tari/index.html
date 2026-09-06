@@ -1,10 +1,37 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
+<link rel="manifest" href="/manifest.webmanifest"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="ألعاب ياح"/>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0e0b1a">
-<title>طاريك — لعبة حفلات</title>
+<title>طاريك — لعبة حفلات صوتية: قلّد صاحبك وخمّن الأغلبية | ألعاب ياح</title>
+<meta name="description" content="لعبة حفلات أونلاين بالصوت والنص: كل جولة عن واحد منكم — قلّدوه، توقّعوا وش يسوي، واكتبوا عنه. النقاط على الإجماع لا على الصح. ٣-٩ لاعبين، كل واحد على جواله، والتسجيلات تُمحى فور انتهاء الجولة."/>
+<link rel="canonical" href="https://dozplay.com/tari/"/>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[{"@type":"VideoGame","name":"طاريك","alternateName":"طاريك — ألعاب ياح","url":"https://dozplay.com/tari/","image":"https://dozplay.com/tari/cover.jpg","description":"لعبة حفلات أونلاين بالصوت والنص: كل جولة عن واحد منكم — قلّدوه، توقّعوا وش يسوي، واكتبوا عنه. النقاط على الإجماع لا على الصح. ٣-٩ لاعبين، كل واحد على جواله، والتسجيلات تُمحى فور انتهاء الجولة.","inLanguage":"ar","gamePlatform":"الويب — متصفح الجوال والكمبيوتر","applicationCategory":"Game","operatingSystem":"Web browser","isAccessibleForFree":true,"offers":{"@type":"Offer","price":"0","priceCurrency":"SAR","availability":"https://schema.org/InStock"},"publisher":{"@type":"Organization","name":"ألعاب ياح","alternateName":["العاب ياح","Ya7 Games","Ya7"],"url":"https://dozplay.com/","logo":"https://dozplay.com/og-cover.jpg"},"author":{"@type":"Organization","name":"ألعاب ياح","alternateName":["العاب ياح","Ya7 Games","Ya7"],"url":"https://dozplay.com/","logo":"https://dozplay.com/og-cover.jpg"},"isPartOf":{"@type":"WebSite","name":"ألعاب ياح","url":"https://dozplay.com/"},"playMode":["MultiPlayer"]},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"ألعاب ياح","item":"https://dozplay.com/"},{"@type":"ListItem","position":2,"name":"طاريك","item":"https://dozplay.com/tari/"}]}]}
+</script>
+<meta name="robots" content="index, follow"/>
+<link rel="icon" href="/favicon.ico" sizes="any"/>
+<link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32"/>
+<link rel="icon" href="/favicon-16.png" type="image/png" sizes="16x16"/>
+<link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="ألعاب ياح"/>
+<meta property="og:title" content="طاريك — لعبة حفلات صوتية: قلّد صاحبك وخمّن الأغلبية | ألعاب ياح"/>
+<meta property="og:description" content="لعبة حفلات أونلاين بالصوت والنص: كل جولة عن واحد منكم — قلّدوه، توقّعوا وش يسوي، واكتبوا عنه. النقاط على الإجماع لا على الصح. ٣-٩ لاعبين، كل واحد على جواله، والتسجيلات تُمحى فور انتهاء الجولة."/>
+<meta property="og:url" content="https://dozplay.com/tari/"/>
+<meta property="og:image" content="https://dozplay.com/tari/cover.jpg"/>
+<meta property="og:locale" content="ar_AR"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="طاريك — لعبة حفلات صوتية: قلّد صاحبك وخمّن الأغلبية | ألعاب ياح"/>
+<meta name="twitter:description" content="لعبة حفلات أونلاين بالصوت والنص: كل جولة عن واحد منكم — قلّدوه، توقّعوا وش يسوي، واكتبوا عنه. النقاط على الإجماع لا على الصح. ٣-٩ لاعبين، كل واحد على جواله، والتسجيلات تُمحى فور انتهاء الجولة."/>
+<meta name="twitter:image" content="https://dozplay.com/tari/cover.jpg"/>
+<link rel="preconnect" href="https://ya7-mafia-online.alfyfyy100.workers.dev" crossorigin>
 <style>
 :root{
   --bg:#0e0b1a; --bg2:#171034; --card:#1e1640; --card2:#271b52;
@@ -680,6 +707,7 @@ const App = {
     c.append(el('p', 'sub', 'رمز الغرفة'));
     c.append(el('div', 'code', s.code));
     const share = el('button', 'b-sm b-ghost', 'انسخ الرمز');
+    share.id = 'shareBtn';          // مرساة باركود الغرفة (ya7-qr-join.js)
     share.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(s.code); toast('انتسخ ✓'); };
     share.style.width = 'auto'; c.append(share);
     b.append(c);
@@ -1067,9 +1095,16 @@ $('#q-export').onclick = () => {
 addEventListener('beforeunload', () => { Audio_.release(); Play.purge(); });
 
 Bank.load().then(() => { if ($('#s-prompts').classList.contains('on')) qRender(); });
-/* رمز الغرفة من الرابط: ?r=ABC123 — عشان تنفع مشاركة الرابط في الواتساب */
-const q = new URLSearchParams(location.search).get('r');
-if (q && /^[A-Za-z0-9]{6}$/.test(q)) $('#i-code').value = q.toUpperCase();
+/* رمز الغرفة من الرابط. الاسم ?room= لا ?r=: هو ما يبنيه ya7-qr-join.js
+   في رابط الباركود، وما تستعمله بقية ألعاب الموقع. (r مقبولة كذلك
+   تسامحًا مع أي رابط قديم.) */
+const q = (new URLSearchParams(location.search).get('room')
+        || new URLSearchParams(location.search).get('r') || '').toUpperCase();
+if (/^[A-Z0-9]{6}$/.test(q)) $('#i-code').value = q;
 </script>
+<!-- طبقات الموقع المشتركة: وضع التطبيق وتسجيل الـSW والحساب، وباركود
+     الغرفة. الباركود يلتقط الرمز من رسالة welcome تلقائيًا. -->
+<script src="/ya7-app.js"></script>
+<script src="/ya7-qr-join.js"></script>
 </body>
 </html>
