@@ -588,6 +588,33 @@ const RoomCommon = {
      السوكِت بنفس seatToken ويرجع بنفس المقعد والدور خلال ثانية.
      الفحص هنا مركزي فيغطي كل صنف يستعمل seatByToken المشترك،
      وتدوير التوكن في /kick يقفل الباب حتى لو وُجد مسار بحث آخر. */
+  /* مقعدٌ منقطعٌ يحمل نفس الاسم = صاحبه رجع. المتصل لا يُمسّ أبدًا،
+     فما أحد يسرق مقعد لاعبٍ حاضر بانتحال اسمه. */
+  /* ── مقعدٌ «متصل» بلا مقبس حيّ هو مقعدٌ ميت ──
+     شبكة الجوال تموت صامتة: المقبس القديم ينقطع عند اللاعب ويعيد الاتصال
+     خلال جزء من ثانية، بينما إغلاقه ما وصل الخادم بعد. فيجد الداخلُ
+     مقعدَه معلَّمًا «متصل» فلا يستردّه، ويُطرد من لعبةٍ هو فيها.
+     الحلّ ألا نصدّق الراية وحدها: مقبسٌ غائب أو غير مفتوح = منقطع. */
+  sweepDeadSeats() {
+    let changed = false;
+    for (const p of this.room.players) {
+      if (!p.connected) continue;
+      const ws = this.sockets.get(p.id);
+      const live = ws && (ws.readyState === undefined || ws.readyState === 1);
+      if (!live) { p.connected = false; this.sockets.delete(p.id); changed = true; }
+    }
+    return changed;
+  },
+
+  reclaimByName(rawName) {
+    const want = cleanName(rawName);
+    if (!want) return null;
+    const pick = () => this.room.players.filter(p => !p.connected && !p.kicked && p.name === want);
+    let hit = pick();
+    if (!hit.length) { this.sweepDeadSeats(); hit = pick(); }   // السباق أعلاه
+    return hit.length === 1 ? hit[0] : null;   // اسمان متطابقان منقطعان: لا نخمّن
+  },
+
   seatByToken(token) {
     if (!token) return null;
     const p = this.room.players.find(q => tokenEquals(q.seatToken, token)) || null;
@@ -10392,7 +10419,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v176';   // v174 = أحمر ضد أزرق · v175 = طاريك بلا مؤقّتات · v176 = البلاغات الصوتية
+const WORKER_VERSION = 'v179';   // v177 = تقليد الأصوات · v178 = إصلاحات القياس · v179 = الدخول أولًا
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -16472,6 +16499,13 @@ const TARI_KINDS = {
     textMax: TARI_ANS_MAX,
     anon: true, ask: 'أي عذر يشبه {نجم} أكثر؟',
   },
+  sfx: {
+    name: 'قلّد الصوت',
+    inputType: 'audio', recorders: 'all', vote: 'pickOne',
+    scoring: { vote: 10, agree: 5, part: 2, top: 8 },
+    clipMs: 6000,
+    anon: true, ask: 'مين أقرب للصوت الأصلي؟',
+  },
   chain: {
     name: 'السلسلة',
     /* finaleKind: أي نمط يحمل هذي الراية هو ختام اللعبة. راية لا اسم،
@@ -16552,6 +16586,39 @@ const TARI_BANK = [
   { kind: 'uthr', text: 'وش يقول {نجم} لو ضبطتوه يأكل بالليل؟' },
   { kind: 'uthr', text: 'وش عذر {نجم} لو خسر ولا يبي يعترف؟' },
 
+  { kind: 'sfx', text: 'ضحكة رضيع ٢', sound: 'baby-laugh-2', flat: true },
+  { kind: 'sfx', text: 'ضحكة رضيع', sound: 'baby-laugh' },
+  { kind: 'sfx', text: 'بالون يفشّ', sound: 'balloon' },
+  { kind: 'sfx', text: 'نطّة', sound: 'boing' },
+  { kind: 'sfx', text: 'زامور مزدوج', sound: 'car-horn-2' },
+  { kind: 'sfx', text: 'زامور', sound: 'car-horn' },
+  { kind: 'sfx', text: 'قطة', sound: 'cat' },
+  { kind: 'sfx', text: 'منشار يشتغل', sound: 'chainsaw' },
+  { kind: 'sfx', text: 'بقرة', sound: 'cow', flat: true },
+  { kind: 'sfx', text: 'باب يصرّ', sound: 'door-creak' },
+  { kind: 'sfx', text: 'جرس الباب', sound: 'doorbell' },
+  { kind: 'sfx', text: 'ضحكة شريرة ٢', sound: 'evil-laugh-2' },
+  { kind: 'sfx', text: 'ضحكة شريرة ٣', sound: 'evil-laugh-3' },
+  { kind: 'sfx', text: 'ضحكة شريرة', sound: 'evil-laugh' },
+  { kind: 'sfx', text: 'ترومبون الفشل', sound: 'fail-trombone' },
+  { kind: 'sfx', text: 'ضفدع', sound: 'frog', flat: true },
+  { kind: 'sfx', text: 'هاتف قديم', sound: 'phone' },
+  { kind: 'sfx', text: 'ديك', sound: 'rooster' },
+  { kind: 'sfx', text: 'ترومبون حزين', sound: 'sad-trombone', flat: true },
+  { kind: 'sfx', text: 'ترومبيت حزين', sound: 'sad-trumpet', flat: true },
+  { kind: 'sfx', text: 'صرخة بنت', sound: 'scream-2' },
+  { kind: 'sfx', text: 'صرخة رعب', sound: 'scream-3' },
+  { kind: 'sfx', text: 'صرخة', sound: 'scream' },
+  { kind: 'sfx', text: 'إسعاف', sound: 'siren', flat: true },
+  { kind: 'sfx', text: 'صفارة منزلقة', sound: 'slide-whistle' },
+  { kind: 'sfx', text: 'عطسة ٣', sound: 'sneeze-3' },
+  { kind: 'sfx', text: 'عطسة', sound: 'sneeze' },
+  { kind: 'sfx', text: 'شخير', sound: 'snoring' },
+  { kind: 'sfx', text: 'قطار', sound: 'train', flat: true },
+  { kind: 'sfx', text: 'صفير نداء', sound: 'whistle' },
+  { kind: 'sfx', text: 'ضحكة ساحرة', sound: 'witch-laugh' },
+  { kind: 'sfx', text: 'صفير إعجاب', sound: 'wolf-whistle', flat: true },
+
   { kind: 'chain', text: 'القهوة بردت والسالفة ما خلصت والباب مفتوح' },
   { kind: 'chain', text: 'سبع سيارات وقفت عند البقالة ولا واحد نزل' },
   { kind: 'chain', text: 'خالتي تقول إن القط يفهم عربي أفصح مني' },
@@ -16568,6 +16635,9 @@ function tariNormPrompt(p, id) {
   const text = cleanText(p.text, TARI_TEXT_MAX);
   if (!text) return null;
   const out = { id: String(id), kind, text };
+  /* معرّف الملف الصوتي: أحرف صغيرة وشُرَط فقط — لأنه يدخل مسارًا. */
+  if (typeof p.sound === 'string' && /^[a-z0-9-]{1,40}$/.test(p.sound)) out.sound = p.sound;
+  if (p.flat === true) out.flat = true;
   if (Array.isArray(p.opts)) {
     const opts = [];
     for (const o of p.opts) {
@@ -16662,7 +16732,7 @@ export class TariRoom {
       players: [],
       bank: [], used: [],
       totalRounds: 0, finale: true, wantRounds: 0,
-      round: 0, kindBag: [], starQueue: [],
+      round: 0, kindBag: [], starQueue: [], judge: 'vote', marks: {},
       kind: '', prompt: null, starId: null, ask: '',
       tones: null,     // pid -> نبرة الجولة (نمط النبرة وحده)
       subs: {},        // pid -> { has, text?, choice?, tag?, skipped? }   ← لا صوت هنا أبدًا
@@ -16763,11 +16833,18 @@ export class TariRoom {
       const newId = (validPlayerId(askedId) && !this.room.players.some(p => p.id === askedId)) ? askedId : oldId;
       if (newId !== oldId) {
         player.id = newId;
-        for (const bag of ['subs', 'votes']) {
+        for (const bag of ['subs', 'votes', 'marks', 'readys']) {
           if (this.room[bag] && oldId in this.room[bag]) {
             this.room[bag][newId] = this.room[bag][oldId];
             delete this.room[bag][oldId];
           }
+        }
+        /* ودرجاتُ الآخرين تشير إلى مقاطع بمعرّفات اللاعبين، فمعرّفه
+           القديم داخلها يصير يتيمًا: الوسيط يفقد صوتًا عن مقطعه بلا
+           سبب. نُحدّث المفاتيح الداخلية أيضًا. */
+        for (const pid of Object.keys(this.room.marks || {})) {
+          const m = this.room.marks[pid];
+          if (m && oldId in m) { m[newId] = m[oldId]; delete m[oldId]; }
         }
         for (const k of Object.keys(this.room.votes || {})) {
           if (this.room.votes[k] === oldId) this.room.votes[k] = newId;
@@ -16793,15 +16870,31 @@ export class TariRoom {
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
+      /* توكن ضائع في منتصف اللعب: مسح تخزين، تبويب خاص، جهاز ثانٍ.
+         قبل هذا كان يُردّ بـ«الجولة شغّالة» فيخرج من لعبته وهو لاعبٌ
+         فيها. الآن: إن كان في الغرفة مقعدٌ منقطعٌ بنفس الاسم فهو صاحبه
+         ويسترده. وإلا فالردّ كما كان — الغريب لا يدخل جولةً جارية. */
       if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
-        server.send(JSON.stringify({ type: 'error', message: 'الجولة شغّالة — انتظر نهايتها وادخل' }));
-        server.close();
-        return new Response(null, { status: 101, webSocket: client });
+        const mine = this.reclaimByName(name);
+        if (!mine) {
+          server.send(JSON.stringify({ type: 'error', fatal: true, message: 'الجولة شغّالة — انتظر نهايتها وادخل' }));
+          server.close();
+          return new Response(null, { status: 101, webSocket: client });
+        }
+        player = mine;
+        player.connected = true;
+        player.seatToken = newSeatToken();
       }
+    }
+
+    /* ما بقي خاصٌّ بمن لم يجد مقعدًا بعد. من استرد مقعده أعلاه يتخطّاه —
+       وإلا مضى في السطور التالية وفتح لنفسه مقعدًا ثانيًا. */
+    if (!player) {
       /* ردهةٌ ممتلئة بأشباح: مقعد المنقطع يبقى عمدًا — انقطاع ثوانٍ في
          شبكة جوال ما يستاهل شطب مقعدٍ ونقاطٍ معه. لكن حين يزحم مقعدٌ ميت
          داخلًا حيًّا فالحيّ أولى. لا يُشطب إلا عند الحاجة، وفي الردهة وحدها. */
       const cap = Math.min(TARI_MAXP, MAX_PLAYERS);
+      if (this.room.players.length >= cap) this.sweepDeadSeats();
       if (this.room.players.length >= cap && this.room.phase === 'lobby') {
         this.room.players = this.room.players.filter(p => p.connected);
         if (!this.findPlayer(this.room.hostId)) this.room.hostId = null;
@@ -16875,7 +16968,33 @@ export class TariRoom {
   /* المؤقّت يعيش في ذاكرة الكائن وحدها، والنشرة الجديدة تُعيد تشغيل كل
      الكائنات — فتنجو الحالة ويضيع المؤقّت وتتجمّد الغرفة للأبد. أي رسالة
      أو اتصال جديد يعيد تسليحه من endsAt المحفوظة. */
+  /* ── التعافي من إعادة تشغيل الكائن في جولة صوتية ──
+     المقاطع تعيش في الذاكرة، فإعادة التشغيل تمحوها. قبل هذا كانت الغرفة
+     تُرفع لها راية «ضاعت التسجيلات» وتُترك واقفة: شاشة تصويتٍ على أصوات
+     غير موجودة، ولا مؤقّت يحرّكها بعد أن أُلغيت المؤقّتات — فتعلق حتى
+     ينتبه المضيف. الآن تُعاد الجولة نفسها من أولها تلقائيًا. */
+  async recoverLostAudio() {
+    const r = this.room;
+    if (!r.lostAudio || this.recovering) return false;
+    if (r.phase === 'lobby' || r.phase === 'over' || r.phase === 'brief') return false;
+    const k = TARI_KINDS[r.kind];
+    if (!k || k.inputType !== 'audio') return false;
+    this.recovering = true;
+    try {
+      r.log.unshift('انقطع الخادم وضاعت تسجيلات الجولة — تُعاد من أولها');
+      r.log = r.log.slice(0, 6);
+      r.round--;                       // startRound سيزيدها فنعيد نفس الرقم
+      r.lostAudio = false;
+      await this.startRound();
+    } finally { this.recovering = false; }
+    return true;
+  }
+
   resumePhase() {
+    if (this.room && this.room.lostAudio) {
+      this.recoverLostAudio().catch(() => {});   // لا ننتظره: فشله لا يكسر الرسالة
+      return;
+    }
     if (this.timer) return;
     let due = null;
     try { due = this.pendingPhase(); } catch { return; }
@@ -16921,6 +17040,8 @@ export class TariRoom {
       .filter(p => (r.order || []).some(id => id !== p.id))
       .map(p => p.id);
   }
+  allVotedOrMarked() { return this.isScored() ? this.allMarked() : this.allVoted(); }
+
   allVoted() {
     const v = this.voters();
     if (!v.length) return true;
@@ -16935,6 +17056,10 @@ export class TariRoom {
     r.bank = tariBuildBank(cfg && cfg.add, cfg && cfg.off);
     if (!r.bank.length) throw new Error('بنك الأسئلة فاضي — رجّع الأسئلة الافتراضية.');
     r.finale = cfg && cfg.finale === false ? false : true;
+    /* وضع الحكم يُختار مرة واحدة قبل البداية: تصويت اللاعبين أو قياس
+       التشابه. لا يتغيّر في منتصف اللعبة حتى لا تُقاس جولة بمسطرة
+       وأختها بمسطرة أخرى. */
+    r.judge = (cfg && cfg.judge === 'score') ? 'score' : 'vote';
     /* السلسلة تحتاج نصًّا أصليًا: بلا مطالبة من نمطها لا ختام. */
     if (r.finale && (!TARI_FINALE || !r.bank.some(p => p.kind === TARI_FINALE))) r.finale = false;
     const asked = Number(cfg && cfg.rounds);
@@ -16999,6 +17124,10 @@ export class TariRoom {
 
     r.kind = kindKey;
     r.prompt = { id: prompt.id, text: prompt.text, opts: prompt.opts || null };
+    /* الصوت المرجعي: العميل يبنيه مسارًا ساكنًا، والخادم يقرأ منه هل
+       الجولة تُقاس أصلًا. المسطّح (flat) يبقى بتصويت مهما كان الوضع. */
+    if (prompt.sound) r.prompt.sound = prompt.sound;
+    if (prompt.flat) r.prompt.flat = true;
     r.starId = (k.recorders === 'chain') ? null : this.nextStar();
     r.subs = {}; r.votes = {}; r.result = null; r.order = []; r.turn = 0;
     r.turnEndsAt = 0; r.chainText = ''; r.chainSrc = null;
@@ -17103,24 +17232,96 @@ export class TariRoom {
     }
     r.order = k.recorders === 'chain' ? r.order.filter(id => items.includes(id)) : tariShuffle(items);
 
-    if (k.vote === 'pickOne' && r.order.length >= 2) return this.startVote();
+    /* التصويت يحتاج خيارين على الأقل، أما القياس فلا: مسجّلٌ واحد
+       يستحق درجته حتى لو ما فيه من يُقارَن به. بلا هذا الشرط كانت
+       الجولة تسقط لحساب التصويت فيخرج الوحيد بلا درجة. */
+    if (k.vote === 'pickOne' && (r.order.length >= 2 || (r.order.length === 1 && this.isScored()))) {
+      return this.startVote();
+    }
     return this.scoreAndReveal();
+  }
+
+  /* جولة تُقاس: نمط صوتي، ووضع الحكم «قياس»، والمقطع الأصلي ذو نغمة
+     متحرّكة. المقاطع المسطّحة (flat) تُصوَّت دائمًا مهما كان الوضع —
+     قياسها يعطي الجميع الدرجة نفسها فتموت المتعة. */
+  isScored() {
+    const r = this.room;
+    if (r.judge !== 'score') return false;
+    const k = this.kind();
+    if (!k || k.inputType !== 'audio') return false;
+    return !!(r.prompt && r.prompt.sound && !r.prompt.flat);
   }
 
   async startVote() {
     const r = this.room;
-    const k = this.kind();
     this.clearPhaseTimer();
     r.phase = 'vote';
     r.votes = {};
+    r.marks = {};
     r.endsAt = 0;
     await this.persist();
     this.broadcastState();
   }
 
+  /* ── درجات من الأجهزة ──
+     كل جهاز يحسب درجة كل مقطع محليًا ويرسلها، والخادم يأخذ الوسيط.
+     الوسيط لا المتوسّط: جهازٌ واحد يرسل عشرة لصاحبه لا يحرّك شيئًا،
+     وللغشّ لا بد من تواطؤ الأغلبية — وهذا في جلسة أصدقاء يعني أن
+     اللعبة انتهت على أي حال. */
+  async onMarks(playerId, msg) {
+    const r = this.room;
+    if (r.phase !== 'vote' || !this.isScored()) return;
+    if (!this.findPlayer(playerId)) return;
+    if (!r.marks) r.marks = {};
+    if (r.marks[playerId]) return;                  // مرة واحدة لكل جهاز
+    const raw = msg && msg.marks;
+    if (!raw || typeof raw !== 'object') return;
+
+    const clean = {};
+    for (const id of r.order) {
+      /* رقمًا حقيقيًا لا شيئًا يتحوّل إلى رقم: JSON يحوّل NaN إلى null،
+         و Number(null) صفر، والقصّ يجعله ١ — فيُظلم لاعب بسبب جهازٍ
+         أرسل قيمة فاسدة. نتجاهلها ويكملها الوسيط من بقية الأجهزة. */
+      const v = raw[id];
+      if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+      clean[id] = Math.max(1, Math.min(10, Math.round(v * 10) / 10));
+    }
+    if (!Object.keys(clean).length) return;
+    r.marks[playerId] = clean;
+    await this.persist();
+    this.broadcastState();
+    if (this.allMarked()) await this.endVote();
+  }
+
+  allMarked() {
+    const live = this.activePlayers();
+    if (!live.length) return true;
+    const m = this.room.marks || {};
+    return live.every(p => m[p.id]);
+  }
+
+  /* وسيط الدرجات لكل مقطع عبر الأجهزة. */
+  medianMarks() {
+    const r = this.room;
+    const out = {};
+    for (const id of r.order) {
+      const vals = [];
+      for (const pid of Object.keys(r.marks || {})) {
+        const v = r.marks[pid][id];
+        if (Number.isFinite(v)) vals.push(v);
+      }
+      if (!vals.length) { out[id] = 1; continue; }
+      vals.sort((a, b) => a - b);
+      const mid = vals.length >> 1;
+      out[id] = vals.length % 2 ? vals[mid] : Math.round((vals[mid - 1] + vals[mid]) * 5) / 10;
+    }
+    return out;
+  }
+
   async endVote() {
     if (this.room.phase !== 'vote') return;
     this.clearPhaseTimer();
+    if (this.isScored()) return this.scoreMarked();
     return this.scoreAndReveal();
   }
 
@@ -17128,6 +17329,43 @@ export class TariRoom {
      مصدر «الأصوات» يختلف: في جولة بتصويت هي r.votes، وفي جولة اختيارٍ
      بلا تصويت (توقّع الأغلبية) فالاختيار نفسه هو الصوت. وما عدا ذلك
      نفس الحساب حرفيًا — وهذا هو معنى أن يكون النمط بيانات. */
+  /* نقاط الجولة المقاسة: درجةٌ من عشرة تصير نقاطًا، وصاحب أعلى درجة
+     يأخذ مكافأة الصدارة. ومن شارك يأخذ نقطة المشاركة كما في بقية
+     الأنماط، فلا يخرج أحد بصفر. */
+  async scoreMarked() {
+    const r = this.room;
+    const k = this.kind();
+    const med = this.medianMarks();
+    let best = -1;
+    for (const id of r.order) if (med[id] > best) best = med[id];
+    const top = r.order.filter(id => med[id] === best && best > 0);
+
+    const gains = {};
+    for (const id of r.order) {
+      const p = this.findPlayer(id);
+      if (!p) continue;
+      let g = Math.round(med[id]) + (k.scoring.part || 0);
+      if (top.includes(id)) g += (k.scoring.top || 0);
+      gains[id] = g;
+      p.score = (p.score | 0) + g;
+    }
+
+    r.phase = 'reveal';
+    r.endsAt = 0;
+    r.readys = {};
+    r.result = {
+      scored: true, marks: med, top, gains,
+      items: r.order.map(id => {
+        const p = this.findPlayer(id);
+        return { id, name: (p && p.name) || '', mark: med[id], gain: gains[id] || 0, audio: true };
+      }),
+      soundName: r.prompt ? String(r.prompt.text || '') : '',
+    };
+    r.log = (r.log || []).concat([{ round: r.round, kind: r.kind, top }]).slice(-24);
+    await this.persist();
+    this.broadcastState();
+  }
+
   async scoreAndReveal() {
     const r = this.room;
     const k = this.kind();
@@ -17252,16 +17490,19 @@ export class TariRoom {
           const n = Number(msg.rounds);
           if (Number.isFinite(n)) r.wantRounds = Math.min(12, Math.max(3, Math.round(n)));
           if (typeof msg.finale === 'boolean') r.finale = msg.finale;
+          if (msg.judge === 'score' || msg.judge === 'vote') r.judge = msg.judge;
           await this.persist(); this.broadcastState();
           return;
         }
 
+        case 'marks':  return this.onMarks(playerId, msg);
         case 'submit': return this.onSubmit(playerId, msg);
         case 'clip':   return this.onClip(playerId, msg);
         case 'getClip': return this.onGetClip(playerId, msg);
 
         case 'vote': {
           if (r.phase !== 'vote') return;
+          if (this.isScored()) return;      // جولة تُقاس: لا تصويت فيها
           const id = String(msg.id || '');
           if (!r.order.includes(id) || id === playerId) return;
           r.votes[playerId] = id;
@@ -17475,6 +17716,7 @@ export class TariRoom {
 
   migrateHostIfNeeded() {
     const r = this.room;
+    this.sweepDeadSeats();          // مضيفٌ مقبسه ميت ليس مضيفًا حاضرًا
     const host = r.players.find(p => p.id === r.hostId);
     if (host && host.connected) return false;
     const next = r.players.find(p => p.connected && p.id !== r.hostId);
@@ -17517,7 +17759,7 @@ export class TariRoom {
         const p = cur ? this.findPlayer(cur) : null;
         if (!p || !p.connected) { if (cur && !r.subs[cur]) r.subs[cur] = { has: false, skipped: true }; await this.chainAdvance(); }
       } else if (this.allSubmitted()) await this.endCollect();
-    } else if (r.phase === 'vote' && this.allVoted()) await this.endVote();
+    } else if (r.phase === 'vote' && this.allVotedOrMarked()) await this.endVote();
   }
 
   /* ─────────────── البث ─────────────── */
@@ -17559,6 +17801,8 @@ export class TariRoom {
           text: (k && k.inputType !== 'audio' && r.subs[id]) ? (r.subs[id].text || null) : null,
           choice: (r.subs[id] && typeof r.subs[id].choice === 'number') ? r.subs[id].choice : null,
           tag: (k && k.tagged && r.subs[id]) ? (r.subs[id].tag || null) : null,
+          /* طول المقطع: العميل يمشّي به شريط التشغيل. رقمٌ لا صوت. */
+          ms: (r.subs[id] && (r.subs[id].ms | 0)) || 0,
           mine: id === playerId,
         }))
       : [];
@@ -17570,6 +17814,9 @@ export class TariRoom {
       endsAt: r.endsAt, minPlayers: TARI_MINP, maxPlayers: TARI_MAXP,
       lostAudio: !!r.lostAudio,
       kind: r.kind || null,
+      judge: r.judge || 'vote',
+      scored: this.isScored(),
+      sound: (r.prompt && r.prompt.sound) || null,
       kindName: k ? k.name : '',
       inputType: k ? k.inputType : null,
       clipMs: k ? (k.clipMs || 0) : 0,
