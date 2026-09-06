@@ -393,10 +393,10 @@ function qAdd() {
      • seen: وقت آخر بايت وارد. أي رسالة تثبت الحياة، لا readyState.
      • watch: مراقب كل ٣ث يسقط المعلّق ويمشي بلا انتظار أحد.           */
 const Net = {
-  ws: null, code: '', tries: 0, timer: 0, hb: 0, sup: 0, seen: 0, dead: false, gen: 0,
+  ws: null, code: '', tries: 0, timer: 0, hb: 0, sup: 0, seen: 0, dead: false, gen: 0, everOpen: false,
 
   open(code) {
-    this.code = code; this.dead = false; this.tries = 0;
+    this.code = code; this.dead = false; this.tries = 0; this.everOpen = false;
     clearTimeout(this.timer); this.timer = 0;
     this.connect();
     clearInterval(this.sup);
@@ -417,7 +417,7 @@ const Net = {
     this.ws = ws; this.seen = Date.now();
     ws.onopen = () => {
       if (gen !== this.gen) { try { ws.close(); } catch {} return; }
-      this.tries = 0; this.seen = Date.now(); this.note(''); this.startHb();
+      this.tries = 0; this.seen = Date.now(); this.everOpen = true; this.note(''); this.startHb();
     };
     ws.onmessage = e => {
       if (gen !== this.gen) return;
@@ -445,7 +445,11 @@ const Net = {
   retry() {
     if (this.dead || this.timer) return;
     const wait = Math.min(8000, 600 * Math.pow(2, this.tries++));
-    this.note('انقطع الاتصال… نرجع خلال ' + Math.round(wait / 1000) + 'ث');
+    /* فرقٌ يهمّ اللاعب: انقطاعٌ بعد اتصالٍ نجح شيء، ومحاولاتٌ لم تنجح
+       ولا مرة شيءٌ آخر — غالبًا الخادم ما ينشر مسار اللعبة بعد. */
+    if (!this.everOpen && this.tries >= 3) {
+      this.note('ما نقدر نوصل للخادم — يمكن اللعبة ما نُشرت بعد');
+    } else
     this.timer = setTimeout(() => { this.timer = 0; this.connect(); }, wait);
   },
 
@@ -1060,7 +1064,18 @@ async function createRoom() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name }),
     });
-    if (!r.ok) throw new Error(r.status === 429 ? 'كثرت الغرف من جهازك — انتظر شوي' : ('ما قدرنا ننشئ الغرفة (' + r.status + ')'));
+    /* الرقم وحده لا يفيد أحدًا. وأشيع عطلين هنا سببهما النشر لا اللعب:
+       404 = وركر قديم بلا مسارات /tari/ (رُفع الموقع قبل الوركر)،
+       501 = ربط TARI_ROOM ناقص في wrangler.toml. نقولها كما هي. */
+    if (!r.ok) {
+      const why =
+        r.status === 429 ? 'كثرت الغرف من جهازك — انتظر شوي'
+      : r.status === 404 ? 'اللعبة ما وصلت الخادم بعد — لازم يُنشر worker.js الجديد أولًا'
+      : r.status === 501 ? 'ربط TARI_ROOM ناقص في wrangler.toml — أعِد النشر بعد إضافته'
+      : r.status === 403 ? 'نطاق الصفحة غير مسموح في الخادم (ALLOWED_ORIGINS)'
+      : 'ما قدرنا ننشئ الغرفة (' + r.status + ')';
+      throw new Error(why);
+    }
     const j = await r.json();
     LS.set('seat.' + j.roomCode, { id: j.playerId, token: j.seatToken });
     Net.open(j.roomCode);
