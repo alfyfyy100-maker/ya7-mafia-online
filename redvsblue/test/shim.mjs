@@ -21,7 +21,7 @@ globalThis.Response = class FakeResponse {
   static json(o, init) { return new RealResponse(JSON.stringify(o), init); }
 };
 
-const mod = await import('' + new URL('../../worker.js', import.meta.url).href + '');
+const mod = await import('file://' + (process.env.WORKER || new URL('../../worker.js', import.meta.url).pathname));
 const rooms = new Map();
 const PORT = Number(process.env.PORT || 8787);
 

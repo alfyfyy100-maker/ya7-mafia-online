@@ -1,10 +1,10 @@
 const { chromium } = require('playwright');
 const API = 'http://127.0.0.1:8787';
-const BASE = '' + new URL('../index.html', 'file://' + __dirname + '/').href + '?api=' + encodeURIComponent(API);
+const BASE = (process.env.BASE || new URL('../index.html', 'file://' + __dirname + '/').href) + '?api=' + encodeURIComponent(API);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function until(fn, ms, label) { const t0 = Date.now(); for (;;) { const v = await fn(); if (v) return v; if (Date.now() - t0 > ms) throw new Error('timeout: ' + label); await sleep(120); } }
 (async () => {
-  const browser = await chromium.launch({ executablePath: '' + (process.env.CHROME || '') + '' });
+  const browser = await chromium.launch({ executablePath: process.env.CHROME || undefined });
   const errors = [];
   async function newPage(name, extra) {
     const ctx = await browser.newContext({ viewport: { width: 430, height: 860 }, deviceScaleFactor: 2, hasTouch: true });

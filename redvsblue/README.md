@@ -9,9 +9,13 @@
 
 ## التركيب على الموقع
 
-1. انسخ مجلد `redvsblue/` إلى الموقع كما هو (يصير الرابط `/redvsblue/`).
+1. انسخ مجلد `redvsblue/` إلى الموقع كما هو (يصير الرابط `/redvsblue/`). فيه
+   `index.html` و`cover.jpg` (1200×630 للمشاركة) و`thumb.jpg` (420×560 لبطاقة الرئيسية).
+   الصفحة تحمّل `/ya7-qr-join.js` و`/ya7-app.js` كبقية الألعاب وترسل `acc=` مع
+   اتصال الغرفة و`/account/played` بعد كل معركة محلية لمن عنده حساب.
 2. الأونلاين يحتاج الوركر المحدَّث (`worker.js` + `wrangler.toml` في هذا الزيب):
-   - في `wrangler.toml` أُضيف ربط `RVB_ROOM` → `RedVsBlueRoom` ووسم الترحيل `v18`.
+   - في `wrangler.toml` أُضيف ربط `RVB_ROOM` → `RedVsBlueRoom` ووسم الترحيل `v19`
+     (v18 محجوز لطاريك). الوركر يصير `v174`.
    - انشر: `npx wrangler deploy`
    - تأكد من `/health` أن `RVB_ROOM: true`.
 3. رابط الوركر داخل اللعبة (أعلى السكربت في `index.html`):
@@ -42,8 +46,8 @@
 دفعات، تحديث صفحة أثناء اللعب، نهاية، جولة جديدة، انتقال الاستضافة):
 
 ```sh
-node test/shim.mjs &            # المحاكي
-node test/e2e.js                # يحتاج playwright وكروميوم
+node test/shim.mjs &            # المحاكي (WORKER=مسار worker.js اختياري)
+node test/e2e.js                # يحتاج playwright وكروميوم (CHROME=مسار كروميوم، BASE=رابط الصفحة اختياريان)
 ```
 
 افتح اللعبة محليًا مع المحاكي: `index.html?api=http://127.0.0.1:8787`.

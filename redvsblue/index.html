@@ -1,18 +1,47 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
+<link rel="manifest" href="/manifest.webmanifest"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="ألعاب ياح"/>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#05060c">
-<meta name="description" content="أحمر ضد أزرق — معركة كرات داخل حلبة: أسلحة تنزل، قلوب تنقص، وأنت تتوقّع أو تتحكّم أو تلعب أونلاين مع أصحابك.">
-<title>أحمر ضد أزرق — استوديو يا٧</title>
+<title>أحمر ضد أزرق — معركة الكرات: توقّع، تحكّم، أو أونلاين حتى ٤ لاعبين | ألعاب ياح</title>
+<meta name="description" content="لعبة أحمر ضد أزرق: كرات بوجوه تتقاتل داخل حلبة، أسلحة تنزل من السماء وعشرة قلوب لكل كرة. توقّع الفائز، أو تحكّم بكرتك بنفسك، أو العب أونلاين مع أصحابك حتى أربعة لاعبين.">
+<link rel="canonical" href="https://dozplay.com/redvsblue/"/>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"VideoGame","name":"أحمر ضد أزرق","alternateName":"معركة الكرات — ألعاب ياح","url":"https://dozplay.com/redvsblue/","image":"https://dozplay.com/redvsblue/cover.jpg","description":"كرات بوجوه تتقاتل داخل حلبة دائرية بأسلحة تنزل من السماء. توقّع الفائز، أو تحكّم بكرتك، أو العب أونلاين حتى أربعة لاعبين.","inLanguage":"ar","genre":["Arcade","Party"],"numberOfPlayers":{"@type":"QuantitativeValue","minValue":1,"maxValue":4},"applicationCategory":"Game","operatingSystem":"Web","isAccessibleForFree":true,"publisher":{"@type":"Organization","name":"استوديو يا٧","url":"https://dozplay.com/"}}
+</script>
+<meta name="robots" content="index, follow"/>
+<link rel="icon" href="/favicon.ico" sizes="any"/>
+<link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32"/>
+<link rel="icon" href="/favicon-16.png" type="image/png" sizes="16x16"/>
+<link rel="apple-touch-icon" href="/apple-touch-icon.png"/>
+<meta property="og:type" content="website"/>
+<meta property="og:site_name" content="ألعاب ياح"/>
+<meta property="og:title" content="أحمر ضد أزرق — معركة الكرات | ألعاب ياح"/>
+<meta property="og:description" content="كرات تتقاتل داخل حلبة بأسلحة تنزل من السماء. توقّع الفائز، أو تحكّم بكرتك، أو العب أونلاين حتى ٤ لاعبين."/>
+<meta property="og:url" content="https://dozplay.com/redvsblue/"/>
+<meta property="og:image" content="https://dozplay.com/redvsblue/cover.jpg"/>
+<meta property="og:locale" content="ar_AR"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="أحمر ضد أزرق — معركة الكرات | ألعاب ياح"/>
+<meta name="twitter:description" content="كرات تتقاتل داخل حلبة بأسلحة تنزل من السماء. توقّع الفائز، أو تحكّم بكرتك، أو العب أونلاين حتى ٤ لاعبين."/>
+<meta name="twitter:image" content="https://dozplay.com/redvsblue/cover.jpg"/>
+<link rel="preconnect" href="https://ya7-mafia-online.alfyfyy100.workers.dev" crossorigin>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body {
     margin: 0; padding: 0; height: 100%;
     background: #05060c; color: #fff;
-    font-family: system-ui, -apple-system, "Segoe UI", Tahoma, "Noto Sans Arabic", Arial, sans-serif;
+    font-family: 'Cairo', system-ui, -apple-system, "Segoe UI", Tahoma, "Noto Sans Arabic", Arial, sans-serif;
     overflow: hidden; overscroll-behavior: none;
     -webkit-user-select: none; user-select: none;
   }
@@ -129,6 +158,7 @@
   #restart.show { display: flex; }
   .foot { position: fixed; bottom: max(8px, env(safe-area-inset-bottom)); left: 0; right: 0;
     text-align: center; font-size: 12px; color: rgba(255,255,255,.28); pointer-events: none; }
+  .foot a { color: rgba(255,255,255,.55); text-decoration: none; pointer-events: auto; padding: 6px 10px; }
   #toast {
     position: fixed; top: max(60px, calc(env(safe-area-inset-top) + 50px)); left: 50%; transform: translateX(-50%);
     background: rgba(20,22,40,.92); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 600;
@@ -192,7 +222,7 @@
   <div class="card">
     <h2 id="lobbyTitle" style="margin:0 0 4px">غرفة الأصحاب</h2>
     <p class="sub" style="margin-bottom:4px">شارك الرمز مع أصحابك:</p>
-    <div class="codebox"><span class="code" id="roomCode">------</span><button class="btn ghost sm" type="button" id="copyBtn">نسخ</button></div>
+    <div class="codebox"><span class="code" id="roomCode">------</span><button class="btn ghost sm" type="button" id="shareBtn">مشاركة</button></div>
     <ul class="plist" id="plist"></ul>
     <p class="hint" style="margin-bottom:6px">لونك:</p>
     <div class="chips" id="chips"></div>
@@ -213,7 +243,7 @@
   </div>
 </div>
 
-<div class="foot">استوديو يا٧</div>
+<div class="foot"><a class="homelink" href="/">ألعاب ياح · الرئيسية</a></div>
 
 <script>
 (() => {
@@ -1052,14 +1082,14 @@ function drawHUD() {
       const maxW = Math.max(0, last.x - p2(HUD.heart) - (CX - rowW() / 2));
       if (maxW > 30) {
         ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        ctx.font = `700 ${clamp(HUD.rowH * 0.46, 11, 14)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
+        ctx.font = `700 ${clamp(HUD.rowH * 0.46, 11, 14)}px Cairo, system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
         ctx.fillStyle = b.dead ? '#6f7590' : '#e8ebf5';
         ctx.fillText(fitText(b.name, maxW), CX - rowW() / 2, y);
       }
     }
   }
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = `800 ${clamp(R * 0.14, 17, 26)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
+  ctx.font = `800 ${clamp(R * 0.14, 17, 26)}px Cairo, system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
   ctx.fillStyle = '#fff';
   ctx.fillText(G.n === 2 ? 'أحمر ضد أزرق' : 'معركة الكرات', CX, TITLE_Y);
 }
@@ -1351,7 +1381,7 @@ function drawPlayerMarks() {
   ctx.beginPath(); ctx.arc(x, y, r * 1.35 * pulse, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
   if (G.t < 4 || G.phase === 'countdown') {
     ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-    ctx.font = `800 ${clamp(r * 0.7, 12, 18)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
+    ctx.font = `800 ${clamp(r * 0.7, 12, 18)}px Cairo, system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
     ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,0.7)'; ctx.strokeText('أنت', x, y - r * 1.55);
     ctx.fillStyle = '#fff'; ctx.fillText('أنت', x, y - r * 1.55);
   }
@@ -1372,7 +1402,7 @@ function drawBanner() {
   ctx.save(); ctx.globalAlpha = clamp(alpha, 0, 1);
   ctx.translate(CX, CY); ctx.scale(scale, scale);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = `900 ${clamp(R * 0.3, 30, 64)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
+  ctx.font = `900 ${clamp(R * 0.3, 30, 64)}px Cairo, system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
   ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.strokeText(text, 0, 0);
   ctx.fillStyle = color; ctx.fillText(text, 0, 0);
   ctx.restore();
@@ -1380,7 +1410,7 @@ function drawBanner() {
 function drawNetStatus() {
   if (G.mode !== 'online' || !Net.notice) return;
   ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  ctx.font = `700 ${clamp(R * 0.09, 12, 15)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
+  ctx.font = `700 ${clamp(R * 0.09, 12, 15)}px Cairo, system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
   ctx.fillStyle = 'rgba(255,255,255,0.75)';
   ctx.fillText(Net.notice, CX, TITLE_Y + 18);
   ctx.restore();
@@ -1447,6 +1477,9 @@ const Net = {
     if (this.tok) q.set('tok', this.tok);
     if (this.cid) q.set('cid', this.cid);
     if (this.pub) q.set('pub', '1');
+    /* حساب الموقع: بالتوكن تُسجَّل النتيجة في سجل اللاعب (الوركر يستبدله بـ did موثوق) */
+    const acc = store.get('ya7_token', '');
+    if (acc) q.set('acc', acc);
     return `${base}/${GAME_KEY}/room/${this.code}/ws?${q}`;
   },
   open(code, opts) {
@@ -1682,6 +1715,7 @@ const UI = {
   leaveRoom(silent) {
     this.roomOpen = false;
     Net.close();
+    window.YA7_ROOM = ''; window.YA7_ACTIVE_ROOM = false;
     G.mode = 'watch'; G.replica = false; G.player = -1;
     showStart();
     if (!silent) this.toast('غادرت الغرفة');
@@ -1699,6 +1733,7 @@ const UI = {
     G.mode = 'online';
     this.onlineInfo('جارٍ الاتصال بالغرفة…');
     Net.open(code, opts);
+    window.YA7_ROOM = code; window.YA7_ACTIVE_ROOM = true;   // لسكربتات الموقع (باركود الغرفة وحارس الرجوع)
     $('roomCode').textContent = code;
     $('plist').innerHTML = ''; $('chips').innerHTML = '';
     this.showPanel('lobby');
@@ -1728,6 +1763,18 @@ function beginLocal(mode, n, pick, player) {
   UI.showPanel(null);
   Sound.play('tick');
 }
+/* «لعبت» لسجل الحساب بعد كل معركة محلية (الأونلاين يسجّله الخادم بنفسه).
+   بلا حساب ما فيه شيء نسجّله. score: ١ فوز أو توقّع صحيح، ٠ غير ذلك. */
+function reportPlayed(score) {
+  const tok = store.get('ya7_token', '');
+  if (!tok || !/^https:/.test(API_BASE)) return;
+  try {
+    fetch(API_BASE + '/account/played', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: tok, game: GAME_KEY, score }),
+    }).catch(() => {});
+  } catch (e) {}
+}
 /* نهاية المعركة: محليًا تُعرض النتيجة هنا؛ أونلاين يرفع المضيف النتيجة والخادم يعمّمها */
 function onGameOver() {
   if (G.mode === 'online') {
@@ -1755,6 +1802,7 @@ function onGameOver() {
   $('overStats').textContent = statsText();
   $('scoreList').hidden = true; $('leaveBtn2').hidden = true; $('again').hidden = false;
   UI.showPanel('over');
+  reportPlayed(G.player >= 0 ? (G.winner === G.player ? 1 : 0) : (G.prediction >= 0 && G.prediction === G.winner ? 1 : 0));
 }
 
 /* ── ربط الأزرار ── */
@@ -1774,7 +1822,7 @@ $('joinBtn').addEventListener('click', () => {
   Sound.unlock(); UI.enterRoom(code, { fresh: true });
 });
 $('codeIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('joinBtn').click(); });
-$('copyBtn').addEventListener('click', async () => {
+$('shareBtn').addEventListener('click', async () => {
   const code = $('roomCode').textContent;
   const link = location.origin + location.pathname + '?room=' + code;
   try {
@@ -1863,5 +1911,7 @@ try {
 requestAnimationFrame(frame);
 })();
 </script>
+<script src="/ya7-qr-join.js"></script>
+<script src="/ya7-app.js"></script>
 </body>
 </html>
