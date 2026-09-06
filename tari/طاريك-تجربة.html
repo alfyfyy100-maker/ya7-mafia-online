@@ -1550,6 +1550,7 @@ const Server = (() => {
         kindName: k ? k.name : '',
         inputType: k ? k.inputType : null,
         clipMs: k ? (k.clipMs || 0) : 0,
+        clipMax: TARI_CLIP_MAX,        // العميل يفحص قبل الإرسال بنفس الرقم لا برقمٍ منسوخ
         textMax: k ? (k.textMax || TARI_ANS_MAX) : TARI_ANS_MAX,
         starId: r.starId, starName: r.starId ? this.nameOf(r.starId) : null,
         prompt: text || null,
@@ -2461,12 +2462,22 @@ const App = {
     box.append(btn, lab); c.append(box);
   },
 
+  /* سقف المقطع كما يعرفه الخادم. الفحص هنا قبل الإرسال: الخادم يردّ
+     برسالة على التجاوز المعقول، لكن اللاعب يستحق يعرف فورًا بلا رحلة
+     ذهاب وإياب — ومقطعٌ ضخم جدًا يُهمَل عند الخادم بصمت، فلا يصله ردّ. */
+  clipMax() { return (this.st && this.st.clipMax) || 240 * 1024; },
+
   async sendClip() {
     clearTimeout(this._auto);
     const p = this.pending; if (!p || this.sent) return;
     this.sent = true;
     try {
       const b64 = await Audio_.toB64(p.blob);
+      if (b64.length > this.clipMax()) {
+        this.sent = false;
+        toast('التسجيل طلع كبير — سجّل مقطعًا أقصر', true);
+        return;
+      }
       Net.send({ type: 'clip', b64, mime: (p.blob.type || 'audio/webm').split(';')[0], ms: p.ms });
       this.pending = null; this.sent = false; this.draw();
     } catch (e) { this.sent = false; toast('ما قدرنا نرسل التسجيل', true); }

@@ -496,6 +496,20 @@ const sanitizeGotConfig = makeConfigSanitizer(
 
 const MSG_PER_SEC = 12;
 
+/* ── سقف حجم الرسالة الواردة ──
+   الخانق أعلاه يعدّ الرسائل لا البايتات: اثنتا عشرة رسالة في الثانية
+   × ميغابايت لكل واحدة = اثنا عشر ميغا في الثانية من JSON.parse على
+   كائن واحد، من لاعبٍ واحد. وسقف كلاودفلير للرسالة ميغابايت، فما كان
+   شيء دون ذلك يوقفه. رسائل اللعب كلها نصوص قصيرة، فستة عشر كيلوبايت
+   سخيّة جدًا؛ ومن يحتاج أكثر (الصوت في طاريك) يرفع سقفه بنفسه عبر
+   WS_MAX على صنفه. */
+const WS_MSG_MAX = 16 * 1024;
+function wsOversize(raw, max) {
+  const n = typeof raw === 'string' ? raw.length
+          : (raw && typeof raw.byteLength === 'number') ? raw.byteLength : 0;
+  return n > (max || WS_MSG_MAX);
+}
+
 // عمر الغرفة الخاملة قبل الحذف التلقائي
 const ROOM_TTL_MS = 6 * 60 * 60 * 1000;
 
@@ -612,6 +626,14 @@ function newRoomCode() {
    بلا هذا: __proto__ يبتلع الأصوات بصمت فتتجمّد المرحلة، ومعرّف ضخم
    يتجاوز سقف قيمة الـ Durable Object فتفشل الكتابة للغرفة كلها. */
 const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/* أي نصٍّ من اللاعب يصير مفتاحًا في كائن عادي يمرّ من هنا أولًا.
+   `obj['__proto__'] = x` لا يُنشئ خاصيةً بل يبدّل النموذج الأولي: فيصير
+   الاسم موجودًا في القائمة وغائبًا عن Object.keys، وتنهار كل مقارنةٍ
+   بينهما — وأول دورة JSON تحوّله إلى TypeError. */
+function safeKey(s) {
+  return (typeof s === 'string' && s && !RESERVED_IDS.has(s)) ? s : '';
+}
 
 /* ═══════════════════ إشعارات الويب (Web Push) ═══════════════════
    كل الدوال هنا اختُبرت يدويًا ضد أمثلة RFC 8291 الرسمية (القسم ٥
@@ -888,9 +910,21 @@ function applyRoomCommon(cls, gameKey) {
 
      لُفَّت هنا لا في كل صنف: نقطة واحدة تغطي الثمانية، فما تُنسى للعبة
      قادمة — نفس منطق /seat-check فوق.                                */
+  /* غرف السبات (البلياردو، البلوت) تستقبل عبر webSocketMessage لا
+     onMessage، فلولا لفّها هنا لبقيت بلا سقف. */
+  const innerWsMsg = cls.prototype.webSocketMessage;
+  if (typeof innerWsMsg === 'function') {
+    cls.prototype.webSocketMessage = function (ws, raw) {
+      if (wsOversize(raw, this.WS_MAX)) return;
+      return innerWsMsg.call(this, ws, raw);
+    };
+  }
+
   const innerOnMessage = cls.prototype.onMessage;
   if (typeof innerOnMessage === 'function') {
     cls.prototype.onMessage = function (playerId, evt) {
+      /* السقف قبل JSON.parse لا بعده: التحليل نفسه هو التكلفة. */
+      if (evt && wsOversize(evt.data, this.WS_MAX)) return;
       try {
         const m = JSON.parse(evt.data);
         if (m && m.type === 'hb') {
@@ -961,7 +995,10 @@ const ROLES = {
 const BOT_NAMES_M = ['فهد','عبدالله','خالد','تركي','سلطان','ماجد','بندر','ناصر','راكان','مشعل'];
 const BOT_NAMES_F = ['سارة','نورة','ريم','لمى','هند','جود','شهد','دانة','العنود','غلا'];
 const BOT_NAMES = [...BOT_NAMES_M, ...BOT_NAMES_F];
-function pickRandom(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+/* اختيارُ عنصرٍ قرارٌ في اللعب (هدف، ضحية، مشهد) — crypto لا Math.random.
+   رميات البوتات الاحتمالية (`Math.random() < 0.4`) تبقى كما هي: ما فيها
+   سرٌّ يُتوقَّع، إنما إيقاعُ سلوكٍ. */
+function pickRandom(arr){ return arr[randInt(arr.length)]; }
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -1895,7 +1932,7 @@ export class MafiaRoom {
       if (keys.length) {
         const max = Math.max(...keys.map(k => tally[k]));
         const top = keys.filter(k => tally[k] === max);
-        killedByMafia = top[Math.floor(Math.random() * top.length)];
+        killedByMafia = top[randInt(top.length)];        // من يموت — لا يُتوقَّع
       }
     }
 
@@ -3655,7 +3692,7 @@ export class GotRoom {
     if (entries.length) {
       const max = Math.max(...entries.map(e=>e[1]));
       const top = entries.filter(e=>e[1]===max);
-      accusedId = top[Math.floor(Math.random()*top.length)][0];
+      accusedId = top[randInt(top.length)][0];           // من يُتَّهم — لا يُتوقَّع
     }
     this.room.accusedId = accusedId;
     await this.persist();
@@ -4551,7 +4588,7 @@ export class MawwihRoom {
       return;
     }
 
-    const q = pool[Math.floor(Math.random() * pool.length)];
+    const q = pool[randInt(pool.length)];   // السؤال سرٌّ عن المموِّه
     this.room.used.push(q.key);
     this.room.q = q;
     this.room.phase = 'writing';
@@ -5269,7 +5306,7 @@ export class FatinRoom {
 
     if (specialIds.length) {
       // أكثر من اختيار خاص: واحد بالقرعة، والباقي يسترجعون حقّهم
-      const winner = specialIds[Math.floor(Math.random() * specialIds.length)];
+      const winner = specialIds[randInt(specialIds.length)];
       for (const id of specialIds) if (id !== winner) { const q = this.findPlayer(id); if (q) q.special = true; }
       r.cat = r.specials[winner];
       const w = this.findPlayer(winner);
@@ -5280,7 +5317,7 @@ export class FatinRoom {
         if (tally[c] > best) { best = tally[c]; pool = [c]; }
         else if (tally[c] === best) pool.push(c);
       }
-      r.cat = pool[Math.floor(Math.random() * pool.length)];
+      r.cat = pool[randInt(pool.length)];
       r.specialBy = null;
     }
     await this.startHila();
@@ -5305,7 +5342,7 @@ export class FatinRoom {
     if (!r.used[r.cat]) r.used[r.cat] = [];
     if (r.used[r.cat].length >= list.length) r.used[r.cat] = [];
     const avail = list.map((_, i) => i).filter(i => !r.used[r.cat].includes(i));
-    const pick = avail[Math.floor(Math.random() * avail.length)];
+    const pick = avail[randInt(avail.length)];   // معرفةُ السؤال قبل غيرك سبقٌ في السرعة
     r.used[r.cat].push(pick);
     const row = list[pick];
     const opts = fatinShuffle([row[1]].concat(row[2]));
@@ -5667,7 +5704,7 @@ const WL_AI_ENDPOINT = 'https://ya7-ai-proxy.alfyfyy100.workers.dev/walima/chat'
 const WL_AI_MODEL = 'deepseek/deepseek-v4-flash';
 const WL_MAX_STATEMENT = 400;
 
-function wlPick(a){ return a[Math.floor(Math.random()*a.length)]; }
+function wlPick(a){ return a[randInt(a.length)]; }   // المشهد والميول والهدف — كلها سرّ
 function wlShuffle(a){ const c=a.slice(); for(let i=c.length-1;i>0;i--){ const j=randInt(i+1); [c[i],c[j]]=[c[j],c[i]]; } return c; }
 function wlGrab(text, tag){
   const m = String(text||'').match(new RegExp('<'+tag+'>([\\s\\S]*?)</'+tag+'>'));
@@ -9713,7 +9750,21 @@ export class ChatRoom {
 }
 
 export default {
+  /* ── حزام أمان حول الراوتر كله ──
+     أي استثناء غير ملتقَط كان يخرج كـ500 بجسمٍ فيه نصّ الخطأ الداخلي
+     وبلا ترويسات CORS: يتسرّب تفصيلٌ عن الخادم، ويرى اللاعب «Failed to
+     fetch» بدل سبب. الآن ردٌّ واحد عام، بـCORS دائمًا، بلا أي تفصيل. */
   async fetch(request, env, ctx) {
+    try {
+      return await routeRequest(request, env, ctx);
+    } catch (e) {
+      return withCors(new Response('server-error', { status: 500 }),
+                      request.headers.get('Origin'));
+    }
+  },
+};
+
+async function routeRequest(request, env, ctx) {
     const url = new URL(request.url);
     const origin = request.headers.get('Origin');
 
@@ -10229,10 +10280,9 @@ export default {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، لودو، الشفرة، المطاردة، وسباق المربعات أونلاين — استوديو يا٧ · /health للفحص',
+      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، لودو، الشفرة، المطاردة، سباق المربعات، وطاريك أونلاين — استوديو يا٧ · /health للفحص',
       { status: 200 }), origin);
-  },
-};
+}
 
 /* ══════════════════════ اللوبي العام (PublicLobby) ══════════════════════
    سجلّ واحد لكل الغرف المعلنة. الغرفة لا تُدرج إلا إذا اختار منشئها
@@ -11701,6 +11751,10 @@ async function issueToken(env, deviceId, ver) {
 }
 
 async function verifyToken(env, token) {
+  /* بلا سرّ لا توقيع: كانت hmac ترمي DataError («مفتاح بطول صفر») ولا
+     أحد يلتقطها، فكل طلب يحمل ?acc= يرجع 500 بلا CORS — أي «Failed to
+     fetch» عند اللاعب بدل «ما أنت مسجّل». الفشل هنا مغلق وصامت. */
+  if (typeof env.ACCOUNT_SECRET !== 'string' || !env.ACCOUNT_SECRET) return null;
   if (typeof token !== 'string' || token.length > 256) return null;
   const parts = token.split('.');
   if (parts.length !== 3) return null;
@@ -14458,6 +14512,7 @@ export class ShifraRoom {
     this.hostCheck();
 
     ws.addEventListener('message', ev => {
+      if (wsOversize(ev.data)) return;          // قبل التحليل: التحليل هو التكلفة
       let m2; try { m2 = JSON.parse(ev.data); } catch { return; }
       const q0 = this.g.players.find(x => x.id === pid);
       if (q0) { q0.lastSeen = Date.now(); q0.hb = q0.hb || (m2 && m2.t === 'hb'); }
@@ -14649,7 +14704,7 @@ export class ShifraRoom {
     let pool = [];
     g.settings.cats.forEach(c => pool.push(...SHIFRA_POOLS[c]));
     pool = shifraShuffle([...new Set(pool)]).slice(0, 25);
-    g.first = Math.random() < .5 ? "red" : "blue";
+    g.first = randInt(2) ? "red" : "blue";
     const other = g.first === "red" ? "blue" : "red";
     const roles = shifraShuffle([
       ...Array(9).fill(g.first), ...Array(8).fill(other), ...Array(7).fill("neu"), "ass"
@@ -14669,7 +14724,7 @@ export class ShifraRoom {
     if (g.settings.informerMode) {
       ["red", "blue"].forEach(t => {
         const agents = g.players.filter(p => p.team === t && !p.spymaster);
-        if (agents.length) g.informers[t] = agents[(Math.random() * agents.length) | 0].id;
+        if (agents.length) g.informers[t] = agents[randInt(agents.length)].id;   // هوية المخبر سرّ
       });
       this.dealLeak(g.turn);
     }
@@ -14683,7 +14738,7 @@ export class ShifraRoom {
     if (!g.settings.informerMode || !g.informers[team]) { g.leak[team] = null; return; }
     const foe = team === "red" ? "blue" : "red";
     const pool = g.board.filter(c => c.role === foe && !c.open).map(c => c.word);
-    g.leak[team] = pool.length ? pool[(Math.random() * pool.length) | 0] : null;
+    g.leak[team] = pool.length ? pool[randInt(pool.length)] : null;   // الكلمة المسرَّبة سرّ
   }
 
   guess(i) {
@@ -14845,7 +14900,13 @@ export class ShifraRoom {
   }
 }
 
-function shifraShuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0;[a[i], a[j]] = [a[j], a[i]]; } return a; }
+/* ⚠️ كانت Math.random. ولوحةُ الشفرة هي سرّ اللعبة كلّه: أي كلمة حمراء
+   وأيّها القاتل. وMath.random في V8 هو xorshift128+، تُستخرَج حالته من
+   أربع مخرجات متتالية — واللوحة تُكشف كاملةً في نهاية كل جولة. فمن لعب
+   جولةً واحدة يقدر يتنبّأ بلوحة الجولة التالية في نفس العزلة، ويعرف
+   القاتلَ والمفتاحَ كلَّه وهو ليس قائد فريق. هذا نفس ما تقوله قاعدة
+   الملف في أعلاه: كل ما يقرّر دورًا أو كرتًا يمرّ من randInt. */
+function shifraShuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = randInt(i + 1);[a[i], a[j]] = [a[j], a[i]]; } return a; }
 function shifraAr(t) { return t === "red" ? "الأحمر" : "الأزرق"; }
 
 /* ═════════════ عقد المقعد المشترك (لغرف نمط this.g) ═════════════
@@ -15091,6 +15152,7 @@ export class HuntRoom {
     this.lobbySync(this.listed ? 'ping' : 'add');
 
     ws.addEventListener('message', ev => {
+      if (wsOversize(ev.data)) return;          // قبل التحليل: التحليل هو التكلفة
       let m2; try { m2 = JSON.parse(ev.data); } catch { return; }
       const q0 = this.g.players.find(x => x.id === pid);
       if (q0) { q0.lastSeen = Date.now(); q0.hb = q0.hb || (m2 && m2.t === 'hb'); }
@@ -15339,7 +15401,7 @@ export class HuntRoom {
     const names = Array.isArray(m.districts) ? m.districts : [];
     const clean = [];
     for (const n of names) {
-      const s = cleanText(n, 24);
+      const s = safeKey(cleanText(n, 24));      // اسم المكان يصير مفتاحًا في adj
       if (s && !clean.includes(s)) clean.push(s);
       if (clean.length >= 40) break;
     }
@@ -15351,8 +15413,8 @@ export class HuntRoom {
     for (const a of clean) {
       const list = Array.isArray(raw[a]) ? raw[a] : [];
       for (const b of list) {
-        const s = cleanText(b, 24);
-        if (!s || s === a || !adj[s]) continue;
+        const s = safeKey(cleanText(b, 24));
+        if (!s || s === a || !Object.prototype.hasOwnProperty.call(adj, s)) continue;
         if (!adj[a].includes(s)) adj[a].push(s);
         if (!adj[s].includes(a)) adj[s].push(a);   // الجوار متبادل دائمًا
       }
@@ -15772,6 +15834,7 @@ export class SquaresRoom {
     this.lobbySync(this.listed ? 'ping' : 'add');
 
     ws.addEventListener('message', ev => {
+      if (wsOversize(ev.data)) return;          // قبل التحليل: التحليل هو التكلفة
       let m2; try { m2 = JSON.parse(ev.data); } catch { return; }
       const q0 = this.g.players.find(x => x.id === pid);
       if (q0) { q0.lastSeen = Date.now(); q0.hb = q0.hb || (m2 && m2.t === 'hb'); }
@@ -17057,6 +17120,7 @@ export class TariRoom {
       kindName: k ? k.name : '',
       inputType: k ? k.inputType : null,
       clipMs: k ? (k.clipMs || 0) : 0,
+      clipMax: TARI_CLIP_MAX,        // العميل يفحص قبل الإرسال بنفس الرقم لا برقمٍ منسوخ
       textMax: k ? (k.textMax || TARI_ANS_MAX) : TARI_ANS_MAX,
       starId: r.starId, starName: r.starId ? this.nameOf(r.starId) : null,
       prompt: text || null,
@@ -17104,3 +17168,9 @@ export class TariRoom {
   async persist() { await this.touchRoom(); await this.state.storage.put('room', this.room); }
 }
 applyRoomCommon(TariRoom, 'tari');
+/* طاريك وحدها تستقبل صوتًا. والسقف هنا ضِعفُ سقف المقطع لا مقداره:
+   لو ساويناهما لابتلع الحارسُ العامّ كلَّ مقطعٍ زائد قبل أن يصل فحص
+   onClip، فيضيع تسجيلُ اللاعب بلا رسالة تفسّر له شيئًا. الضِّعف يترك
+   للتجاوز المعقول (متصفّح يسجّل بمعدّل أعلى) أن يصل ويُردّ برسالة
+   مفهومة، ويبقى ما فوقه إساءةً تُهمَل بصمت. */
+TariRoom.prototype.WS_MAX = TARI_CLIP_MAX * 2 + 4096;
