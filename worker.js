@@ -803,7 +803,11 @@ async function modEnsureTable(env) {
    المُبلِّغ نفسه: المقطع المُبلَّغ عنه وحده يُنسَخ إلى D1 ليُراجَع لاحقًا،
    وبقية مقاطع الجولة تبقى في الذاكرة وتموت معها. */
 const MOD_REPORT_TTL_MS = 30 * 24 * 60 * 60 * 1000;   // البلاغ يُكنس بعد شهر
-const MOD_REPORTS_PER_ROOM = 40;                       // سقف يمنع إغراق القاعدة
+const MOD_REPORTS_PER_ROOM = 40;                       // سقف الغرفة الواحدة
+/* سقف عام: سقف الغرفة وحده لا يكفي — من يفتح غرفًا كثيرة يملأ القاعدة
+   بأربعين من كلٍّ منها. ٣٠٠ بلاغ في الساعة ≈ ٧٠ ميغابايت كحدٍّ أقصى،
+   وهو فوق أي استخدام حقيقي بمراحل ودون أي إغراق. */
+const MOD_REPORTS_PER_HOUR = 300;
 
 async function modEnsureReports(env) {
   try {
@@ -849,7 +853,7 @@ async function modNoteRoom(env, game, code, hostName) {
     await env.DB.prepare(
       `INSERT INTO mod_rooms (code, game, host_name, created_at) VALUES (?1, ?2, ?3, ?4)
        ON CONFLICT(code) DO UPDATE SET game=?2, host_name=?3, created_at=?4`
-    ).bind(code, game, String(hostName || '').slice(0, 40), now).run();
+    ).bind(code, game, cleanName(String(hostName || '')), now).run();
   } catch { return; }
   try {
     await env.DB.prepare('DELETE FROM mod_rooms WHERE created_at < ?1')
@@ -10426,7 +10430,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v183';   // v180 = جولات الصوت · v181 = من بلّغ باليوزر · v182 = أوضاع الجولات الثلاثة
+const WORKER_VERSION = 'v188';   // v180 = جولات الصوت · v181 = من بلّغ باليوزر · v182 = أوضاع الجولات الثلاثة
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -11836,6 +11840,52 @@ function sanitizeDisplayName(raw) {
 
 /* --------------------------- الحد من المعدل --------------------------- */
 
+/* ══════════ تخمين التوكن الموزَّع ══════════
+   الحدّ على العنوان وحده لا يكفي: عشر محاولات لكل عنوان تعني ١٤٤٠ في
+   اليوم من عنوان واحد — لا شيء. لكن صاحب تخصيص IPv6 من نوع /48 يملك
+   ٦٥٥٣٦ شبكة /64، وكل واحدة دلوٌ مستقل ⇒ ٦٥٥ ألف تخمين كل عشر دقائق،
+   أي ألفٌ في الثانية من مهاجمٍ واحد. وهذا بالضبط السيناريو الذي يخشاه
+   صاحب الموقع.
+
+   فأضفنا عدّادًا عامًّا لا يعرف العناوين. وحتى لا يقفل المهاجمُ البابَ
+   على صاحبه: العناوين التي دخلت بنجاح خلال أسبوع تبقى مسموحة حتى وهو
+   مشتعل. أي أن الإغلاق العام يصيب الغرباء وحدهم. */
+const ADM_GLOBAL_FAILS = 500;                 // فشلًا في النافذة قبل الإغلاق العام
+const ADM_GLOBAL_WINDOW = 10 * 60 * 1000;
+/* ثلاثون يومًا لا سبعة: العنوان المعروف هو ما يمنع الإغلاق العام من
+   حبس صاحب اللوحة خارجها. كلّما طال بقاء العلامة قلّ احتمال أن يصادف
+   هجومٌ عنوانًا لم يدخل منه قط. */
+const ADM_KNOWN_TTL = 30 * 24 * 60 * 60 * 1000;
+
+async function admKnown(env, ip) {
+  try {
+    const row = await env.DB.prepare('SELECT reset_at FROM rate_limits WHERE k = ?1')
+      .bind('admok:' + ip).first();
+    return !!(row && row.reset_at > Date.now());
+  } catch { return false; }
+}
+
+async function admMarkKnown(env, ip) {
+  try {
+    const until = Date.now() + ADM_KNOWN_TTL;
+    await env.DB.prepare(
+      `INSERT INTO rate_limits (k, n, reset_at) VALUES (?1, 1, ?2)
+       ON CONFLICT(k) DO UPDATE SET reset_at = ?2`).bind('admok:' + ip, until).run();
+  } catch {}
+}
+
+/* هل نغلق البابَ عالميًا الآن؟ نُسأل قبل أي مقارنة، فالتخمين لا يُقيَّم
+   أصلًا لا أن يُقيَّم ثم يُحجب — وهذا هو الفرق بين خانقٍ يبطئ وخانقٍ
+   يمنع. */
+async function admGlobalBlocked(env, ip) {
+  try {
+    const row = await env.DB.prepare('SELECT n, reset_at FROM rate_limits WHERE k = ?1')
+      .bind('admfg:all').first();
+    if (!row || row.reset_at < Date.now() || row.n <= ADM_GLOBAL_FAILS) return false;
+    return !(await admKnown(env, ip));
+  } catch { return false; }
+}
+
 async function rateLimit(env, key, limit, windowMs, failClosed = false) {
   const now = Date.now();
   try {
@@ -12986,13 +13036,28 @@ async function handleReports(request, env, url) {
   const ip = clientKey(request);
   if (!await rateLimit(env, 'adm:' + ip, 240, 10 * 60 * 1000))
     return Response.json({ ok: false, error: 'rate' }, { status: 429 });
+  /* الإغلاق العام قبل المقارنة: العنوان الجديد لا يُقيَّم تخمينه أصلًا
+     ما دام الباب مشتعلًا، والعنوان المعروف يمرّ. */
+  if (await admGlobalBlocked(env, ip))
+    return Response.json({ ok: false, error: 'siege',
+      ar: 'الباب مغلق مؤقتًا: محاولات تخمين كثيرة الآن. ادخل من جهاز دخلتَ منه سابقًا، أو انتظر عشر دقائق.' },
+      { status: 429 });
   /* خانق المحاولات الفاشلة — كان في /admin/panel وحده، فصار تخمين
      نفس التوكن أرخص ٢٤ مرة من هذا الباب. نفس السقف بالضبط. */
-  if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN))) {
+  /* النوع أولًا: String(['tok']) === 'tok'، فمصفوفة تحمل التوكن كانت
+     تمرّ. ليست تجاوزًا (لا بدّ من معرفة التوكن) لكنها ارتباك أنواع —
+     ومقارنةُ سرٍّ لا تُبنى على تحويلٍ ضمني. */
+  if (typeof body.key !== 'string' ||
+      !timingSafeEqual(body.key, String(env.ADMIN_TOKEN))) {
+    await rateLimit(env, 'admfg:all', ADM_GLOBAL_FAILS, ADM_GLOBAL_WINDOW, true);
     if (!await rateLimit(env, 'admf:' + ip, 10, 10 * 60 * 1000, true))
       return Response.json({ ok: false, error: 'rate' }, { status: 429 });
     return Response.json({ ok: false, error: 'auth' }, { status: 401 });
   }
+  /* دخولٌ ناجح: نُعلِّم العنوان معروفًا أسبوعًا، فلا يقفله الإغلاق العام
+     لو اشتعل الباب لاحقًا. (المعالج بلا ctx فننتظرها — كتابةٌ واحدة على
+     مسارٍ إداريّ نادر، لا على مسار لاعب.) */
+  await admMarkKnown(env, ip);
 
   const now = Date.now();
 
@@ -13065,11 +13130,23 @@ async function handleAdminPanel(request, env, url) {
   const ip = clientKey(request);
   if (!await rateLimit(env, 'adm:' + ip, 240, 10 * 60 * 1000))
     return Response.json({ ok: false, error: 'rate' }, { status: 429 });
-  if (!timingSafeEqual(String(body.key || ''), String(env.ADMIN_TOKEN))) {
+  /* الإغلاق العام قبل المقارنة: العنوان الجديد لا يُقيَّم تخمينه أصلًا
+     ما دام الباب مشتعلًا، والعنوان المعروف يمرّ. */
+  if (await admGlobalBlocked(env, ip))
+    return Response.json({ ok: false, error: 'siege',
+      ar: 'الباب مغلق مؤقتًا: محاولات تخمين كثيرة الآن. ادخل من جهاز دخلتَ منه سابقًا، أو انتظر عشر دقائق.' },
+      { status: 429 });
+  /* النوع أولًا: String(['tok']) === 'tok'، فمصفوفة تحمل التوكن كانت
+     تمرّ. ليست تجاوزًا (لا بدّ من معرفة التوكن) لكنها ارتباك أنواع —
+     ومقارنةُ سرٍّ لا تُبنى على تحويلٍ ضمني. */
+  if (typeof body.key !== 'string' ||
+      !timingSafeEqual(body.key, String(env.ADMIN_TOKEN))) {
+    await rateLimit(env, 'admfg:all', ADM_GLOBAL_FAILS, ADM_GLOBAL_WINDOW, true);
     if (!await rateLimit(env, 'admf:' + ip, 10, 10 * 60 * 1000, true))
       return Response.json({ ok: false, error: 'rate' }, { status: 429 });
     return Response.json({ ok: false, error: 'auth' }, { status: 401 });
   }
+  await admMarkKnown(env, ip);   // عنوانٌ دخل بنجاح: معروفٌ أسبوعًا
 
   /* أي خطأ في القاعدة يرجع JSON مفهومًا لا 500 صامتًا: الاسم الحقيقي
      للجدول أو العمود الناقص يظهر في اللوحة بدل «ما قدرنا نوصل للخادم» */
@@ -16751,6 +16828,7 @@ export class TariRoom {
       subs: {},        // pid -> { has, text?, choice?, tag?, skipped? }   ← لا صوت هنا أبدًا
       votes: {},       // pid -> subId
       readys: {},      // pid -> true  (شاشة الكشف: من ضغط «تم»)
+      reported: {},    // pid -> [targetPid]  (من بلّغ على من هذي الجولة)
       order: [],       // ترتيب العرض/السلسلة
       turn: 0, turnEndsAt: 0, chainText: '', chainSrc: null,
       result: null,
@@ -16846,7 +16924,7 @@ export class TariRoom {
       const newId = (validPlayerId(askedId) && !this.room.players.some(p => p.id === askedId)) ? askedId : oldId;
       if (newId !== oldId) {
         player.id = newId;
-        for (const bag of ['subs', 'votes', 'marks', 'readys']) {
+        for (const bag of ['subs', 'votes', 'marks', 'readys', 'reported']) {
           if (this.room[bag] && oldId in this.room[bag]) {
             this.room[bag][newId] = this.room[bag][oldId];
             delete this.room[bag][oldId];
@@ -17166,6 +17244,7 @@ export class TariRoom {
     r.subs = {}; r.votes = {}; r.result = null; r.order = []; r.turn = 0;
     r.turnEndsAt = 0; r.chainText = ''; r.chainSrc = null;
     r.readys = {};
+    r.reported = {};
     r.ask = String(k.ask || '').replace(/\{نجم\}/g, r.starId ? this.nameOf(r.starId) : 'المجموعة');
 
     if (k.recorders === 'chain') {
@@ -17680,6 +17759,15 @@ export class TariRoom {
     const clip = this.clips.get(target);
     if (!clip) return;                                        // نصّية أو انمسحت
 
+    /* الفهرس الفريد في D1 يمنع تكرار المعرّف نفسه، لكن المعرّف يتبدّل
+       مع إعادة الاتصال والمقعد يبقى. فنحفظ «من بلّغ على من» في الغرفة
+       نفسها — وهي تهاجر مع المقعد — وإلا أرسل الشخص الواحد بلاغين
+       وإشعارين بمجرّد تحديث الصفحة. */
+    if (!r.reported) r.reported = {};
+    const mine = r.reported[playerId] || (r.reported[playerId] = []);
+    if (mine.includes(target)) return;
+    mine.push(target);
+
     const tp = this.findPlayer(target);
     const now = Date.now();
     try {
@@ -17687,7 +17775,11 @@ export class TariRoom {
       const cnt = await this.env.DB.prepare(
         'SELECT COUNT(*) AS n FROM mod_clip_reports WHERE code = ?1'
       ).bind(r.code).first();
-      if (cnt && (cnt.n | 0) >= MOD_REPORTS_PER_ROOM) return; // سقف يمنع إغراق القاعدة
+      if (cnt && (cnt.n | 0) >= MOD_REPORTS_PER_ROOM) return; // سقف الغرفة
+      const hour = await this.env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM mod_clip_reports WHERE created_at > ?1'
+      ).bind(now - 60 * 60 * 1000).first();
+      if (hour && (hour.n | 0) >= MOD_REPORTS_PER_HOUR) return;  // السقف العام
 
       /* الفهرس الفريد يمنع تكرار المُبلِّغ نفسه على المقطع نفسه، فتكرار
          الضغط لا يضاعف الصفوف ولا يضاعف الإشعارات. */
