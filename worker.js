@@ -10302,7 +10302,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v174';   // v172 = غَزْو ولوحة صدارتها · v173 = طاريك + الإصلاحات الأمنية
+const WORKER_VERSION = 'v175';   // v173 = طاريك · v174 = أحمر ضد أزرق · v175 = طاريك بلا مؤقّتات + أنماط كتابية
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -16275,6 +16275,27 @@ const TARI_KINDS = {
     textMax: TARI_ANS_MAX, collectMs: 34000, voteMs: 24000, revealMs: 10000, revealPerItemMs: 0,
     anon: true, ask: 'أي جواب يشبه {نجم} أكثر؟',
   },
+  sentence: {
+    name: 'أكمل الجملة',
+    inputType: 'text', recorders: 'all', vote: 'pickOne', starAside: true,
+    scoring: { vote: 10, agree: 5, part: 2, top: 8 },
+    textMax: TARI_ANS_MAX,
+    anon: true, ask: 'أي إكمال يشبه {نجم} أكثر؟',
+  },
+  laqab: {
+    name: 'اللقب',
+    inputType: 'text', recorders: 'all', vote: 'pickOne', starAside: true,
+    scoring: { vote: 10, agree: 5, part: 2, top: 8 },
+    textMax: TARI_ANS_MAX,
+    anon: true, ask: 'أي لقب يليق بـ{نجم} أكثر؟',
+  },
+  uthr: {
+    name: 'العذر',
+    inputType: 'text', recorders: 'all', vote: 'pickOne', starAside: true,
+    scoring: { vote: 10, agree: 5, part: 2, top: 8 },
+    textMax: TARI_ANS_MAX,
+    anon: true, ask: 'أي عذر يشبه {نجم} أكثر؟',
+  },
   chain: {
     name: 'السلسلة',
     /* finaleKind: أي نمط يحمل هذي الراية هو ختام اللعبة. راية لا اسم،
@@ -16327,6 +16348,33 @@ const TARI_BANK = [
   { kind: 'free', text: 'اكتب عنوان فيلم عن حياة {نجم}' },
   { kind: 'free', text: 'كمّل: أسوأ نصيحة ممكن يعطيك إياها {نجم}…' },
   { kind: 'free', text: 'كمّل: لو دخل {نجم} مسابقة، بيفوز بجائزة…' },
+
+  { kind: 'sentence', text: '{نجم} ما يقدر يعيش يوم واحد بدون…' },
+  { kind: 'sentence', text: 'أول شي يسويه {نجم} أول ما يدخل البيت…' },
+  { kind: 'sentence', text: 'لو انقطع النت عن {نجم} أسبوعًا، بيصير…' },
+  { kind: 'sentence', text: 'أكثر شي يعصّب {نجم} هو…' },
+  { kind: 'sentence', text: 'لو فتحنا جوال {نجم} بنلقى…' },
+  { kind: 'sentence', text: 'الشي الوحيد اللي يخلّي {نجم} يصحى بدري…' },
+  { kind: 'sentence', text: 'لو {نجم} صار مدرّسًا، أول قانون في صفّه…' },
+  { kind: 'sentence', text: 'آخر شي يتوقّعه أحد من {نجم} إنه…' },
+
+  { kind: 'laqab', text: 'اكتب لقبًا يليق بـ{نجم} في المجموعة' },
+  { kind: 'laqab', text: 'وش اسم {نجم} لو كان بطل مسلسل؟' },
+  { kind: 'laqab', text: 'لو كان لـ{نجم} اسم في فريق أبطال، وش يكون؟' },
+  { kind: 'laqab', text: 'اكتب لقبًا لـ{نجم} من موقفٍ صار له' },
+  { kind: 'laqab', text: 'وش عنوان كتاب سيرة {نجم}؟' },
+  { kind: 'laqab', text: 'لو {نجم} صار مطعمًا، وش اسمه؟' },
+  { kind: 'laqab', text: 'اكتب لقبًا يزعّل {نجم} ويضحّك الباقين' },
+  { kind: 'laqab', text: 'وش اسم قناة {نجم} لو صار يوتيوبر؟' },
+
+  { kind: 'uthr', text: 'وش عذر {نجم} لو تأخّر ساعتين؟' },
+  { kind: 'uthr', text: 'وش عذر {نجم} لو ما رد على رسائلكم ثلاثة أيام؟' },
+  { kind: 'uthr', text: 'وش عذر {نجم} لو نسي موعدًا مهمًّا؟' },
+  { kind: 'uthr', text: 'وش يقول {نجم} لو انكسر شي عنده وسألوه؟' },
+  { kind: 'uthr', text: 'وش عذر {نجم} لو طلع من العزيمة بدري؟' },
+  { kind: 'uthr', text: 'وش عذر {نجم} لو ما جاب الشي اللي طلبتوه؟' },
+  { kind: 'uthr', text: 'وش يقول {نجم} لو ضبطتوه يأكل بالليل؟' },
+  { kind: 'uthr', text: 'وش عذر {نجم} لو خسر ولا يبي يعترف؟' },
 
   { kind: 'chain', text: 'القهوة بردت والسالفة ما خلصت والباب مفتوح' },
   { kind: 'chain', text: 'سبع سيارات وقفت عند البقالة ولا واحد نزل' },
@@ -16443,6 +16491,7 @@ export class TariRoom {
       tones: null,     // pid -> نبرة الجولة (نمط النبرة وحده)
       subs: {},        // pid -> { has, text?, choice?, tag?, skipped? }   ← لا صوت هنا أبدًا
       votes: {},       // pid -> subId
+      readys: {},      // pid -> true  (شاشة الكشف: من ضغط «تم»)
       order: [],       // ترتيب العرض/السلسلة
       turn: 0, turnEndsAt: 0, chainText: '', chainSrc: null,
       result: null,
@@ -16625,15 +16674,11 @@ export class TariRoom {
 
   pendingPhase() {
     const r = this.room;
-    switch (r.phase) {
-      case 'brief':   return { ms: r.endsAt - Date.now() + 200, fn: () => this.startCollect() };
-      case 'collect': return this.isChain()
-        ? { ms: r.turnEndsAt - Date.now() + 300, fn: () => this.chainTimeout() }
-        : { ms: r.endsAt - Date.now() + 300, fn: () => this.endCollect() };
-      case 'vote':    return { ms: r.endsAt - Date.now() + 300, fn: () => this.endVote() };
-      case 'reveal':  return { ms: r.endsAt - Date.now() + 300, fn: () => this.afterReveal() };
-      default: return null;
-    }
+    /* المؤقّت الوحيد الباقي هو بطاقة التعريف بين الجولات: أربع ثوانٍ عرضٍ
+       لا مهلة إجابة. الجمع والتصويت والكشف تنتظر اللاعبين أنفسهم — تمشي
+       حين يخلّص الكل، أو حين يقول المضيف «كمّلوا». */
+    if (r.phase === 'brief') return { ms: r.endsAt - Date.now() + 200, fn: () => this.startCollect() };
+    return null;
   }
 
   kind() { return TARI_KINDS[this.room.kind] || null; }
@@ -16746,6 +16791,7 @@ export class TariRoom {
     r.starId = (k.recorders === 'chain') ? null : this.nextStar();
     r.subs = {}; r.votes = {}; r.result = null; r.order = []; r.turn = 0;
     r.turnEndsAt = 0; r.chainText = ''; r.chainSrc = null;
+    r.readys = {};
     r.ask = String(k.ask || '').replace(/\{نجم\}/g, r.starId ? this.nameOf(r.starId) : 'المجموعة');
 
     if (k.recorders === 'chain') {
@@ -16782,17 +16828,15 @@ export class TariRoom {
       r.order = r.order.filter(id => { const p = this.findPlayer(id); return p && p.connected; });
       if (!r.order.length) return this.endCollect();
       r.chainSrc = null;
-      r.turnEndsAt = Date.now() + k.turnMs;
-      r.endsAt = r.turnEndsAt;
+      r.turnEndsAt = 0;
+      r.endsAt = 0;
       await this.persist();
       this.broadcastState();
-      this.setPhaseTimer(k.turnMs, () => this.chainTimeout());
       return;
     }
-    r.endsAt = Date.now() + k.collectMs;
+    r.endsAt = 0;
     await this.persist();
     this.broadcastState();
-    this.setPhaseTimer(k.collectMs, () => this.endCollect());
   }
 
   /* دور السلسلة انتهى بلا تسجيل: يُشطب ويمشي الدور. الجولة ما تنتظر أحدًا. */
@@ -16824,11 +16868,10 @@ export class TariRoom {
       const prev = r.order[i];
       if (r.subs[prev] && r.subs[prev].has && this.clips.has(prev)) { r.chainSrc = prev; break; }
     }
-    r.turnEndsAt = Date.now() + k.turnMs;
-    r.endsAt = r.turnEndsAt;
+    r.turnEndsAt = 0;
+    r.endsAt = 0;
     await this.persist();
     this.broadcastState();
-    this.setPhaseTimer(k.turnMs, () => this.chainTimeout());
   }
 
   async endCollect() {
@@ -16859,10 +16902,9 @@ export class TariRoom {
     this.clearPhaseTimer();
     r.phase = 'vote';
     r.votes = {};
-    r.endsAt = Date.now() + k.voteMs;
+    r.endsAt = 0;
     await this.persist();
     this.broadcastState();
-    this.setPhaseTimer(k.voteMs, () => this.endVote());
   }
 
   async endVote() {
@@ -16949,11 +16991,10 @@ export class TariRoom {
     };
 
     r.phase = 'reveal';
-    const per = (k.revealPerItemMs || 0) * items.length;
-    r.endsAt = Date.now() + (k.revealMs || 8000) + per;
+    r.endsAt = 0;
+    r.readys = {};              // شاشة النتيجة تمشي بإجماع «تم» أو بزر المضيف
     await this.persist();
     this.broadcastState();
-    this.setPhaseTimer((k.revealMs || 8000) + per, () => this.afterReveal());
   }
 
   async afterReveal() {
@@ -17015,6 +17056,16 @@ export class TariRoom {
           r.votes[playerId] = id;
           await this.persist(); this.broadcastState();
           if (this.allVoted()) await this.endVote();
+          return;
+        }
+
+        case 'ready': {
+          if (r.phase !== 'reveal') return;
+          if (!r.readys) r.readys = {};
+          if (r.readys[playerId]) return;
+          r.readys[playerId] = true;
+          await this.persist(); this.broadcastState();
+          if (this.allReady()) await this.afterReveal();
           return;
         }
 
@@ -17119,6 +17170,14 @@ export class TariRoom {
     this.sendPrivate(playerId, { type: 'clip', id, mime: c.mime, b64: c.b64, ms: c.ms });
   }
 
+  /* إجماع شاشة الكشف. المنقطعون لا يُنتظرون — وإلا علقت الشاشة على غائب. */
+  allReady() {
+    const live = this.activePlayers();
+    if (!live.length) return false;
+    const rd = this.room.readys || {};
+    return live.every(p => rd[p.id]);
+  }
+
   async forceAdvance() {
     const r = this.room;
     switch (r.phase) {
@@ -17198,6 +17257,7 @@ export class TariRoom {
       host: p.id === r.hostId, star: p.id === r.starId,
       done: !!(r.subs[p.id] && r.subs[p.id].has),
       voted: !!r.votes[p.id],
+      ready: !!(r.readys && r.readys[p.id]),
     }));
   }
 
