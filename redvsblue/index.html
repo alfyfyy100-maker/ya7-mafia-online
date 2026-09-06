@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#05060c">
-<meta name="description" content="أحمر ضد أزرق — معركة كرتين داخل حلبة: أسلحة تنزل، قلوب تنقص، وأنت تتوقّع مين يفوز.">
+<meta name="description" content="أحمر ضد أزرق — معركة كرات داخل حلبة: أسلحة تنزل، قلوب تنقص، وأنت تتوقّع أو تتحكّم أو تلعب أونلاين مع أصحابك.">
 <title>أحمر ضد أزرق — استوديو يا٧</title>
 <style>
   :root { color-scheme: dark; }
@@ -16,10 +16,7 @@
     overflow: hidden; overscroll-behavior: none;
     -webkit-user-select: none; user-select: none;
   }
-  #c {
-    position: fixed; inset: 0; width: 100%; height: 100%;
-    display: block; touch-action: none;
-  }
+  #c { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
   /* ── الطبقات فوق اللوحة ── */
   .panel {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -27,50 +24,99 @@
     opacity: 0; pointer-events: none; transition: opacity .35s ease;
     padding: 20px; padding-top: max(20px, env(safe-area-inset-top));
     padding-bottom: max(20px, env(safe-area-inset-bottom));
+    overflow-y: auto;
   }
   .panel.show { opacity: 1; pointer-events: auto; }
   .card {
-    width: min(92vw, 380px); text-align: center;
+    width: min(92vw, 390px); text-align: center;
     background: linear-gradient(180deg, #14172a, #0c0e1a);
     border: 1px solid rgba(255,255,255,.1);
-    border-radius: 22px; padding: 26px 22px 22px;
+    border-radius: 22px; padding: 24px 20px 20px; margin: auto;
     box-shadow: 0 20px 60px rgba(0,0,0,.6);
     transform: translateY(12px) scale(.97); transition: transform .35s cubic-bezier(.2,.9,.3,1.2);
   }
   .panel.show .card { transform: none; }
-  h1 { margin: 0 0 6px; font-size: 30px; letter-spacing: .5px; }
+  h1 { margin: 0 0 6px; font-size: 28px; letter-spacing: .5px; }
   h1 .r { color: #ff3b4e; } h1 .b { color: #2ea8ff; }
-  .sub { margin: 0 0 18px; color: #aab0c8; font-size: 15px; line-height: 1.6; }
-  .pick { display: flex; gap: 12px; margin-bottom: 14px; }
+  .sub { margin: 0 0 14px; color: #aab0c8; font-size: 14px; line-height: 1.6; }
+  .pick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
   .btn {
-    flex: 1; border: 0; cursor: pointer; font: inherit; font-weight: 800; font-size: 20px;
-    color: #fff; padding: 16px 10px; border-radius: 16px;
-    transition: transform .12s ease, filter .12s ease;
+    border: 0; cursor: pointer; font: inherit; font-weight: 800; font-size: 18px;
+    color: #fff; padding: 14px 10px; border-radius: 16px;
+    transition: transform .12s ease, filter .12s ease, opacity .2s ease;
     box-shadow: 0 8px 22px rgba(0,0,0,.35), inset 0 -4px 0 rgba(0,0,0,.25);
   }
   .btn:active { transform: translateY(2px) scale(.98); filter: brightness(1.1); }
-  .btn.red { background: linear-gradient(180deg, #ff5566, #e21f34); }
-  .btn.blue { background: linear-gradient(180deg, #4fb8ff, #1f86e6); }
+  .btn:disabled { opacity: .45; cursor: default; transform: none; filter: none; }
+  .btn.c0 { background: linear-gradient(180deg, #ff5566, #e21f34); }
+  .btn.c1 { background: linear-gradient(180deg, #4fb8ff, #1f86e6); }
+  .btn.c2 { background: linear-gradient(180deg, #4ee58a, #1fa85a); }
+  .btn.c3 { background: linear-gradient(180deg, #ffd45c, #e0a11a); color: #2a1f00; }
+  .btn.main { background: linear-gradient(180deg, #6b5cff, #4a3ad9); }
   .btn.ghost {
     background: rgba(255,255,255,.07); color: #d8dcee; font-size: 15px; font-weight: 600;
     padding: 12px; box-shadow: none; border: 1px solid rgba(255,255,255,.12);
   }
   .btn.wide { width: 100%; }
-  .stats { margin-top: 14px; color: #7f86a3; font-size: 13px; white-space: pre-line; line-height: 1.7; }
-  .tabs { display: flex; gap: 4px; background: rgba(255,255,255,.06); border-radius: 14px; padding: 4px; margin-bottom: 16px; }
+  .btn.sm { font-size: 14px; padding: 9px 12px; border-radius: 12px; }
+  .stats { margin-top: 12px; color: #7f86a3; font-size: 13px; white-space: pre-line; line-height: 1.7; }
+  #resTitle { font-size: 28px; margin: 0 0 6px; }
+  #resPred { font-size: 18px; margin: 0 0 16px; min-height: 26px; font-weight: 700; }
+  #resPred.ok { color: #3ddc84; } #resPred.bad { color: #ff7b7b; }
+  .tabs { display: flex; gap: 4px; background: rgba(255,255,255,.06); border-radius: 14px; padding: 4px; margin-bottom: 14px; }
   .tab {
-    flex: 1; border: 0; cursor: pointer; font: inherit; font-weight: 700; font-size: 15px;
-    color: #aab0c8; background: transparent; padding: 10px 6px; border-radius: 11px;
+    flex: 1; border: 0; cursor: pointer; font: inherit; font-weight: 700; font-size: 14px;
+    color: #aab0c8; background: transparent; padding: 10px 4px; border-radius: 11px;
     transition: background .2s ease, color .2s ease;
   }
   .tab[aria-selected="true"] { background: #2a2f4d; color: #fff; box-shadow: 0 2px 10px rgba(0,0,0,.35); }
-  .tab:focus-visible, .btn:focus-visible, .corner:focus-visible { outline: 2px solid #8ed3ff; outline-offset: 2px; }
+  .tab:focus-visible, .btn:focus-visible, .corner:focus-visible, .seg button:focus-visible, .chip:focus-visible, input:focus-visible { outline: 2px solid #8ed3ff; outline-offset: 2px; }
   .mode[hidden] { display: none; }
-  .hint { margin: 0 0 14px; color: #aab0c8; font-size: 14px; line-height: 1.6; }
+  .hint { margin: 0 0 12px; color: #aab0c8; font-size: 14px; line-height: 1.6; }
   .hint b { color: #fff; }
-  #resTitle { font-size: 30px; margin: 0 0 6px; }
-  #resPred { font-size: 18px; margin: 0 0 18px; min-height: 26px; font-weight: 700; }
-  #resPred.ok { color: #3ddc84; } #resPred.bad { color: #ff7b7b; }
+  /* عدد الكرات */
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+  .row .lbl { color: #aab0c8; font-size: 14px; font-weight: 600; }
+  .seg { display: inline-flex; background: rgba(255,255,255,.07); border-radius: 12px; padding: 3px; gap: 2px; }
+  .seg button {
+    border: 0; background: transparent; color: #aab0c8; font: inherit; font-weight: 800; font-size: 15px;
+    width: 40px; height: 32px; border-radius: 9px; cursor: pointer;
+  }
+  .seg button[aria-pressed="true"] { background: #2a2f4d; color: #fff; }
+  /* أونلاين */
+  .field { display: flex; gap: 8px; margin-bottom: 10px; }
+  input.txt {
+    flex: 1; min-width: 0; font: inherit; font-size: 16px; color: #fff; background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: 11px 12px; text-align: center;
+  }
+  input.txt::placeholder { color: #6f7590; }
+  input.code { letter-spacing: 3px; text-transform: uppercase; font-weight: 800; font-family: ui-monospace, Menlo, Consolas, monospace; direction: ltr; }
+  .codebox {
+    display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0 12px;
+  }
+  .codebox .code {
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 30px; font-weight: 800; letter-spacing: 5px;
+    direction: ltr; color: #fff; background: rgba(255,255,255,.07); padding: 6px 14px; border-radius: 12px;
+    border: 1px dashed rgba(255,255,255,.25);
+  }
+  .plist { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .plist li {
+    display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 12px;
+    background: rgba(255,255,255,.05); font-size: 15px; font-weight: 600;
+  }
+  .plist li.off { opacity: .45; }
+  .dot { width: 18px; height: 18px; border-radius: 50%; flex: none; box-shadow: inset 0 -3px 0 rgba(0,0,0,.3); }
+  .plist .tag { margin-inline-start: auto; font-size: 12px; color: #aab0c8; font-weight: 600; }
+  .plist .kick { border: 0; background: rgba(255,90,110,.15); color: #ff8a96; border-radius: 8px; font: inherit; font-size: 12px; padding: 4px 8px; cursor: pointer; }
+  .chips { display: flex; justify-content: center; gap: 10px; margin-bottom: 12px; }
+  .chip { width: 36px; height: 36px; border-radius: 50%; border: 3px solid transparent; cursor: pointer; box-shadow: inset 0 -4px 0 rgba(0,0,0,.3); }
+  .chip[aria-pressed="true"] { border-color: #fff; transform: scale(1.12); }
+  .chip:disabled { opacity: .28; cursor: default; }
+  .status { min-height: 20px; margin: 0 0 10px; color: #aab0c8; font-size: 13px; }
+  .status.err { color: #ff8a96; }
+  .status.ok { color: #3ddc84; }
+  .checkrow { display: flex; align-items: center; justify-content: center; gap: 8px; margin: 0 0 12px; color: #aab0c8; font-size: 14px; }
+  .checkrow input { width: 18px; height: 18px; accent-color: #6b5cff; }
   /* أزرار الزاوية */
   .corner {
     position: fixed; top: max(10px, env(safe-area-inset-top)); z-index: 5;
@@ -83,38 +129,76 @@
   #restart.show { display: flex; }
   .foot { position: fixed; bottom: max(8px, env(safe-area-inset-bottom)); left: 0; right: 0;
     text-align: center; font-size: 12px; color: rgba(255,255,255,.28); pointer-events: none; }
+  #toast {
+    position: fixed; top: max(60px, calc(env(safe-area-inset-top) + 50px)); left: 50%; transform: translateX(-50%);
+    background: rgba(20,22,40,.92); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; font-weight: 600;
+    border: 1px solid rgba(255,255,255,.14); opacity: 0; transition: opacity .25s ease; pointer-events: none; z-index: 9; max-width: 90vw;
+  }
+  #toast.show { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .card, .panel, .btn { transition: none; } }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 
 <button id="mute" class="corner" type="button" aria-label="الصوت">🔊</button>
-<button id="restart" class="corner" type="button" aria-label="جولة جديدة">⟳</button>
+<button id="restart" class="corner" type="button" aria-label="خروج للقائمة">⟳</button>
+<div id="toast" role="status"></div>
 
 <div id="start" class="panel show" role="dialog" aria-labelledby="startTitle">
   <div class="card">
     <h1 id="startTitle"><span class="r">أحمر</span> ضد <span class="b">أزرق</span></h1>
-    <p class="sub">كرتان داخل حلبة، أسلحة تنزل من السماء، وعشرة قلوب لكل وحدة.</p>
+    <p class="sub">كرات داخل حلبة، أسلحة تنزل من السماء، وعشرة قلوب لكل وحدة.</p>
     <div class="tabs" role="tablist" aria-label="طريقة اللعب">
-      <button class="tab" type="button" role="tab" id="tabWatch" data-tab="watch" aria-selected="true">👀 مشاهدة وتوقّع</button>
-      <button class="tab" type="button" role="tab" id="tabPlay" data-tab="play" aria-selected="false">🎮 تحكّم بنفسك</button>
+      <button class="tab" type="button" role="tab" id="tabWatch" data-tab="watch" aria-selected="true">👀 توقّع</button>
+      <button class="tab" type="button" role="tab" id="tabPlay" data-tab="play" aria-selected="false">🎮 تحكّم</button>
+      <button class="tab" type="button" role="tab" id="tabOnline" data-tab="online" aria-selected="false">🌐 أونلاين</button>
     </div>
+
     <div class="mode" id="modeWatch" role="tabpanel">
+      <div class="row"><span class="lbl">عدد الكرات</span>
+        <div class="seg" id="segWatch"><button type="button" data-n="2" aria-pressed="true">٢</button><button type="button" data-n="3">٣</button><button type="button" data-n="4">٤</button></div>
+      </div>
       <p class="hint">توقّع مين يفوز قبل ما تبدأ المعركة!</p>
-      <div class="pick">
-        <button class="btn red" type="button" data-pick="0">🔴 الأحمر</button>
-        <button class="btn blue" type="button" data-pick="1">🔵 الأزرق</button>
-      </div>
-      <button class="btn ghost wide" type="button" data-pick="-1">شاهد بدون توقّع</button>
+      <div class="pick" id="pickWatch"></div>
+      <button class="btn ghost wide" type="button" id="watchNoPick">شاهد بدون توقّع</button>
     </div>
+
     <div class="mode" id="modePlay" role="tabpanel" hidden>
-      <p class="hint"><b>اضغط أو اسحب</b> في أي مكان: كرتك تندفع نحو إصبعك.<br>على الحاسب: الأسهم أو WASD.</p>
-      <div class="pick">
-        <button class="btn red" type="button" data-play="0">🔴 العب بالأحمر</button>
-        <button class="btn blue" type="button" data-play="1">🔵 العب بالأزرق</button>
+      <div class="row"><span class="lbl">عدد الكرات</span>
+        <div class="seg" id="segPlay"><button type="button" data-n="2" aria-pressed="true">٢</button><button type="button" data-n="3">٣</button><button type="button" data-n="4">٤</button></div>
       </div>
+      <p class="hint"><b>اضغط أو اسحب</b> في أي مكان: كرتك تندفع نحو إصبعك.<br>على الحاسب: الأسهم أو WASD.</p>
+      <div class="pick" id="pickPlay"></div>
+    </div>
+
+    <div class="mode" id="modeOnline" role="tabpanel" hidden>
+      <p class="hint">العب مع أصحابك حتى <b>٤ لاعبين</b>: كل واحد يتحكّم بكرته من جواله.</p>
+      <div class="field"><input class="txt" id="nameIn" maxlength="20" placeholder="اسمك" autocomplete="nickname"></div>
+      <label class="checkrow"><input type="checkbox" id="pubIn"> غرفة عامة تظهر في قائمة الغرف</label>
+      <button class="btn main wide" type="button" id="createBtn">إنشاء غرفة جديدة</button>
+      <p class="hint" style="margin:12px 0 8px">أو ادخل برمز غرفة صاحبك:</p>
+      <div class="field">
+        <input class="txt code" id="codeIn" maxlength="6" placeholder="ABC123" autocomplete="off" spellcheck="false">
+        <button class="btn ghost" type="button" id="joinBtn" style="flex:none">انضمام</button>
+      </div>
+      <p class="status" id="onlineStatus"></p>
     </div>
     <div class="stats" id="startStats"></div>
+  </div>
+</div>
+
+<div id="lobby" class="panel" role="dialog" aria-labelledby="lobbyTitle">
+  <div class="card">
+    <h2 id="lobbyTitle" style="margin:0 0 4px">غرفة الأصحاب</h2>
+    <p class="sub" style="margin-bottom:4px">شارك الرمز مع أصحابك:</p>
+    <div class="codebox"><span class="code" id="roomCode">------</span><button class="btn ghost sm" type="button" id="copyBtn">نسخ</button></div>
+    <ul class="plist" id="plist"></ul>
+    <p class="hint" style="margin-bottom:6px">لونك:</p>
+    <div class="chips" id="chips"></div>
+    <p class="status" id="lobbyStatus"></p>
+    <button class="btn main wide" type="button" id="startBtn">ابدأ المعركة</button>
+    <button class="btn ghost wide" type="button" id="leaveBtn" style="margin-top:8px">مغادرة الغرفة</button>
   </div>
 </div>
 
@@ -122,7 +206,9 @@
   <div class="card">
     <h2 id="resTitle"></h2>
     <p id="resPred"></p>
-    <button class="btn wide" id="again" type="button" style="background:linear-gradient(180deg,#6b5cff,#4a3ad9)">جولة جديدة 🔁</button>
+    <ul class="plist" id="scoreList" hidden></ul>
+    <button class="btn main wide" id="again" type="button">جولة جديدة 🔁</button>
+    <button class="btn ghost wide" id="leaveBtn2" type="button" style="margin-top:8px" hidden>مغادرة الغرفة</button>
     <div class="stats" id="overStats"></div>
   </div>
 </div>
@@ -134,32 +220,48 @@
 'use strict';
 
 /* ═══════════════════════════════════════════════════════════════
-   أحمر ضد أزرق — محاكاة قتال بين كرتين داخل حلبة دائرية.
+   أحمر ضد أزرق — معركة كرات (٢ إلى ٤) داخل حلبة دائرية.
    العالم كله بوحدات نسبية: نصف قطر الحلبة = ١، فتظهر اللعبة نفسها
    على أي شاشة. الفيزياء بخطوات ثابتة صغيرة (≤ ١/١٢٠ ث) مربوطة
    بزمن الإطار، فلا تتذبذب ولا «تنفذ» الرصاصة من الكرة.
+
+   ثلاثة أوضاع:
+   - توقّع: كل الكرات فيزياء بحتة، واللاعب يتوقّع الفائز.
+   - تحكّم: اللاعب يدفع كرته باللمس، والبقية آلية.
+   - أونلاين: غرفة في الوركر (RedVsBlueRoom). المضيف يشغّل المحاكاة
+     ويبثّ لقطة الحالة ٢٠ مرة بالثانية، والبقية «نسخ» ترسم اللقطة
+     وترسل دفعاتها فقط. لو انقطع المضيف انتقلت الاستضافة والمحاكاة
+     لمن بعده من آخر لقطة.
    ═══════════════════════════════════════════════════════════════ */
 
 const TAU = Math.PI * 2;
 const rnd = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
 const AR = n => String(n).replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]);
+const $ = id => document.getElementById(id);
+
+/* ── رابط الوركر (الأونلاين). يُبدَّل هنا أو بـ ?api= أو window.RVB_API ── */
+const API_BASE = (new URLSearchParams(location.search).get('api') || window.RVB_API || 'https://ya7-mafia-online.alfyfyy100.workers.dev').replace(/\/+$/, '');
+const GAME_KEY = 'redvsblue';
 
 /* ── إعدادات اللعب ── */
 const MAX_HP = 10;
 const BALL_R = 0.125;          // نصف قطر الكرة (وحدة حلبة)
-const WS = 1.9;                // مقياس رسم الأسلحة نسبة لنصف قطر الكرة
+const WS = 1.9;                // مقياس رسم الأسلحة المحمولة نسبة لنصف قطر الكرة
 const BASE_SPEED = 0.85;       // سرعة الكرة الأساسية (وحدة/ث)
-const MAX_PICKUPS = 2;
 const PICKUP_LIFE = 9;
-const PICK_DIST = BALL_R + 0.2;
+const PICK_DIST = BALL_R + 0.16;
 const CASING_CAP = 140;
 const PARTICLE_CAP = 520;
+const SNAP_HZ = 20;            // بثّ لقطة الحالة في الأونلاين
 
 const COLORS = [
-  { name: 'الأحمر', main: '#ff3b4e', light: '#ff8a96', dark: '#b3132a', glow: 'rgba(255,59,78,' },
-  { name: 'الأزرق', main: '#2ea8ff', light: '#8ed3ff', dark: '#0e5db3', glow: 'rgba(46,168,255,' },
+  { key: 'red',    name: 'الأحمر', main: '#ff3b4e', light: '#ff8a96', dark: '#b3132a' },
+  { key: 'blue',   name: 'الأزرق', main: '#2ea8ff', light: '#8ed3ff', dark: '#0e5db3' },
+  { key: 'green',  name: 'الأخضر', main: '#31d16b', light: '#93f0b6', dark: '#128a3f' },
+  { key: 'yellow', name: 'الأصفر', main: '#ffc531', light: '#ffe08a', dark: '#b3800a' },
 ];
+const COLOR_IDX = Object.fromEntries(COLORS.map((c, i) => [c.key, i]));
 
 /* تعريف الأسلحة. dmg بالقلوب (نصف قلب مسموح)، speed سرعة الرصاصة،
    spread تشتت الرمي (راديان)، rate الزمن بين الطلقتين. */
@@ -178,6 +280,7 @@ function pickWeaponType() {
   for (const k of WEAPON_KEYS) { r -= WEAPONS[k].w; if (r <= 0) return k; }
   return 'pistol';
 }
+const TUNE = { aiBias: 0.55, aiSteer: 2.6, aiMelee: 2.0, pushCd: 0.6, pushV: 1.0 };
 
 /* ═══════════════ الصوت (مركَّب، بلا ملفات) ═══════════════ */
 const Sound = (() => {
@@ -213,7 +316,8 @@ const Sound = (() => {
     g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
     o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.05);
   }
-  const api = {
+  const later = (ms, f) => setTimeout(() => { try { f(); } catch (e) {} }, ms);
+  return {
     get muted() { return muted; },
     toggle() { muted = !muted; try { localStorage.setItem('rvb_mute', muted ? '1' : '0'); } catch (e) {} if (!muted) ensure(); return muted; },
     unlock() { if (!muted) ensure(); },
@@ -228,31 +332,32 @@ const Sound = (() => {
           case 'hit':    noise(0.18, 600, 0.9, 0.7); tone(220, 0.14, 0.4, 'triangle', 90); break;
           case 'slash':  noise(0.2, 5000, 2, 0.5, 'bandpass'); tone(900, 0.12, 0.2, 'sine', 300); break;
           case 'clink':  tone(2400, 0.12, 0.3, 'triangle', 1400); noise(0.08, 6000, 3, 0.25, 'highpass'); break;
-          case 'pickup': tone(520, 0.09, 0.3, 'sine'); setTimeout(() => { try { tone(780, 0.12, 0.3, 'sine'); } catch (e) {} }, 70); break;
-          case 'heal':   tone(440, 0.12, 0.3, 'sine'); setTimeout(() => { try { tone(660, 0.12, 0.3, 'sine'); } catch (e) {} }, 90);
-                         setTimeout(() => { try { tone(880, 0.2, 0.3, 'sine'); } catch (e) {} }, 180); break;
+          case 'pickup': tone(520, 0.09, 0.3, 'sine'); later(70, () => tone(780, 0.12, 0.3, 'sine')); break;
+          case 'heal':   tone(440, 0.12, 0.3, 'sine'); later(90, () => tone(660, 0.12, 0.3, 'sine')); later(180, () => tone(880, 0.2, 0.3, 'sine')); break;
           case 'death':  noise(0.7, 400, 0.7, 1.2); tone(200, 0.6, 0.5, 'sawtooth', 30); break;
-          case 'win':    [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => { try { tone(f, 0.35, 0.28, 'triangle'); } catch (e) {} }, i * 110)); break;
+          case 'win':    [523, 659, 784, 1046].forEach((f, i) => later(i * 110, () => tone(f, 0.35, 0.28, 'triangle'))); break;
           case 'tick':   tone(660, 0.08, 0.25, 'square'); break;
           case 'go':     tone(880, 0.25, 0.3, 'square'); break;
+          case 'join':   tone(600, 0.1, 0.2, 'sine'); later(80, () => tone(900, 0.12, 0.2, 'sine')); break;
         }
       } catch (e) {}
     },
   };
-  return api;
 })();
 
 /* ═══════════════ الحالة ═══════════════ */
-const canvas = document.getElementById('c');
+const canvas = $('c');
 const ctx = canvas.getContext('2d', { alpha: false });
 let W = 0, H = 0, DPR = 1;
 let CX = 0, CY = 0, R = 100;          // مركز الحلبة ونصف قطرها بالبكسل
-let HUD = { top: 0, rowH: 0, heart: 0 };
+let HUD = { top: 0, rowH: 0, heart: 0, rows: 2 };
 let TITLE_Y = 0;
 let gridCanvas = null;
 
 const G = {
+  mode: 'watch',        // watch | play | online
   phase: 'idle',        // idle | countdown | fight | over
+  n: 2,
   t: 0,                 // زمن المعركة
   countdownT: 0,
   balls: [],
@@ -268,70 +373,82 @@ const G = {
   winner: -1,
   overT: 0,
   prediction: -1,
-  player: -1,           // -1 مشاهدة، 0/1 الكرة التي يتحكم بها اللاعب
-  pushCd: 0,            // زمن الانتظار بين دفعتين
+  player: -1,           // -1 مشاهدة، وإلا فهرس الكرة التي يتحكم بها هذا الجهاز
   ptr: null,            // مؤشر اللمس/الفأرة أثناء السحب {x,y}
   keys: { x: 0, y: 0 }, // اتجاه الأسهم المضغوطة
   taps: [],             // علامات اللمس المرسومة
   statsDone: false,
-  banner: null,         // { text, t, life }
+  banner: null,         // { text, t, life, color }
   stats: { shots: {}, hits: {} },
+  replica: false,       // نسخة أونلاين: ترسم اللقطات ولا تقرر شيئًا
+  events: [],           // أحداث يجمعها المضيف لتُبَثّ مع اللقطة (أصوات وجزيئات للنسخ)
+  pickSeq: 0,
 };
 
-function makeBall(i) {
-  const a = i === 0 ? rnd(2.4, 3.9) : rnd(-0.75, 0.75);
+function makeBall(i, n, ci, name) {
+  const ang = Math.PI + i * TAU / n;
+  const dir = rnd(0, TAU);
   return {
-    id: i, c: COLORS[i],
-    x: i === 0 ? -0.45 : 0.45, y: rnd(-0.25, 0.25),
-    vx: Math.cos(a) * BASE_SPEED, vy: Math.sin(a) * BASE_SPEED,
-    hp: MAX_HP, dead: false, deadT: 0,
+    id: i, ci, c: COLORS[ci], name: name || '',
+    x: n === 2 ? (i === 0 ? -0.45 : 0.45) : Math.cos(ang) * 0.5,
+    y: n === 2 ? rnd(-0.25, 0.25) : Math.sin(ang) * 0.5,
+    vx: Math.cos(dir) * BASE_SPEED, vy: Math.sin(dir) * BASE_SPEED,
+    hp: MAX_HP, dead: false, deadT: 0, deadAt: 0,
     weapon: null,
     hurtT: 0, healT: 0,
     sqN: 0, sqX: 1, sqY: 0,   // انبعاج عند الجدار
     blinkT: rnd(2, 5), blink: 0,
-    hearts: Array.from({ length: MAX_HP }, () => ({ s: 1, gone: 0 })),
-    prevHp: MAX_HP,
+    pushCd: 0,
+    ox: 0, oy: 0,             // إزاحة رسم تتلاشى بعد كل لقطة أونلاين
+    hearts: Array.from({ length: MAX_HP }, () => ({ s: 1, gone: 1 })),
   };
 }
 
-function resetWorld() {
-  G.balls = [makeBall(0), makeBall(1)];
+/* colorIdxs: ألوان الكرات بالترتيب (اختياري)، names: أسماء اللاعبين (أونلاين) */
+function resetWorld(n, colorIdxs, names) {
+  n = clamp(n || G.n || 2, 2, 4);
+  G.n = n;
+  G.balls = [];
+  for (let i = 0; i < n; i++) G.balls.push(makeBall(i, n, colorIdxs ? colorIdxs[i] : i, names ? names[i] : ''));
   G.pickups.length = 0; G.bullets.length = 0; G.particles.length = 0;
-  G.casings.length = 0; G.drops.length = 0;
+  G.casings.length = 0; G.drops.length = 0; G.events.length = 0;
   G.t = 0; G.spawnT = 1.2; G.appleT = 0; G.shake = 0; G.flash = 0;
   G.stats = { shots: {}, hits: {} };
-  G.pushCd = 0; G.ptr = null; G.taps.length = 0;
+  G.ptr = null; G.taps.length = 0; G.keys.x = 0; G.keys.y = 0;
   G.winner = -1; G.overT = 0; G.statsDone = false; G.banner = null;
+  HUD.rows = n;
+  layout();
 }
 
-/* ═══════════════ الإحصاءات (توقعات اللاعب) ═══════════════ */
+/* ═══════════════ الإحصاءات المحلية ═══════════════ */
 function loadStats() {
   try { const s = JSON.parse(localStorage.getItem('rvb_stats') || 'null'); if (s && typeof s === 'object') return s; } catch (e) {}
-  return { total: 0, correct: 0, streak: 0, best: 0, pw: 0, pl: 0 };
+  return { total: 0, correct: 0, streak: 0, best: 0, pw: 0, pl: 0, ow: 0, ol: 0 };
 }
 function saveStats(s) { try { localStorage.setItem('rvb_stats', JSON.stringify(s)); } catch (e) {} }
 function statsText() {
   const s = loadStats();
   const parts = [];
   if (s.total) parts.push(`توقعاتك الصحيحة: ${AR(s.correct)} من ${AR(s.total)} · سلسلة: ${AR(s.streak)} · الأفضل: ${AR(s.best)}`);
-  if (s.pw || s.pl) parts.push(`مبارياتك: فوز ${AR(s.pw || 0)} · خسارة ${AR(s.pl || 0)}`);
+  if (s.pw || s.pl) parts.push(`مبارياتك ضد الآلي: فوز ${AR(s.pw || 0)} · خسارة ${AR(s.pl || 0)}`);
+  if (s.ow || s.ol) parts.push(`أونلاين: فوز ${AR(s.ow || 0)} · خسارة ${AR(s.ol || 0)}`);
   return parts.length ? parts.join('\n') : 'ما لك توقعات ولا مباريات بعد — جرّب حظك!';
 }
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
+};
 
 /* ═══════════════ التخطيط ═══════════════ */
-function resize() {
-  W = window.innerWidth; H = window.innerHeight;
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
-  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  const safeTop = 10;
-  HUD.rowH = clamp(W * 0.075, 26, 36);
+function layout() {
+  const rows = HUD.rows || 2;
+  HUD.rowH = clamp(W * (rows > 2 ? 0.06 : 0.075), 22, rows > 2 ? 30 : 36);
   HUD.heart = HUD.rowH * 0.62;
-  HUD.top = safeTop + 8;
-  TITLE_Y = HUD.top + HUD.rowH * 2 + 22;
+  HUD.top = 18;
+  TITLE_Y = HUD.top + HUD.rowH * rows + 20;
   const bottomPad = 34;
   const availH = H - (TITLE_Y + 16) - bottomPad;
-  R = Math.min(W * 0.46, availH * 0.47);
+  R = Math.max(40, Math.min(W * 0.46, availH * 0.47));
   CX = W / 2; CY = TITLE_Y + 16 + availH / 2;
   // شبكة الخلفية تُرسم مرة واحدة
   gridCanvas = document.createElement('canvas');
@@ -348,6 +465,13 @@ function resize() {
   const vg = g.createRadialGradient(CX, CY, R * 0.6, CX, CY, Math.max(W, H) * 0.75);
   vg.addColorStop(0, 'rgba(5,6,12,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.65)');
   g.fillStyle = vg; g.fillRect(0, 0, W, H);
+}
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  layout();
 }
 
 /* ═══════════════ أدوات ═══════════════ */
@@ -382,8 +506,20 @@ function addCasing(x, y, vx, vy) {
   if (G.casings.length >= CASING_CAP) G.casings.shift();
   G.casings.push({ x, y, vx, vy, rot: rnd(0, TAU), vr: rnd(-14, 14), rest: 0 });
 }
-function otherBall(b) { return G.balls[1 - b.id]; }
 function angleDiff(a, b) { let d = b - a; while (d > Math.PI) d -= TAU; while (d < -Math.PI) d += TAU; return d; }
+function aliveBalls() { return G.balls.filter(b => !b.dead); }
+/* أقرب خصم حيّ (أو null). الوجه ينظر إليه والسلاح يصوّب نحوه. */
+function nearestEnemy(b) {
+  let best = null, bd = 1e9;
+  for (const o of G.balls) {
+    if (o === b || o.dead) continue;
+    const d = Math.hypot(o.x - b.x, o.y - b.y);
+    if (d < bd) { bd = d; best = o; }
+  }
+  return best;
+}
+function anyEnemyArmed(b) { return G.balls.some(o => o !== b && !o.dead && o.weapon); }
+function ev(...a) { if (!G.replica && G.mode === 'online') G.events.push(a); }
 
 /* محول محلي ← عالمي للسلاح المحمول: اليد عند (HX,HY) من مركز الكرة،
    والسلاح يتجه +x نحو الخصم ويُقلب رأسيًا عند التصويب لليسار. */
@@ -400,11 +536,11 @@ const MUZZLE = { pistol: [1.35, -0.1], uzi: [1.35, -0.12], rifle: [1.75, -0.11],
 function giveWeapon(b, type) {
   if (b.weapon) dropWeapon(b, true);
   const def = WEAPONS[type];
-  const o = otherBall(b);
+  const o = nearestEnemy(b);
   b.weapon = {
     type, def, t: 0, cd: 0.35,
     ammo: def.ammo || 0, hits: def.hits || 0, life: def.life || 0,
-    angle: Math.atan2(o.y - b.y, o.x - b.x), laserT: 0, kick: 0,
+    angle: o ? Math.atan2(o.y - b.y, o.x - b.x) : 0, laserT: 0, kick: 0,
   };
 }
 function dropWeapon(b, thrown) {
@@ -413,60 +549,94 @@ function dropWeapon(b, thrown) {
   b.weapon = null;
   G.drops.push({ type: w.type, x: p.x, y: p.y, vx: rnd(-0.6, 0.6) + b.vx * 0.5, vy: (thrown ? -1.1 : -0.7) + b.vy * 0.5,
     rot: w.angle, vr: rnd(-9, 9), life: 0, max: 0.75, flip: p.flip });
+  ev('drop', b.id, w.type, thrown ? 1 : 0);
+}
+function hitFx(victim, dmg, src) {
+  victim.hurtT = dmg < 1 ? 0.22 : 0.4;
+  burst(victim, dmg);
+  G.shake = Math.min(0.06, G.shake + 0.012 * dmg + 0.006);
+  Sound.play(src === 'knife' ? 'slash' : 'hit');
 }
 function damage(victim, dmg, dx, dy, kb, src) {
   if (victim.dead || G.phase !== 'fight') return;
   victim.hp = Math.max(0, victim.hp - dmg);
-  victim.hurtT = dmg < 1 ? 0.22 : 0.4;
   const n = Math.hypot(dx, dy) || 1;
   victim.vx += dx / n * kb; victim.vy += dy / n * kb;
-  burst(victim, dmg);
-  G.shake = Math.min(0.06, G.shake + 0.012 * dmg + 0.006);
-  Sound.play(src === 'knife' ? 'slash' : 'hit');
+  hitFx(victim, dmg, src);
+  ev('hit', victim.id, dmg, src);
   if (victim.hp <= 0) kill(victim);
 }
-function kill(b) {
-  b.dead = true; b.deadT = 0; b.hurtT = 0.6;
-  if (b.weapon) dropWeapon(b, true);
+function killFx(b) {
   addParticles(b.x, b.y, 90, b.c.main, { minV: 0.5, maxV: 2.6, minR: 0.012, maxR: 0.04, minL: 0.6, maxL: 1.4 });
   addParticles(b.x, b.y, 14, '#3a3d48', { minV: 0.8, maxV: 2.2, shard: true, g: 1.6 });
   G.flash = 0.7; G.shake = 0.07;
-  G.winner = 1 - b.id; G.phase = 'over'; G.overT = 0;
   Sound.play('death');
-  setTimeout(() => Sound.play('win'), 500);
-  G.banner = { text: `فاز ${G.balls[G.winner].c.name}!`, t: 0, life: 99, color: G.balls[G.winner].c.main };
 }
-function heal(b, n) {
-  b.hp = Math.min(MAX_HP, b.hp + n);
+function kill(b) {
+  b.dead = true; b.deadT = 0; b.deadAt = G.t; b.hurtT = 0.6;
+  if (b.weapon) dropWeapon(b, true);
+  killFx(b);
+  ev('kill', b.id);
+  const alive = aliveBalls();
+  if (alive.length <= 1) finish(alive.length ? alive[0].id : b.id);
+  else G.banner = { text: `خرج ${b.c.name}`, t: 0, life: 1.2, color: b.c.main };
+}
+function finish(winnerId) {
+  G.winner = winnerId; G.phase = 'over'; G.overT = 0;
+  const w = G.balls[winnerId];
+  setTimeout(() => Sound.play('win'), 500);
+  G.banner = { text: `فاز ${w.name ? w.name : w.c.name}!`, t: 0, life: 99, color: w.c.main };
+}
+function healFx(b) {
   b.healT = 0.6;
-  addParticles(b.x, b.y, 18, '#3ddc84', { minV: 0.2, maxV: 0.8, g: -0.9, drag: 1.2, minL: 0.5, maxL: 0.9 });
+  addParticles(b.x, b.y, 18, '#b9ffd1', { minV: 0.2, maxV: 0.8, g: -0.9, drag: 1.2, minL: 0.5, maxL: 0.9 });
   Sound.play('heal');
 }
-/* في وضع التحكم يقدر اللاعب يطارد الأسلحة والكرة الآلية لا؛ للتعويض
-   تميل الأسلحة الجديدة قليلًا نحو الكرة الآلية (تُختار أقرب نقطة من
-   مرشحَين بنسبة AI_BIAS). */
-const TUNE = { aiBias: 0.7, aiSteer: 2.6, aiMelee: 2.0, pushCd: 0.6, pushV: 1.0 };
+function heal(b, n) { b.hp = Math.min(MAX_HP, b.hp + n); healFx(b); ev('heal', b.id); }
+
+/* في وضع التحكم يقدر اللاعب يطارد الأسلحة والكرات الآلية لا؛ للتعويض
+   تميل الأسلحة الجديدة قليلًا نحو كرة آلية (تُختار أقرب نقطة من
+   مرشحَين بنسبة aiBias). */
 function randomSpot() {
   let x = 0, y = 0;
   for (let tries = 0; tries < 24; tries++) {
     const a = rnd(0, TAU), d = Math.sqrt(Math.random()) * 0.66;
     x = Math.cos(a) * d; y = Math.sin(a) * d;
     let ok = true;
-    for (const b of G.balls) if (Math.hypot(b.x - x, b.y - y) < 0.36) ok = false;
-    for (const p of G.pickups) if (Math.hypot(p.x - x, p.y - y) < 0.4) ok = false;
+    for (const b of G.balls) if (!b.dead && Math.hypot(b.x - x, b.y - y) < 0.36) ok = false;
+    for (const p of G.pickups) if (Math.hypot(p.x - x, p.y - y) < 0.36) ok = false;
     if (ok) break;
   }
   return { x, y };
 }
 function spawnPickup(type) {
   let { x, y } = randomSpot();
-  if (G.player >= 0 && type !== 'apple' && Math.random() < TUNE.aiBias) {
-    const ai = G.balls[1 - G.player], alt = randomSpot();
-    if (Math.hypot(alt.x - ai.x, alt.y - ai.y) < Math.hypot(x - ai.x, y - ai.y)) { x = alt.x; y = alt.y; }
+  if (G.mode === 'play' && G.player >= 0 && type !== 'apple' && Math.random() < TUNE.aiBias) {
+    const ais = G.balls.filter(b => b.id !== G.player && !b.dead);
+    const ai = ais[Math.floor(Math.random() * ais.length)];
+    if (ai) {
+      const alt = randomSpot();
+      if (Math.hypot(alt.x - ai.x, alt.y - ai.y) < Math.hypot(x - ai.x, y - ai.y)) { x = alt.x; y = alt.y; }
+    }
   }
-  G.pickups.push({ type, x, y, t: 0, life: type === 'apple' ? PICKUP_LIFE + 3 : PICKUP_LIFE, bob: rnd(0, TAU) });
+  G.pickups.push({ id: ++G.pickSeq, type, x, y, t: 0, life: type === 'apple' ? PICKUP_LIFE + 3 : PICKUP_LIFE, bob: rnd(0, TAU) });
 }
 
+function shotFx(b, type) {
+  const w = b.weapon;
+  const m = weaponPoint(b, MUZZLE[type][0], MUZZLE[type][1]);
+  const ca = Math.cos(w.angle), sa = Math.sin(w.angle);
+  w.kick = 1;
+  const e = weaponPoint(b, 0.45, -0.28);
+  const ux = -Math.sin(w.angle) * m.flip, uy = Math.cos(w.angle) * m.flip; // «فوق» السلاح
+  const sp = rnd(0.7, 1.2);
+  addCasing(e.x, e.y, -ux * sp - ca * 0.25 + b.vx * 0.3, -uy * sp - sa * 0.25 + b.vy * 0.3);
+  if (G.particles.length < PARTICLE_CAP) {
+    G.particles.push({ x: m.x + ca * 0.02, y: m.y + sa * 0.02, vx: ca * 0.4, vy: sa * 0.4, life: 0, max: 0.07,
+      r: 0.045, color: '#fff2a8', g: 0, drag: 0, shard: false, flash: true });
+  }
+  Sound.play(type);
+}
 function fireGun(b) {
   const w = b.weapon, def = w.def;
   const m = weaponPoint(b, MUZZLE[w.type][0], MUZZLE[w.type][1]);
@@ -474,37 +644,27 @@ function fireGun(b) {
   const ca = Math.cos(a), sa = Math.sin(a);
   G.bullets.push({ x: m.x, y: m.y, px: m.x, py: m.y, vx: ca * def.speed, vy: sa * def.speed,
     owner: b.id, dmg: def.dmg, len: def.speed * 0.028, t: 0, src: w.type });
-  // ارتداد + ظرف الرصاصة + وميض الفوهة
   b.vx -= Math.cos(w.angle) * def.recoil; b.vy -= Math.sin(w.angle) * def.recoil;
-  w.kick = 1;
-  const e = weaponPoint(b, 0.45, -0.28);
-  const ux = -Math.sin(w.angle) * m.flip, uy = Math.cos(w.angle) * m.flip; // «فوق» السلاح
-  const sp = rnd(0.7, 1.2);
-  addCasing(e.x, e.y, -ux * sp - Math.cos(w.angle) * 0.25 + b.vx * 0.3, -uy * sp - Math.sin(w.angle) * 0.25 + b.vy * 0.3);
-  if (G.particles.length < PARTICLE_CAP) {
-    G.particles.push({ x: m.x + ca * 0.02, y: m.y + sa * 0.02, vx: ca * 0.4, vy: sa * 0.4, life: 0, max: 0.07,
-      r: 0.045, color: '#fff2a8', g: 0, drag: 0, shard: false, flash: true });
-  }
+  shotFx(b, w.type);
+  ev('shot', b.id, w.type);
   w.ammo--; w.cd = def.rate;
   G.stats.shots[w.type] = (G.stats.shots[w.type] || 0) + 1;
-  Sound.play(w.type);
   if (w.ammo <= 0) w.doneT = 0.25;
 }
 
 function stepBall(b, dt) {
-  const o = otherBall(b);
   if (b.dead) { b.deadT += dt; b.vx *= Math.max(0, 1 - 3 * dt); b.vy *= Math.max(0, 1 - 3 * dt); b.x += b.vx * dt; b.y += b.vy * dt; }
   else {
     // فيزياء بحتة: لا مطاردة ولا مراوغة — الكرة ترتد من الجدار ومن الخصم فقط.
-    // الاستثناء الوحيد: في وضع التحكم تميل الكرة الآلية بخفة نحو أقرب سلاح
-    // (وتجاه اللاعب إن حملت سكينًا أو درعًا) لتعوّض تحكّم اللاعب بكرته.
-    if (G.player >= 0 && b.id !== G.player && G.phase === 'fight') {
+    // الاستثناء الوحيد: في وضع التحكم (ضد الآلي) تميل الكرة الآلية بخفة نحو
+    // أقرب سلاح (وتجاه أقرب خصم إن حملت سكينًا أو درعًا) لتعوّض تحكّم اللاعب.
+    if (G.mode === 'play' && G.player >= 0 && b.id !== G.player && G.phase === 'fight' && !G.replica) {
       let tx = null, ty = null, best = 1.1, k = TUNE.aiSteer;
       for (const pk of G.pickups) { const d = Math.hypot(pk.x - b.x, pk.y - b.y); if (d < best) { best = d; tx = pk.x; ty = pk.y; } }
-      if (b.weapon && b.weapon.def.kind !== 'gun' && !o.dead) { tx = o.x; ty = o.y; k = TUNE.aiMelee; }
+      const o = nearestEnemy(b);
+      if (b.weapon && b.weapon.def.kind !== 'gun' && o) { tx = o.x; ty = o.y; k = TUNE.aiMelee; }
       if (tx != null) { const d = Math.hypot(tx - b.x, ty - b.y) || 1; b.vx += (tx - b.x) / d * k * dt; b.vy += (ty - b.y) / d * k * dt; }
     }
-    // حركة + تثبيت السرعة تدريجيًا عند الأساس
     b.x += b.vx * dt; b.y += b.vy * dt;
     let sp = Math.hypot(b.vx, b.vy);
     if (sp < 1e-4) { const a = rnd(0, TAU); b.vx = Math.cos(a) * BASE_SPEED; b.vy = Math.sin(a) * BASE_SPEED; sp = BASE_SPEED; }
@@ -525,6 +685,8 @@ function stepBall(b, dt) {
   b.sqN = Math.max(0, b.sqN - dt * 1.9);
   b.hurtT = Math.max(0, b.hurtT - dt);
   b.healT = Math.max(0, b.healT - dt);
+  b.pushCd = Math.max(0, b.pushCd - dt);
+  const k = Math.max(0, 1 - 14 * dt); b.ox *= k; b.oy *= k;
   // الرمش
   b.blinkT -= dt;
   if (b.blinkT <= 0) { b.blink = 0.13; b.blinkT = rnd(2.2, 5); }
@@ -535,10 +697,9 @@ function stepBall(b, dt) {
     const full = b.hp >= i + 1, half = !full && b.hp > i;
     const want = full ? 1 : half ? 0.5 : 0;
     if (want < h.gone && h.gone === 1 && !full) {
-      // فقد قلب الآن: انفجار صغير عند موقعه
       h.s = 1.6;
       const hp = heartPos(b.id, i);
-      addParticles((hp.x - CX) / R, (hp.y - CY) / R, 6, b.c.main, { minV: 0.15, maxV: 0.5, g: 0.6, drag: 1.5, minR: 0.006, maxR: 0.014, minL: 0.3, maxL: 0.5, hud: true });
+      addParticles((hp.x - CX) / R, (hp.y - CY) / R, 6, b.c.main, { minV: 0.15, maxV: 0.5, g: 0.6, drag: 1.5, minR: 0.006, maxR: 0.014, minL: 0.3, maxL: 0.5 });
     }
     if (want > h.gone) h.s = 0.2;
     h.gone = want;
@@ -548,35 +709,34 @@ function stepBall(b, dt) {
   const w = b.weapon;
   if (w && !b.dead) {
     w.t += dt; w.cd -= dt; w.kick = Math.max(0, w.kick - dt * 9);
+    if (G.replica) return;                       // النسخة لا تقرر: الزاوية والذخيرة تأتي من اللقطة
     if (w.doneT != null) { w.doneT -= dt; if (w.doneT <= 0) { dropWeapon(b, false); return; } }
+    const o = nearestEnemy(b);
     if (w.def.kind === 'gun') {
-      // تصويب تنبؤي نحو موقع الخصم المتوقع
-      const bx = o.x - b.x, by = o.y - b.y, d = Math.hypot(bx, by) || 1;
-      const tt = d / w.def.speed;
-      const tx = o.x + o.vx * tt * 0.8 - b.x, ty = o.y + o.vy * tt * 0.8 - b.y;
-      const want = Math.atan2(ty, tx);
-      const diff = angleDiff(w.angle, want);
-      const turn = (w.type === 'sniper' ? 5.5 : 11) * dt;
-      w.angle += clamp(diff, -turn, turn);
-      if (w.def.laser) w.laserT = w.cd < 0.45 && w.ammo > 0 ? Math.min(1, w.laserT + dt * 6) : Math.max(0, w.laserT - dt * 6);
-      if (w.cd <= 0 && w.ammo > 0 && !o.dead && Math.abs(angleDiff(w.angle, want)) < w.def.aim) fireGun(b);
+      if (o) {
+        // تصويب تنبؤي نحو موقع الخصم المتوقع
+        const bx = o.x - b.x, by = o.y - b.y, d = Math.hypot(bx, by) || 1;
+        const tt = d / w.def.speed;
+        const tx = o.x + o.vx * tt * 0.8 - b.x, ty = o.y + o.vy * tt * 0.8 - b.y;
+        const want = Math.atan2(ty, tx);
+        const diff = angleDiff(w.angle, want);
+        const turn = (w.type === 'sniper' ? 5.5 : 11) * dt;
+        w.angle += clamp(diff, -turn, turn);
+        if (w.def.laser) w.laserT = w.cd < 0.45 && w.ammo > 0 ? Math.min(1, w.laserT + dt * 6) : Math.max(0, w.laserT - dt * 6);
+        if (w.cd <= 0 && w.ammo > 0 && G.phase === 'fight' && Math.abs(angleDiff(w.angle, want)) < w.def.aim) fireGun(b);
+      }
     } else {
-      // سكين/درع: يوجَّه نحو الخصم مباشرة
-      const want = Math.atan2(o.y - b.y, o.x - b.x);
-      const diff = angleDiff(w.angle, want);
-      const turn = 9 * dt;
-      w.angle += clamp(diff, -turn, turn);
+      if (o) { const want = Math.atan2(o.y - b.y, o.x - b.x); const turn = 9 * dt; w.angle += clamp(angleDiff(w.angle, want), -turn, turn); }
       w.life -= dt;
       if (w.life <= 0) dropWeapon(b, false);
     }
   }
 }
 
-function collideBalls() {
-  const [a, b] = G.balls;
+function collidePair(a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const d = Math.hypot(dx, dy);
-  if (d >= BALL_R * 2 || d < 1e-6) return;
+  if (d >= BALL_R * 2 || d < 1e-6) return null;
   const nx = dx / d, ny = dy / d;
   const overlap = BALL_R * 2 - d;
   a.x -= nx * overlap / 2; a.y -= ny * overlap / 2;
@@ -586,21 +746,31 @@ function collideBalls() {
     a.vx += (vbn - van) * nx; a.vy += (vbn - van) * ny;
     b.vx += (van - vbn) * nx; b.vy += (van - vbn) * ny;
   }
-  // ضربات القرب: تُجمع أولًا ثم تُطبَّق، فلا يسبق أحدهما الآخر لمجرد ترتيبه
+  return [nx, ny];
+}
+function collideBalls() {
   const blows = [];
-  for (const [att, vic, sx, sy] of [[a, b, nx, ny], [b, a, -nx, -ny]]) {
-    const w = att.weapon;
-    if (!w || att.dead || vic.dead || w.cd > 0) continue;
-    if (w.def.kind === 'melee') {
-      w.cd = w.def.cd; w.hits--;
-      G.stats.hits.knife = (G.stats.hits.knife || 0) + 1;
-      blows.push([vic, w.def.dmg, sx, sy, 1.4, 'knife', 8]);
-      att.vx -= sx * 0.5; att.vy -= sy * 0.5;
-      if (w.hits <= 0) w.doneT = 0.2;
-    } else if (w.def.kind === 'shield') {
-      // الدرع يجرح إن كان الخصم أمامه
-      const facing = Math.abs(angleDiff(w.angle, Math.atan2(sy, sx)));
-      if (facing < 1.25) { G.stats.hits.shield = (G.stats.hits.shield || 0) + 1; w.cd = w.def.cd; blows.push([vic, w.def.dmg, sx, sy, 1.0, 'shield', 6]); }
+  const bs = G.balls;
+  for (let i = 0; i < bs.length; i++) for (let j = i + 1; j < bs.length; j++) {
+    const a = bs[i], b = bs[j];
+    if (a.dead || b.dead) continue;
+    const nrm = collidePair(a, b);
+    if (!nrm || G.replica || G.phase !== 'fight') continue;
+    const [nx, ny] = nrm;
+    // ضربات القرب: تُجمع أولًا ثم تُطبَّق، فلا يسبق أحدهما الآخر لمجرد ترتيبه
+    for (const [att, vic, sx, sy] of [[a, b, nx, ny], [b, a, -nx, -ny]]) {
+      const w = att.weapon;
+      if (!w || w.cd > 0) continue;
+      if (w.def.kind === 'melee') {
+        w.cd = w.def.cd; w.hits--;
+        G.stats.hits.knife = (G.stats.hits.knife || 0) + 1;
+        blows.push([vic, w.def.dmg, sx, sy, 1.4, 'knife', 8]);
+        att.vx -= sx * 0.5; att.vy -= sy * 0.5;
+        if (w.hits <= 0) w.doneT = 0.2;
+      } else if (w.def.kind === 'shield') {
+        const facing = Math.abs(angleDiff(w.angle, Math.atan2(sy, sx)));
+        if (facing < 1.25) { G.stats.hits.shield = (G.stats.hits.shield || 0) + 1; w.cd = w.def.cd; blows.push([vic, w.def.dmg, sx, sy, 1.0, 'shield', 6]); }
+      }
     }
   }
   for (const [vic, dmg, sx, sy, kb, src, n] of blows) {
@@ -614,24 +784,25 @@ function stepBullets(dt) {
     const bl = G.bullets[i];
     bl.px = bl.x; bl.py = bl.y; bl.t += dt;
     bl.x += bl.vx * dt; bl.y += bl.vy * dt;
-    // إصابة الخصم؟ (أقرب نقطة على مسار الرصاصة هذا الإطار)
-    const tgt = G.balls[1 - bl.owner];
     let hit = false;
-    if (!tgt.dead) {
-      const ex = bl.x - bl.px, ey = bl.y - bl.py, l2 = ex * ex + ey * ey || 1e-9;
-      let t = ((tgt.x - bl.px) * ex + (tgt.y - bl.py) * ey) / l2; t = clamp(t, 0, 1);
-      const cx = bl.px + ex * t, cy = bl.py + ey * t;
-      if (Math.hypot(tgt.x - cx, tgt.y - cy) < BALL_R * 1.02) {
+    if (!G.replica) {
+      // إصابة أي كرة حيّة غير الرامي؟ (أقرب نقطة على مسار الرصاصة هذا الإطار)
+      for (const tgt of G.balls) {
+        if (tgt.dead || tgt.id === bl.owner) continue;
+        const ex = bl.x - bl.px, ey = bl.y - bl.py, l2 = ex * ex + ey * ey || 1e-9;
+        let t = ((tgt.x - bl.px) * ex + (tgt.y - bl.py) * ey) / l2; t = clamp(t, 0, 1);
+        const cx = bl.px + ex * t, cy = bl.py + ey * t;
+        if (Math.hypot(tgt.x - cx, tgt.y - cy) >= BALL_R * 1.02) continue;
         hit = true;
-        const w = tgt.weapon;
-        const bx = bl.vx, by = bl.vy;
+        const w = tgt.weapon, bx = bl.vx, by = bl.vy;
         if (w && w.def.kind === 'shield' && Math.abs(angleDiff(w.angle, Math.atan2(-by, -bx))) < 0.95) {
-          sparks(cx, cy, 6, -bx, -by); Sound.play('clink');
-          tgt.vx += bx / Math.hypot(bx, by) * 0.12; tgt.vy += by / Math.hypot(bx, by) * 0.12;
+          sparks(cx, cy, 6, -bx, -by); Sound.play('clink'); ev('clink', cx, cy, -bx, -by);
+          const n = Math.hypot(bx, by) || 1; tgt.vx += bx / n * 0.12; tgt.vy += by / n * 0.12;
         } else {
           G.stats.hits[bl.src] = (G.stats.hits[bl.src] || 0) + 1;
           damage(tgt, bl.dmg, bx, by, bl.dmg >= 3 ? 1.0 : bl.dmg >= 1 ? 0.45 : 0.25, 'gun');
         }
+        break;
       }
     }
     if (!hit) {
@@ -648,14 +819,13 @@ function stepPickups(dt) {
     const p = G.pickups[i];
     p.t += dt; p.life -= dt;
     if (p.life <= 0) { G.pickups.splice(i, 1); continue; }
-    if (p.t < 0.35) continue;
+    if (p.t < 0.35 || G.replica || G.phase !== 'fight') continue;
     // الأقرب يأخذها؛ لا أفضلية لترتيب الكرات
-    const order = G.balls.slice().sort((u, v) => Math.hypot(u.x - p.x, u.y - p.y) - Math.hypot(v.x - p.x, v.y - p.y));
+    const order = G.balls.filter(b => !b.dead).sort((u, v) => Math.hypot(u.x - p.x, u.y - p.y) - Math.hypot(v.x - p.x, v.y - p.y));
     for (const b of order) {
-      if (b.dead) continue;
       if (Math.hypot(b.x - p.x, b.y - p.y) < PICK_DIST) {
         if (p.type === 'apple') heal(b, 3);
-        else { giveWeapon(b, p.type); G.stats.shots[p.type] = (G.stats.shots[p.type] || 0) + (WEAPONS[p.type].kind === 'gun' ? 0 : 1); Sound.play('pickup'); }
+        else { giveWeapon(b, p.type); G.stats.shots[p.type] = (G.stats.shots[p.type] || 0) + (WEAPONS[p.type].kind === 'gun' ? 0 : 1); Sound.play('pickup'); ev('pick', b.id, p.type); }
         addParticles(p.x, p.y, 10, '#ffffff', { minV: 0.2, maxV: 0.7, g: 0, minR: 0.006, maxR: 0.014, minL: 0.2, maxL: 0.4 });
         G.pickups.splice(i, 1);
         break;
@@ -666,11 +836,13 @@ function stepPickups(dt) {
 
 function stepSpawner(dt) {
   const sudden = G.t > 70;
+  const maxPick = G.n >= 3 ? 3 : 2;
   G.spawnT -= dt;
   const weaponsOut = G.pickups.filter(p => p.type !== 'apple').length;
   if (G.spawnT <= 0) {
-    if (weaponsOut < MAX_PICKUPS) spawnPickup(pickWeaponType());
-    G.spawnT = sudden ? rnd(1.3, 2.1) : rnd(3.0, 4.6);
+    if (weaponsOut < maxPick) spawnPickup(pickWeaponType());
+    const k = G.n >= 4 ? 0.65 : G.n === 3 ? 0.8 : 1;
+    G.spawnT = sudden ? rnd(1.3, 2.1) * k : rnd(3.0, 4.6) * k;
   }
   if (!sudden) {
     const low = G.balls.some(b => !b.dead && b.hp <= 6);
@@ -710,60 +882,135 @@ function stepFx(dt) {
       if (c.y > 0.55 && Math.hypot(c.vx, c.vy) < 0.09) { c.rest += dt; c.vx *= 0.5; c.vy *= 0.5; c.vr *= 0.5; } else c.rest = 0;
     }
   }
+  for (let i = G.taps.length - 1; i >= 0; i--) { G.taps[i].t += dt; if (G.taps[i].t > 0.45) G.taps.splice(i, 1); }
   G.shake = Math.max(0, G.shake - dt * 0.18);
   G.flash = Math.max(0, G.flash - dt * 1.6);
   if (G.banner) { G.banner.t += dt; if (G.banner.t > G.banner.life) G.banner = null; }
 }
 
-/* دفعة اللاعب: تغيير اتجاه فوري مع زيادة سرعة قصيرة، والفيزياء تبقى
+/* دفعة لاعب: تغيير اتجاه فوري مع زيادة سرعة قصيرة، والفيزياء تبقى
    كما هي (السرعة تعود للأساس تدريجيًا، والارتداد من الجدار والخصم). */
-
-function pushToward(dx, dy) {
-  if (G.player < 0 || G.phase !== 'fight') return false;
-  const b = G.balls[G.player];
-  if (b.dead || G.pushCd > 0) return false;
+function pushBall(b, dx, dy) {
+  if (!b || b.dead || b.pushCd > 0 || G.phase !== 'fight') return false;
   const n = Math.hypot(dx, dy); if (n < 1e-4) return false;
   const ux = dx / n, uy = dy / n;
   b.vx = ux * TUNE.pushV + b.vx * 0.15; b.vy = uy * TUNE.pushV + b.vy * 0.15;
-  G.pushCd = TUNE.pushCd;
+  b.pushCd = TUNE.pushCd;
   addParticles(b.x - ux * BALL_R, b.y - uy * BALL_R, 6, b.c.light, { vx: -ux * 0.5, vy: -uy * 0.5, minV: 0.05, maxV: 0.35, g: 0, drag: 3, minR: 0.006, maxR: 0.016, minL: 0.15, maxL: 0.3 });
+  ev('push', b.id, ux, uy);
   return true;
 }
-function stepPlayer(dt) {
-  G.pushCd = Math.max(0, G.pushCd - dt);
-  for (let i = G.taps.length - 1; i >= 0; i--) { G.taps[i].t += dt; if (G.taps[i].t > 0.45) G.taps.splice(i, 1); }
+/* دفعة هذا الجهاز: محليًا مباشرة، وفي النسخة الأونلاين تُرسل للمضيف */
+function pushMine(dx, dy) {
   if (G.player < 0 || G.phase !== 'fight') return;
   const b = G.balls[G.player];
-  if (G.ptr) pushToward(G.ptr.x - b.x, G.ptr.y - b.y);
-  else if (G.keys.x || G.keys.y) pushToward(G.keys.x, G.keys.y);
+  if (!b || b.dead || b.pushCd > 0) return;
+  if (G.replica) {
+    const n = Math.hypot(dx, dy); if (n < 1e-4) return;
+    b.pushCd = TUNE.pushCd;
+    Net.send({ t: 'in', x: +(dx / n).toFixed(3), y: +(dy / n).toFixed(3) });
+    return;
+  }
+  pushBall(b, dx, dy);
+}
+function stepPlayer() {
+  if (G.player < 0 || G.phase !== 'fight') return;
+  const b = G.balls[G.player];
+  if (!b) return;
+  if (G.ptr) pushMine(G.ptr.x - b.x, G.ptr.y - b.y);
+  else if (G.keys.x || G.keys.y) pushMine(G.keys.x, G.keys.y);
 }
 
 function update(dt) {
-  stepPlayer(dt);
-  if (G.phase === 'countdown') {
-    const before = G.countdownT;
-    G.countdownT -= dt;
-    // صوت للعدّ
-    if (Math.ceil(before) !== Math.ceil(G.countdownT) && G.countdownT > 0) Sound.play('tick');
-    if (G.countdownT <= 0) { G.phase = 'fight'; G.banner = { text: 'قتال!', t: 0, life: 0.7, color: '#ffffff' }; Sound.play('go'); }
-  }
-  if (G.phase === 'fight') { G.t += dt; stepSpawner(dt); }
+  stepPlayer();
+  if (!G.replica) {
+    if (G.phase === 'countdown') {
+      const before = G.countdownT;
+      G.countdownT -= dt;
+      if (Math.ceil(before) !== Math.ceil(G.countdownT) && G.countdownT > 0) Sound.play('tick');
+      if (G.countdownT <= 0) { G.phase = 'fight'; G.banner = { text: 'قتال!', t: 0, life: 0.7, color: '#ffffff' }; Sound.play('go'); ev('go'); }
+    }
+    if (G.phase === 'fight') { G.t += dt; stepSpawner(dt); }
+  } else if (G.phase === 'fight') G.t += dt;
   for (const b of G.balls) stepBall(b, dt);
   collideBalls();
-  if (G.phase === 'fight' || G.phase === 'over') { stepBullets(dt); }
+  if (G.phase === 'fight' || G.phase === 'over') stepBullets(dt);
   stepPickups(dt);
   stepFx(dt);
   if (G.phase === 'over') {
     G.overT += dt;
-    if (G.overT > 1.6 && !G.statsDone) { G.statsDone = true; showResult(); }
+    if (G.overT > 1.6 && !G.statsDone) { G.statsDone = true; onGameOver(); }
+  }
+}
+
+/* ═══════════════ لقطة الحالة (أونلاين) ═══════════════ */
+const r3 = v => Math.round(v * 1000) / 1000;
+function encodeSnap() {
+  return {
+    ph: G.phase, cd: r3(G.countdownT), t: r3(G.t), w: G.winner, st: r3(G.spawnT),
+    b: G.balls.map(b => {
+      const w = b.weapon;
+      return [r3(b.x), r3(b.y), r3(b.vx), r3(b.vy), b.hp, b.dead ? 1 : 0,
+        w ? w.type : '', w ? w.ammo : 0, w ? w.hits : 0, w ? r3(w.life) : 0, w ? r3(w.angle) : 0, w ? r3(w.cd) : 0, w ? r3(w.laserT) : 0, w ? r3(w.t) : 0];
+    }),
+    p: G.pickups.map(p => [p.id, p.type, r3(p.x), r3(p.y), r3(p.t), r3(p.life)]),
+    u: G.bullets.map(u => [r3(u.x), r3(u.y), r3(u.vx), r3(u.vy), u.owner, u.dmg, u.src]),
+  };
+}
+function applySnap(s, events) {
+  if (!s || !Array.isArray(s.b) || s.b.length !== G.balls.length) return;
+  const prevPhase = G.phase;
+  G.phase = s.ph; G.countdownT = s.cd; G.t = s.t; G.spawnT = s.st;
+  for (let i = 0; i < G.balls.length; i++) {
+    const b = G.balls[i], a = s.b[i];
+    // إزاحة رسم بسيطة تمتص الفرق بين تنبؤ النسخة واللقطة
+    b.ox += b.x - a[0]; b.oy += b.y - a[1];
+    if (Math.hypot(b.ox, b.oy) > 0.25) { b.ox = 0; b.oy = 0; }
+    b.x = a[0]; b.y = a[1]; b.vx = a[2]; b.vy = a[3];
+    b.hp = a[4];
+    const dead = !!a[5];
+    if (dead && !b.dead) { b.dead = true; b.deadT = 0; }
+    if (!dead) b.dead = false;
+    const type = a[6];
+    if (!type) b.weapon = null;
+    else {
+      if (!b.weapon || b.weapon.type !== type) b.weapon = { type, def: WEAPONS[type], t: 0, cd: 0, ammo: 0, hits: 0, life: 0, angle: a[10], laserT: 0, kick: b.weapon ? b.weapon.kick : 0 };
+      const w = b.weapon; w.ammo = a[7]; w.hits = a[8]; w.life = a[9]; w.angle = a[10]; w.cd = a[11]; w.laserT = a[12]; w.t = a[13];
+    }
+  }
+  // العناصر: نحافظ على كائن العنصر نفسه (لتستمر حركة ظهوره) بمعرّفه
+  const byId = new Map(G.pickups.map(p => [p.id, p]));
+  G.pickups = s.p.map(a => {
+    const old = byId.get(a[0]);
+    if (old) { old.x = a[2]; old.y = a[3]; old.t = a[4]; old.life = a[5]; return old; }
+    return { id: a[0], type: a[1], x: a[2], y: a[3], t: a[4], life: a[5], bob: rnd(0, TAU) };
+  });
+  G.bullets = s.u.map(a => ({ x: a[0], y: a[1], px: a[0], py: a[1], vx: a[2], vy: a[3], owner: a[4], dmg: a[5], src: a[6], len: Math.hypot(a[2], a[3]) * 0.028, t: 0 }));
+  if (s.w >= 0 && G.winner < 0 && s.ph === 'over') { G.winner = s.w; G.overT = 0; finish(s.w); }
+  if (prevPhase === 'countdown' && s.ph === 'fight' && !G.banner) { G.banner = { text: 'قتال!', t: 0, life: 0.7, color: '#ffffff' }; }
+  // أحداث المضيف: أصوات وجزيئات فقط — القرار كله في اللقطة
+  for (const e of (events || [])) {
+    const b = G.balls[e[1]];
+    switch (e[0]) {
+      case 'hit': if (b) hitFx(b, e[2], e[3]); break;
+      case 'kill': if (b) { killFx(b); if (aliveBalls().length > 1) G.banner = { text: `خرج ${b.c.name}`, t: 0, life: 1.2, color: b.c.main }; } break;
+      case 'heal': if (b) healFx(b); break;
+      case 'shot': if (b && b.weapon && MUZZLE[e[2]]) shotFx(b, e[2]); break;
+      case 'pick': if (b) { Sound.play('pickup'); addParticles(b.x, b.y, 10, '#ffffff', { minV: 0.2, maxV: 0.7, g: 0, minR: 0.006, maxR: 0.014, minL: 0.2, maxL: 0.4 }); } break;
+      case 'drop': if (b) G.drops.push({ type: e[2], x: b.x, y: b.y, vx: rnd(-0.6, 0.6), vy: e[3] ? -1.1 : -0.7, rot: 0, vr: rnd(-9, 9), life: 0, max: 0.75, flip: 1 }); break;
+      case 'push': if (b) addParticles(b.x - e[2] * BALL_R, b.y - e[3] * BALL_R, 6, b.c.light, { vx: -e[2] * 0.5, vy: -e[3] * 0.5, minV: 0.05, maxV: 0.35, g: 0, drag: 3, minR: 0.006, maxR: 0.016, minL: 0.15, maxL: 0.3 }); break;
+      case 'clink': sparks(e[1], e[2], 6, e[3], e[4]); Sound.play('clink'); break;
+      case 'go': Sound.play('go'); break;
+      case 'tick': Sound.play('tick'); break;
+    }
   }
 }
 
 /* ═══════════════ الرسم ═══════════════ */
+function rowW() { return Math.min(W - 24, 520); }
 function heartPos(id, i) {
   // من اليمين لليسار: الأيقونة يمين ثم القلوب
-  const rowW = Math.min(W - 24, 520);
-  const x0 = CX + rowW / 2;
+  const x0 = CX + rowW() / 2;
   const y = HUD.top + HUD.rowH * (id + 0.5);
   const s = HUD.heart;
   return { x: x0 - HUD.rowH * 1.15 - i * (s * 1.12) - s * 0.5, y, s };
@@ -778,18 +1025,16 @@ function heartPath(c, x, y, s) {
 function drawHUD() {
   for (const b of G.balls) {
     const y = HUD.top + HUD.rowH * (b.id + 0.5);
-    const rowW = Math.min(W - 24, 520);
-    const ix = CX + rowW / 2 - HUD.rowH * 0.5;
-    // أيقونة الكرة
+    const ix = CX + rowW() / 2 - HUD.rowH * 0.5;
     const ir = HUD.rowH * 0.34;
     const gr = ctx.createRadialGradient(ix - ir * 0.35, y - ir * 0.35, ir * 0.1, ix, y, ir);
     gr.addColorStop(0, b.c.light); gr.addColorStop(1, b.dead ? '#444' : b.c.main);
     ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(ix, y, ir, 0, TAU); ctx.fill();
+    if (G.player === b.id) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
     for (let i = 0; i < MAX_HP; i++) {
       const h = b.hearts[i]; const p = heartPos(b.id, i);
       const s = p.s * 0.5 * h.s;
       if (s <= 0.01) continue;
-      // خلفية فارغة
       heartPath(ctx, p.x, p.y, p.s * 0.5);
       ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fill();
       ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 1; ctx.stroke();
@@ -797,20 +1042,36 @@ function drawHUD() {
         ctx.save();
         if (h.gone < 1) { ctx.beginPath(); ctx.rect(p.x, p.y - p.s, p.s, p.s * 2); ctx.clip(); }
         heartPath(ctx, p.x, p.y, s);
-        ctx.fillStyle = b.dead ? '#6b2d35' : b.c.main; ctx.fill();
+        ctx.fillStyle = b.dead ? '#5a5f6b' : b.c.main; ctx.fill();
         ctx.restore();
       }
     }
+    // اسم اللاعب (أونلاين) في طرف الصف
+    if (b.name) {
+      const last = heartPos(b.id, MAX_HP - 1);
+      const maxW = Math.max(0, last.x - p2(HUD.heart) - (CX - rowW() / 2));
+      if (maxW > 30) {
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.font = `700 ${clamp(HUD.rowH * 0.46, 11, 14)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
+        ctx.fillStyle = b.dead ? '#6f7590' : '#e8ebf5';
+        ctx.fillText(fitText(b.name, maxW), CX - rowW() / 2, y);
+      }
+    }
   }
-  // العنوان
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.font = `800 ${clamp(R * 0.14, 17, 26)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
   ctx.fillStyle = '#fff';
-  ctx.fillText('أحمر ضد أزرق', CX, TITLE_Y);
+  ctx.fillText(G.n === 2 ? 'أحمر ضد أزرق' : 'معركة الكرات', CX, TITLE_Y);
+}
+function p2(s) { return s * 0.9; }
+function fitText(s, maxW) {
+  if (ctx.measureText(s).width <= maxW) return s;
+  let t = s;
+  while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+  return t + '…';
 }
 
 function drawArena() {
-  // أرضية خفيفة داخل الحلبة
   const g = ctx.createRadialGradient(CX, CY - R * 0.4, R * 0.1, CX, CY, R);
   g.addColorStop(0, 'rgba(255,255,255,0.035)'); g.addColorStop(1, 'rgba(255,255,255,0.0)');
   ctx.fillStyle = g; ctx.beginPath(); ctx.arc(CX, CY, R, 0, TAU); ctx.fill();
@@ -831,7 +1092,6 @@ function rr(c, x, y, w, h, r) {
 const METAL = '#555b68', METAL_D = '#262931', METAL_L = '#8d939f', WOOD = '#9a6432', WOOD_D = '#5d3a17';
 function drawWeapon(c, type, u) {
   c.save(); c.scale(u, u); c.lineJoin = 'round'; c.lineWidth = 0.05;
-  c.shadowColor = 'rgba(0,0,0,0)';
   switch (type) {
     case 'pistol':
       c.fillStyle = WOOD; c.strokeStyle = WOOD_D;
@@ -871,11 +1131,9 @@ function drawWeapon(c, type, u) {
       c.fillStyle = '#3d4a42'; rr(c, -0.35, -0.26, 1.0, 0.32, 0.05); c.fill(); c.stroke();
       c.fillStyle = METAL_D; rr(c, 0.6, -0.14, 1.56, 0.1, 0.03); c.fill(); c.stroke();
       rr(c, 2.0, -0.18, 0.18, 0.18, 0.03); c.fill(); c.stroke();
-      // منظار
       c.fillStyle = '#121418'; rr(c, -0.05, -0.5, 0.62, 0.2, 0.08); c.fill(); c.stroke();
       c.fillStyle = '#6fd3ff'; c.beginPath(); c.arc(0.55, -0.4, 0.07, 0, TAU); c.fill();
       c.fillStyle = METAL_D; rr(c, 0.1, -0.32, 0.08, 0.08, 0.02); c.fill(); rr(c, 0.4, -0.32, 0.08, 0.08, 0.02); c.fill();
-      // حامل
       c.strokeStyle = METAL_D; c.lineWidth = 0.06; c.beginPath(); c.moveTo(1.3, -0.05); c.lineTo(1.15, 0.32); c.moveTo(1.3, -0.05); c.lineTo(1.45, 0.32); c.stroke();
       break;
     case 'knife':
@@ -924,6 +1182,8 @@ function drawWeapon(c, type, u) {
   c.restore();
 }
 
+/* حلقة العنصر: أصغر من نصف قطر الكرة بقليل ×١.٧، والسلاح داخلها بمقياس أصغر من المحمول */
+const PICK_WS = 1.45;
 function drawPickups() {
   for (const p of G.pickups) {
     const px = CX + p.x * R, py = CY + p.y * R;
@@ -932,15 +1192,13 @@ function drawPickups() {
     const pop = a < 1 ? 1 + Math.sin(a * Math.PI) * 0.25 : 1;
     const fade = p.life < 1.2 ? (Math.sin(p.life * 22) > 0 ? 1 : 0.35) : 1;
     ctx.save(); ctx.globalAlpha = fade * Math.min(1, a * 2);
-    // الحلقة
-    const ringR = R * 0.29;
+    const ringR = R * 0.2;
     ctx.beginPath(); ctx.arc(px, py, ringR, -Math.PI / 2, -Math.PI / 2 + TAU * ease);
-    ctx.strokeStyle = 'rgba(170,176,196,0.75)'; ctx.lineWidth = Math.max(2, R * 0.022); ctx.stroke();
+    ctx.strokeStyle = 'rgba(170,176,196,0.75)'; ctx.lineWidth = Math.max(2, R * 0.02); ctx.stroke();
     ctx.beginPath(); ctx.arc(px, py, ringR, 0, TAU); ctx.fillStyle = 'rgba(255,255,255,0.03)'; ctx.fill();
-    // العنصر
-    const bob = Math.sin(p.t * 3 + p.bob) * R * 0.012;
+    const bob = Math.sin(p.t * 3 + p.bob) * R * 0.01;
     ctx.translate(px, py + bob); ctx.scale(pop * ease, pop * ease);
-    const u = BALL_R * R * (p.type === 'apple' ? 1.1 : p.type === 'shield' ? 1.35 : WS);
+    const u = BALL_R * R * (p.type === 'apple' ? 0.95 : p.type === 'shield' ? 1.1 : PICK_WS);
     if (p.type === 'knife') ctx.translate(-u * 0.4, 0);
     else if (p.type === 'rifle' || p.type === 'sniper') ctx.translate(-u * 0.45, u * 0.05);
     else if (p.type === 'pistol' || p.type === 'uzi') ctx.translate(-u * 0.6, -u * 0.1);
@@ -956,7 +1214,6 @@ function drawDrops() {
     drawWeapon(ctx, d.type, BALL_R * R * (d.type === 'shield' ? 1.35 : WS)); ctx.restore();
   }
 }
-
 function drawCasings() {
   const u = R;
   ctx.fillStyle = '#d9b34a'; ctx.strokeStyle = '#7a5d16'; ctx.lineWidth = 0.6;
@@ -966,7 +1223,6 @@ function drawCasings() {
     ctx.restore();
   }
 }
-
 function drawBullets() {
   ctx.lineCap = 'round';
   for (const b of G.bullets) {
@@ -979,11 +1235,10 @@ function drawBullets() {
     ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
   }
 }
-
 function drawParticles() {
   for (const p of G.particles) {
     const k = 1 - p.life / p.max;
-    const x = p.hud ? CX + p.x * R : CX + p.x * R, y = CY + p.y * R;
+    const x = CX + p.x * R, y = CY + p.y * R;
     ctx.globalAlpha = p.flash ? k : Math.min(1, k * 1.6);
     ctx.fillStyle = p.color;
     if (p.shard) {
@@ -995,74 +1250,70 @@ function drawParticles() {
   ctx.globalAlpha = 1;
 }
 
-function faceOf(b, o) {
+function faceOf(b) {
   if (b.dead) return 'dead';
   if (b.hurtT > 0) return 'hurt';
   if (b.weapon) return 'angry';
-  if (o.weapon && !o.dead) return 'scared';
+  if (anyEnemyArmed(b)) return 'scared';
   return 'happy';
 }
-
 function drawBall(b) {
-  const o = otherBall(b);
-  const x = CX + b.x * R, y = CY + b.y * R, r = BALL_R * R;
-  const face = faceOf(b, o);
+  const o = nearestEnemy(b);
+  const x = CX + (b.x + b.ox) * R, y = CY + (b.y + b.oy) * R, r = BALL_R * R;
+  const face = faceOf(b);
   ctx.save();
   ctx.translate(x, y);
-  if (b.dead) ctx.globalAlpha = Math.max(0.25, 1 - b.deadT * 0.5);
-  // انبعاج عند الجدار: ضغط على المحور العمودي وتمدد على الموازي
+  if (b.dead) ctx.globalAlpha = Math.max(0.22, 1 - b.deadT * 0.5);
   if (b.sqN > 0) {
     const a = Math.atan2(b.sqY, b.sqX);
     ctx.rotate(a); ctx.scale(1 - b.sqN, 1 + b.sqN * 0.6); ctx.rotate(-a);
   }
   const w = b.weapon;
-  // الجسم
   const base = b.dead ? '#555a66' : b.c.main, light = b.dead ? '#8a8f9a' : b.c.light, dark = b.dead ? '#2c2f38' : b.c.dark;
   const g = ctx.createRadialGradient(-r * 0.35, -r * 0.4, r * 0.1, 0, 0, r * 1.05);
   g.addColorStop(0, light); g.addColorStop(0.45, base); g.addColorStop(1, dark);
   ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
   ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = Math.max(1, r * 0.06); ctx.stroke();
   ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.beginPath(); ctx.ellipse(-r * 0.35, -r * 0.45, r * 0.28, r * 0.16, -0.6, 0, TAU); ctx.fill();
-  // الوجه
-  const look = Math.atan2(o.y - b.y, o.x - b.x);
+  const look = o ? Math.atan2(o.y - b.y, o.x - b.x) : -Math.PI / 2;
   const lx = Math.cos(look) * r * 0.08, ly = Math.sin(look) * r * 0.08;
   const ex = r * 0.36, ey = -r * 0.1;
   const eyeRy = r * 0.3 * (b.blink > 0 ? 0.12 : 1);
+  const ink = b.ci === 3 ? '#2a1f00' : '#1a1a2a';
   ctx.lineCap = 'round';
   if (face === 'hurt' || face === 'dead') {
-    ctx.strokeStyle = '#1a1a2a'; ctx.lineWidth = r * 0.11;
+    ctx.strokeStyle = ink; ctx.lineWidth = r * 0.11;
     for (const s of [-1, 1]) {
       const cx = s * ex, cy = ey, k = r * 0.16;
       ctx.beginPath(); ctx.moveTo(cx - k, cy - k); ctx.lineTo(cx + k, cy + k); ctx.moveTo(cx + k, cy - k); ctx.lineTo(cx - k, cy + k); ctx.stroke();
     }
-    if (face === 'hurt') { ctx.fillStyle = '#1a1a2a'; ctx.beginPath(); ctx.ellipse(0, r * 0.38, r * 0.2, r * 0.22, 0, 0, TAU); ctx.fill(); }
-    else { ctx.strokeStyle = '#1a1a2a'; ctx.lineWidth = r * 0.09; ctx.beginPath(); ctx.moveTo(-r * 0.25, r * 0.42); ctx.lineTo(r * 0.25, r * 0.42); ctx.stroke(); }
+    if (face === 'hurt') { ctx.fillStyle = ink; ctx.beginPath(); ctx.ellipse(0, r * 0.38, r * 0.2, r * 0.22, 0, 0, TAU); ctx.fill(); }
+    else { ctx.strokeStyle = ink; ctx.lineWidth = r * 0.09; ctx.beginPath(); ctx.moveTo(-r * 0.25, r * 0.42); ctx.lineTo(r * 0.25, r * 0.42); ctx.stroke(); }
   } else {
     const scared = face === 'scared', angry = face === 'angry';
     const ry = scared ? eyeRy * 1.15 : angry ? eyeRy * 0.85 : eyeRy;
     for (const s of [-1, 1]) {
       ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.ellipse(s * ex, ey, r * 0.24, ry, 0, 0, TAU); ctx.fill();
       if (b.blink <= 0) {
-        ctx.fillStyle = '#1a1a2a'; ctx.beginPath(); ctx.arc(s * ex + lx, ey + ly * 0.6, r * (angry ? 0.1 : 0.12), 0, TAU); ctx.fill();
+        ctx.fillStyle = ink; ctx.beginPath(); ctx.arc(s * ex + lx, ey + ly * 0.6, r * (angry ? 0.1 : 0.12), 0, TAU); ctx.fill();
         ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(s * ex + lx - r * 0.04, ey + ly * 0.6 - r * 0.05, r * 0.035, 0, TAU); ctx.fill();
       }
       if (angry) {
-        ctx.strokeStyle = '#1a1a2a'; ctx.lineWidth = r * 0.09; ctx.beginPath();
+        ctx.strokeStyle = ink; ctx.lineWidth = r * 0.09; ctx.beginPath();
         ctx.moveTo(s * (ex + r * 0.24), ey - r * 0.46); ctx.lineTo(s * (ex - r * 0.16), ey - r * 0.3); ctx.stroke();
       } else if (scared) {
-        ctx.strokeStyle = '#1a1a2a'; ctx.lineWidth = r * 0.07; ctx.beginPath();
+        ctx.strokeStyle = ink; ctx.lineWidth = r * 0.07; ctx.beginPath();
         ctx.moveTo(s * (ex + r * 0.22), ey - r * 0.36); ctx.lineTo(s * (ex - r * 0.16), ey - r * 0.5); ctx.stroke();
       }
     }
-    ctx.strokeStyle = '#1a1a2a'; ctx.lineWidth = r * 0.09; ctx.beginPath();
+    ctx.strokeStyle = ink; ctx.lineWidth = r * 0.09; ctx.beginPath();
     if (angry) { ctx.arc(0, r * 0.62, r * 0.26, Math.PI + 0.5, TAU - 0.5); }
     else if (scared) { ctx.moveTo(-r * 0.22, r * 0.42); ctx.quadraticCurveTo(-r * 0.1, r * 0.3, 0, r * 0.42); ctx.quadraticCurveTo(r * 0.1, r * 0.54, r * 0.22, r * 0.42); }
     else { ctx.arc(0, r * 0.2, r * 0.3, 0.45, Math.PI - 0.45); }
     ctx.stroke();
   }
-  // وميض أبيض عند الإصابة أو الشفاء
   if (b.hurtT > 0 && !b.dead) { const k = Math.min(1, b.hurtT / 0.4); ctx.globalAlpha = k * k * 0.85; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0, 0, r * 1.02, 0, TAU); ctx.fill(); ctx.globalAlpha = 1; }
-  if (b.healT > 0) { ctx.globalAlpha = b.healT / 0.6 * 0.5; ctx.strokeStyle = '#3ddc84'; ctx.lineWidth = r * 0.12; ctx.beginPath(); ctx.arc(0, 0, r * (1.1 + (0.6 - b.healT) * 0.8), 0, TAU); ctx.stroke(); ctx.globalAlpha = 1; }
+  if (b.healT > 0) { ctx.globalAlpha = b.healT / 0.6 * 0.5; ctx.strokeStyle = '#b9ffd1'; ctx.lineWidth = r * 0.12; ctx.beginPath(); ctx.arc(0, 0, r * (1.1 + (0.6 - b.healT) * 0.8), 0, TAU); ctx.stroke(); ctx.globalAlpha = 1; }
   if (w) drawHeldWeapon(b, r);
   ctx.restore();
 }
@@ -1084,7 +1335,6 @@ function drawHeldWeapon(b, r) {
   }
   ctx.restore();
 }
-
 function drawPlayerMarks() {
   if (G.player < 0) return;
   for (const tp of G.taps) {
@@ -1094,8 +1344,8 @@ function drawPlayerMarks() {
   }
   ctx.globalAlpha = 1;
   const b = G.balls[G.player];
-  if (b.dead || G.phase === 'idle') return;
-  const x = CX + b.x * R, y = CY + b.y * R, r = BALL_R * R;
+  if (!b || b.dead || G.phase === 'idle') return;
+  const x = CX + (b.x + b.ox) * R, y = CY + (b.y + b.oy) * R, r = BALL_R * R;
   const pulse = 1 + Math.sin(performance.now() / 180) * 0.05;
   ctx.strokeStyle = b.c.light; ctx.lineWidth = Math.max(1.5, r * 0.08); ctx.setLineDash([r * 0.35, r * 0.25]);
   ctx.beginPath(); ctx.arc(x, y, r * 1.35 * pulse, 0, TAU); ctx.stroke(); ctx.setLineDash([]);
@@ -1106,11 +1356,10 @@ function drawPlayerMarks() {
     ctx.fillStyle = '#fff'; ctx.fillText('أنت', x, y - r * 1.55);
   }
 }
-
 function drawBanner() {
   let text = null, scale = 1, alpha = 1, color = '#fff';
   if (G.phase === 'countdown') {
-    const n = Math.ceil(G.countdownT);
+    const n = Math.max(1, Math.ceil(G.countdownT));
     const frac = G.countdownT - (n - 1);
     text = AR(n); scale = 1 + (1 - frac) * 0.35; alpha = Math.min(1, frac * 3);
   } else if (G.banner) {
@@ -1123,9 +1372,17 @@ function drawBanner() {
   ctx.save(); ctx.globalAlpha = clamp(alpha, 0, 1);
   ctx.translate(CX, CY); ctx.scale(scale, scale);
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.font = `900 ${clamp(R * 0.34, 34, 72)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
+  ctx.font = `900 ${clamp(R * 0.3, 30, 64)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
   ctx.lineWidth = 6; ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.strokeText(text, 0, 0);
   ctx.fillStyle = color; ctx.fillText(text, 0, 0);
+  ctx.restore();
+}
+function drawNetStatus() {
+  if (G.mode !== 'online' || !Net.notice) return;
+  ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.font = `700 ${clamp(R * 0.09, 12, 15)}px system-ui, -apple-system, "Segoe UI", Tahoma, sans-serif`;
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.fillText(Net.notice, CX, TITLE_Y + 18);
   ctx.restore();
 }
 
@@ -1145,6 +1402,7 @@ function render() {
   drawPlayerMarks();
   drawRing();
   drawHUD();
+  drawNetStatus();
   drawBanner();
   ctx.restore();
   if (G.flash > 0) { ctx.globalAlpha = G.flash * 0.35; ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.globalAlpha = 1; }
@@ -1153,6 +1411,7 @@ function render() {
 /* ═══════════════ الحلقة ═══════════════ */
 let last = null;
 const STEP = 1 / 120;
+let snapAcc = 0;
 function frame(now) {
   requestAnimationFrame(frame);
   if (last == null) { last = now; return; }
@@ -1161,39 +1420,326 @@ function frame(now) {
   dt = Math.min(dt, 0.05);
   const n = Math.max(1, Math.ceil(dt / STEP)), h = dt / n;
   for (let i = 0; i < n; i++) update(h);
+  // المضيف يبثّ اللقطة
+  if (G.mode === 'online' && !G.replica && Net.isHost() && (G.phase === 'countdown' || G.phase === 'fight' || G.phase === 'over')) {
+    snapAcc += dt;
+    if (snapAcc >= 1 / SNAP_HZ) {
+      snapAcc = 0;
+      Net.send({ t: 'snap', r: Net.round, s: encodeSnap(), e: G.events.splice(0) });
+    }
+  }
   render();
 }
 document.addEventListener('visibilitychange', () => { last = null; });
 
+/* ═══════════════ الشبكة (أونلاين) ═══════════════ */
+const Net = {
+  ws: null, code: '', pid: '', tok: '', cid: '', name: '', pub: false,
+  st: null, round: 0, tries: 0, hbT: 0, notice: '', wanted: false, timer: 0,
+  lastSnap: null, roundStarted: 0, resultSent: 0, lastState: null,
+  isHost() { return !!(this.st && this.pid && this.st.hostId === this.pid); },
+  me() { return this.st && this.st.players.find(p => p.id === this.pid) || null; },
+  url() {
+    const base = API_BASE.replace(/^http/, 'ws');
+    const q = new URLSearchParams();
+    q.set('name', this.name);
+    if (this.pid) q.set('pid', this.pid);
+    if (this.tok) q.set('tok', this.tok);
+    if (this.cid) q.set('cid', this.cid);
+    if (this.pub) q.set('pub', '1');
+    return `${base}/${GAME_KEY}/room/${this.code}/ws?${q}`;
+  },
+  open(code, opts) {
+    this.wanted = true;
+    this.code = code; this.pub = !!(opts && opts.pub);
+    if (opts && opts.fresh) { this.pid = ''; this.tok = ''; this.st = null; this.round = 0; this.tries = 0; }
+    this.connect();
+  },
+  connect() {
+    if (!this.wanted) return;
+    clearTimeout(this.timer);
+    this.setNotice(this.tries ? 'انقطع الاتصال… جارٍ إعادة المحاولة' : 'جارٍ الاتصال…');
+    let ws;
+    try { ws = new WebSocket(this.url()); } catch (e) { this.retry(); return; }
+    this.ws = ws;
+    ws.onopen = () => { this.tries = 0; this.setNotice(''); this.hbT = setInterval(() => this.send({ t: 'hb' }), 25000); };
+    ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (err) { return; } this.onMsg(m); };
+    ws.onclose = ev => {
+      clearInterval(this.hbT);
+      if (this.ws !== ws) return;
+      this.ws = null;
+      if (!this.wanted) return;
+      if (ev.code === 4000) { this.wanted = false; this.setNotice(''); UI.toast('فُتحت الغرفة من جهاز آخر بنفس المقعد'); UI.leaveRoom(true); return; }
+      this.retry();
+    };
+    ws.onerror = () => {};
+  },
+  retry() {
+    if (!this.wanted) return;
+    this.tries++;
+    if (this.tries > 6) { this.wanted = false; this.setNotice(''); UI.onlineError('تعذّر الاتصال بالخادم. الأونلاين يعمل من صفحة الموقع فقط (ليس من ملف محلي).'); UI.leaveRoom(true); return; }
+    const wait = Math.min(8000, 1000 * Math.pow(2, this.tries - 1));
+    this.timer = setTimeout(() => this.connect(), wait);
+  },
+  send(o) { if (this.ws && this.ws.readyState === 1) { try { this.ws.send(JSON.stringify(o)); return true; } catch (e) {} } return false; },
+  close() {
+    this.wanted = false; clearTimeout(this.timer); clearInterval(this.hbT);
+    const ws = this.ws;
+    if (ws) {
+      /* «bye» تجعل الخادم يغلق ويشطب المقعد فورًا؛ الإغلاق من طرفنا احتياط
+         بعد لحظة فقط، فلا يتقاطع إغلاقان ويضجّ المتصفح بخطأ. */
+      const sent = this.send({ t: 'bye' });
+      setTimeout(() => { try { if (ws.readyState <= 1) ws.close(1000); } catch (e) {} }, sent ? 400 : 0);
+    }
+    this.ws = null; this.st = null; this.setNotice('');
+  },
+  setNotice(s) { this.notice = s; UI.syncLobby(); },
+  onMsg(m) {
+    switch (m.t) {
+      case 'you': this.pid = m.pid; this.tok = m.tok; store.set('rvb_seat_' + this.code, JSON.stringify({ pid: m.pid, tok: m.tok })); break;
+      case 'hb': break;
+      case 'err': UI.toast(m.m || 'خطأ'); if (!this.st) { this.wanted = false; UI.onlineError(m.m || 'خطأ'); UI.leaveRoom(true); } break;
+      case 'kicked': this.wanted = false; UI.onlineError('طردك المضيف من الغرفة.'); UI.leaveRoom(true); break;
+      case 'host': UI.toast('صرت أنت المضيف'); if (G.mode === 'online' && G.replica && (G.phase === 'fight' || G.phase === 'countdown')) UI.takeOverHosting(); break;
+      case 'state': this.st = m; UI.onState(m); break;
+      case 'snap': if (G.mode === 'online' && G.replica && m.r === this.round) applySnap(m.s, m.e); break;
+      case 'in': if (G.mode === 'online' && !G.replica && G.phase === 'fight') { const i = UI.ballOfPid(m.pid); if (i >= 0) pushBall(G.balls[i], m.x, m.y); } break;
+    }
+  },
+};
+
 /* ═══════════════ الواجهة ═══════════════ */
-const startEl = document.getElementById('start'), overEl = document.getElementById('over');
-const restartBtn = document.getElementById('restart'), muteBtn = document.getElementById('mute');
-const resTitle = document.getElementById('resTitle'), resPred = document.getElementById('resPred');
+const startEl = $('start'), overEl = $('over'), lobbyEl = $('lobby');
+const ROOM_PARAM = (new URLSearchParams(location.search).get('room') || '').toUpperCase();
+/* يُبقي بقية معاملات الرابط (مثل api) ويغيّر room فقط */
+function setRoomParam(code) {
+  try {
+    const u = new URL(location.href);
+    if (code) u.searchParams.set('room', code); else u.searchParams.delete('room');
+    history.replaceState(null, '', u.pathname + (u.search || '') + (u.hash || ''));
+  } catch (e) {}
+}
+const restartBtn = $('restart'), muteBtn = $('mute');
+const resTitle = $('resTitle'), resPred = $('resPred');
+let curTab = 'watch';
+let watchN = clamp(Number(store.get('rvb_n', '2')) || 2, 2, 4);
+let playN = clamp(Number(store.get('rvb_np', '2')) || 2, 2, 4);
 
 function syncMute() { muteBtn.textContent = Sound.muted ? '🔇' : '🔊'; }
 muteBtn.addEventListener('click', () => { Sound.toggle(); syncMute(); });
 syncMute();
 
+const UI = {
+  toastT: 0,
+  toast(msg) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(this.toastT); this.toastT = setTimeout(() => t.classList.remove('show'), 2600);
+  },
+  showPanel(name) {
+    for (const [k, el] of [['start', startEl], ['lobby', lobbyEl], ['over', overEl]]) el.classList.toggle('show', k === name);
+    restartBtn.classList.toggle('show', name === null);
+  },
+  buildPickers() {
+    const pw = $('pickWatch'), pp = $('pickPlay');
+    pw.innerHTML = ''; pp.innerHTML = '';
+    for (let i = 0; i < watchN; i++) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn c' + i; b.textContent = COLORS[i].name;
+      b.addEventListener('click', () => beginLocal('watch', watchN, i, -1)); pw.appendChild(b);
+    }
+    for (let i = 0; i < playN; i++) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn c' + i; b.textContent = 'العب بـ' + COLORS[i].name;
+      b.addEventListener('click', () => beginLocal('play', playN, -1, i)); pp.appendChild(b);
+    }
+    for (const el of $('segWatch').querySelectorAll('button')) el.setAttribute('aria-pressed', Number(el.dataset.n) === watchN ? 'true' : 'false');
+    for (const el of $('segPlay').querySelectorAll('button')) el.setAttribute('aria-pressed', Number(el.dataset.n) === playN ? 'true' : 'false');
+  },
+  selectTab(name) {
+    curTab = name;
+    for (const t of startEl.querySelectorAll('.tab')) t.setAttribute('aria-selected', t.dataset.tab === name ? 'true' : 'false');
+    $('modeWatch').hidden = name !== 'watch';
+    $('modePlay').hidden = name !== 'play';
+    $('modeOnline').hidden = name !== 'online';
+    store.set('rvb_tab', name);
+  },
+  onlineError(msg) { const s = $('onlineStatus'); s.textContent = msg; s.className = 'status err'; },
+  onlineInfo(msg) { const s = $('onlineStatus'); s.textContent = msg; s.className = 'status'; },
+  /* ── الغرفة ── */
+  colorOrderRoster(st) {
+    return (st.roster && st.roster.length ? st.roster : []).slice().sort((a, b) => COLOR_IDX[a.color] - COLOR_IDX[b.color]);
+  },
+  ballOfPid(pid) { return G.balls.findIndex(b => b.pid === pid); },
+  onState(st) {
+    if (!this.roomOpen) return;
+    const phase = st.phase;
+    if (phase === 'lobby') {
+      if (G.mode === 'online' && G.phase !== 'idle') { resetWorld(2); G.phase = 'idle'; G.player = -1; G.replica = false; }
+      this.showPanel('lobby');
+      this.syncLobby();
+    } else if (phase === 'play') {
+      if (Net.round !== st.round) this.startOnlineRound(st);
+      this.syncLobby();
+    } else if (phase === 'over') {
+      if (Net.round !== st.round) { Net.round = st.round; }
+      this.showOnlineResult(st);
+    }
+  },
+  syncLobby() {
+    const st = Net.st;
+    const lst = $('lobbyStatus');
+    if (!st) { lst.textContent = Net.notice || ''; lst.className = 'status'; return; }
+    $('roomCode').textContent = st.code;
+    const ul = $('plist'); ul.innerHTML = '';
+    const isHost = Net.isHost();
+    for (const p of st.players) {
+      const li = document.createElement('li');
+      if (!p.connected) li.classList.add('off');
+      const dot = document.createElement('span'); dot.className = 'dot';
+      dot.style.background = p.color ? COLORS[COLOR_IDX[p.color]].main : '#3a3f55';
+      li.appendChild(dot);
+      const nm = document.createElement('span'); nm.textContent = p.name; li.appendChild(nm);
+      const tag = document.createElement('span'); tag.className = 'tag';
+      const bits = [];
+      if (p.id === st.hostId) bits.push('👑 المضيف');
+      if (p.id === Net.pid) bits.push('أنت');
+      if (p.score) bits.push(`🏆 ${AR(p.score)}`);
+      if (!p.connected) bits.push('منقطع');
+      tag.textContent = bits.join(' · ');
+      li.appendChild(tag);
+      if (isHost && p.id !== Net.pid && st.phase === 'lobby') {
+        const k = document.createElement('button'); k.type = 'button'; k.className = 'kick'; k.textContent = 'طرد';
+        k.addEventListener('click', () => Net.send({ t: 'kick', target: p.id })); li.appendChild(k);
+      }
+      ul.appendChild(li);
+    }
+    const chips = $('chips'); chips.innerHTML = '';
+    const me = Net.me();
+    for (const c of COLORS) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.style.background = c.main;
+      b.setAttribute('aria-label', c.name);
+      const taken = st.players.find(p => p.color === c.key && p.id !== Net.pid);
+      b.disabled = !!taken || st.phase !== 'lobby';
+      b.setAttribute('aria-pressed', me && me.color === c.key ? 'true' : 'false');
+      b.addEventListener('click', () => Net.send({ t: 'pick', color: c.key }));
+      chips.appendChild(b);
+    }
+    const here = st.players.filter(p => p.connected).length;
+    const sb = $('startBtn');
+    sb.hidden = !isHost;
+    sb.disabled = here < 2 || st.phase !== 'lobby';
+    if (Net.notice) { lst.textContent = Net.notice; lst.className = 'status err'; }
+    else if (isHost) { lst.textContent = here < 2 ? 'بانتظار لاعب ثانٍ على الأقل…' : `جاهزون: ${AR(here)} لاعبين`; lst.className = 'status ok'; }
+    else { lst.textContent = 'بانتظار المضيف يبدأ المعركة…'; lst.className = 'status'; }
+  },
+  startOnlineRound(st) {
+    Net.round = st.round; Net.resultSent = 0;
+    const roster = this.colorOrderRoster(st);
+    if (roster.length < 2) return;
+    G.mode = 'online';
+    resetWorld(roster.length, roster.map(p => COLOR_IDX[p.color]), roster.map(p => p.name));
+    roster.forEach((p, i) => { G.balls[i].pid = p.id; });
+    G.player = roster.findIndex(p => p.id === Net.pid);
+    G.prediction = -1;
+    G.replica = !Net.isHost();
+    G.phase = 'countdown'; G.countdownT = 3;
+    this.showPanel(null);
+    Sound.unlock();
+  },
+  takeOverHosting() {
+    G.replica = false;
+    if (G.phase === 'countdown') { G.phase = 'fight'; }
+    this.toast('انتقلت إليك المحاكاة');
+  },
+  showOnlineResult(st) {
+    const res = st.result;
+    if (!res) return;
+    if (this.shownResultRound === st.round) return;
+    this.shownResultRound = st.round;
+    const ci = COLOR_IDX[res.winner];
+    const wp = st.players.find(p => p.color === res.winner);
+    resTitle.innerHTML = `🏆 فاز <span style="color:${COLORS[ci] ? COLORS[ci].main : '#fff'}">${wp ? esc(wp.name) : COLORS[ci].name}</span>`;
+    const me = Net.me();
+    const s = loadStats();
+    if (me && me.color) {
+      const won = me.color === res.winner;
+      if (won) { s.ow = (s.ow || 0) + 1; resPred.textContent = 'فزت! 🎉'; resPred.className = 'ok'; }
+      else { s.ol = (s.ol || 0) + 1; resPred.textContent = 'خسرت 😅 الجولة الجاية لك'; resPred.className = 'bad'; }
+      saveStats(s);
+    } else { resPred.textContent = ''; resPred.className = ''; }
+    const sl = $('scoreList'); sl.hidden = false; sl.innerHTML = '';
+    for (const p of st.players.slice().sort((a, b) => (b.score | 0) - (a.score | 0))) {
+      const li = document.createElement('li');
+      const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = p.color ? COLORS[COLOR_IDX[p.color]].main : '#3a3f55'; li.appendChild(dot);
+      const nm = document.createElement('span'); nm.textContent = p.name; li.appendChild(nm);
+      const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = `🏆 ${AR(p.score | 0)}`; li.appendChild(tag);
+      sl.appendChild(li);
+    }
+    const again = $('again');
+    again.hidden = !Net.isHost();
+    $('leaveBtn2').hidden = false;
+    $('overStats').textContent = Net.isHost() ? '' : 'المضيف هو من يبدأ الجولة الجاية';
+    setTimeout(() => { if (Net.st && Net.st.phase === 'over') this.showPanel('over'); }, G.phase === 'over' ? 1400 : 0);
+  },
+  leaveRoom(silent) {
+    this.roomOpen = false;
+    Net.close();
+    G.mode = 'watch'; G.replica = false; G.player = -1;
+    showStart();
+    if (!silent) this.toast('غادرت الغرفة');
+  },
+  enterRoom(code, opts) {
+    const name = ($('nameIn').value || '').trim().slice(0, 20) || 'لاعب';
+    store.set('rvb_name', name);
+    Net.name = name;
+    Net.cid = store.get('rvb_cid', '') || (() => { const a = new Uint8Array(16); crypto.getRandomValues(a); const h = Array.from(a, x => x.toString(16).padStart(2, '0')).join(''); store.set('rvb_cid', h); return h; })();
+    // مقعد محفوظ لهذه الغرفة (عودة بعد انقطاع أو تحديث صفحة)
+    let seat = null; try { seat = JSON.parse(store.get('rvb_seat_' + code, 'null')); } catch (e) {}
+    Net.pid = seat && seat.pid || ''; Net.tok = seat && seat.tok || '';
+    Net.st = null; Net.round = 0; Net.tries = 0;
+    this.roomOpen = true; this.shownResultRound = -1;
+    G.mode = 'online';
+    this.onlineInfo('جارٍ الاتصال بالغرفة…');
+    Net.open(code, opts);
+    $('roomCode').textContent = code;
+    $('plist').innerHTML = ''; $('chips').innerHTML = '';
+    this.showPanel('lobby');
+    this.syncLobby();
+    setRoomParam(code);
+  },
+};
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+function newCode() { const A = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'; const a = new Uint8Array(6); crypto.getRandomValues(a); return Array.from(a, x => A[x % A.length]).join(''); }
+
 function showStart() {
-  resetWorld();
+  G.mode = 'watch'; G.replica = false;
+  resetWorld(curTab === 'play' ? playN : watchN);
   G.phase = 'idle'; G.prediction = -1; G.player = -1;
-  document.getElementById('startStats').textContent = statsText();
-  overEl.classList.remove('show'); startEl.classList.add('show');
-  restartBtn.classList.remove('show');
+  $('startStats').textContent = statsText();
+  $('scoreList').hidden = true; $('leaveBtn2').hidden = true; $('again').hidden = false;
+  UI.buildPickers();
+  UI.showPanel('start');
+  setRoomParam('');
 }
-function begin(pick, player) {
+function beginLocal(mode, n, pick, player) {
   Sound.unlock();
-  G.prediction = pick;
-  G.player = player == null ? -1 : player;
-  resetWorld();
+  G.mode = mode; G.replica = false;
+  resetWorld(n);
+  G.prediction = pick; G.player = player;
   G.phase = 'countdown'; G.countdownT = 3;
-  startEl.classList.remove('show'); overEl.classList.remove('show');
-  restartBtn.classList.add('show');
+  UI.showPanel(null);
   Sound.play('tick');
 }
-function showResult() {
+/* نهاية المعركة: محليًا تُعرض النتيجة هنا؛ أونلاين يرفع المضيف النتيجة والخادم يعمّمها */
+function onGameOver() {
+  if (G.mode === 'online') {
+    if (!G.replica && Net.isHost() && !Net.resultSent) {
+      Net.resultSent = 1;
+      const order = G.balls.slice().sort((a, b) => (a.dead ? a.deadAt : 1e9) < (b.dead ? b.deadAt : 1e9) ? 1 : -1).map(b => b.c.key);
+      Net.send({ t: 'result', round: Net.round, winner: G.balls[G.winner].c.key, order });
+    }
+    return;
+  }
   const win = G.balls[G.winner];
-  resTitle.innerHTML = `${G.winner === 0 ? '🔴' : '🔵'} فاز <span style="color:${win.c.main}">${win.c.name}</span>`;
+  resTitle.innerHTML = `<span style="color:${win.c.main}">فاز ${win.c.name}</span>`;
   const s = loadStats();
   if (G.player >= 0) {
     const won = G.winner === G.player;
@@ -1206,21 +1752,38 @@ function showResult() {
     else { s.streak = 0; resPred.textContent = 'توقعك خطأ 😅 جرّب مرة ثانية'; resPred.className = 'bad'; }
     saveStats(s);
   } else { resPred.textContent = `المعركة استمرت ${AR(Math.round(G.t))} ثانية`; resPred.className = ''; }
-  document.getElementById('overStats').textContent = statsText();
-  overEl.classList.add('show');
-  restartBtn.classList.remove('show');
+  $('overStats').textContent = statsText();
+  $('scoreList').hidden = true; $('leaveBtn2').hidden = true; $('again').hidden = false;
+  UI.showPanel('over');
 }
-for (const btn of startEl.querySelectorAll('[data-pick]')) btn.addEventListener('click', () => begin(Number(btn.dataset.pick), -1));
-for (const btn of startEl.querySelectorAll('[data-play]')) btn.addEventListener('click', () => begin(-1, Number(btn.dataset.play)));
-// تبويبا شاشة البداية، مع تذكّر آخر اختيار
-function selectTab(name) {
-  for (const t of startEl.querySelectorAll('.tab')) t.setAttribute('aria-selected', t.dataset.tab === name ? 'true' : 'false');
-  document.getElementById('modeWatch').hidden = name !== 'watch';
-  document.getElementById('modePlay').hidden = name !== 'play';
-  try { localStorage.setItem('rvb_tab', name); } catch (e) {}
-}
-for (const t of startEl.querySelectorAll('.tab')) t.addEventListener('click', () => selectTab(t.dataset.tab));
-try { if (localStorage.getItem('rvb_tab') === 'play') selectTab('play'); } catch (e) {}
+
+/* ── ربط الأزرار ── */
+for (const t of startEl.querySelectorAll('.tab')) t.addEventListener('click', () => { UI.selectTab(t.dataset.tab); resetWorld(t.dataset.tab === 'play' ? playN : watchN); });
+for (const el of $('segWatch').querySelectorAll('button')) el.addEventListener('click', () => { watchN = Number(el.dataset.n); store.set('rvb_n', String(watchN)); UI.buildPickers(); resetWorld(watchN); });
+for (const el of $('segPlay').querySelectorAll('button')) el.addEventListener('click', () => { playN = Number(el.dataset.n); store.set('rvb_np', String(playN)); UI.buildPickers(); resetWorld(playN); });
+$('watchNoPick').addEventListener('click', () => beginLocal('watch', watchN, -1, -1));
+$('again').addEventListener('click', () => { if (G.mode === 'online') Net.send({ t: 'again' }); else showStart(); });
+restartBtn.addEventListener('click', () => { if (G.mode === 'online') UI.leaveRoom(); else showStart(); });
+$('leaveBtn').addEventListener('click', () => UI.leaveRoom());
+$('leaveBtn2').addEventListener('click', () => UI.leaveRoom());
+$('startBtn').addEventListener('click', () => { Sound.unlock(); Net.send({ t: 'start' }); });
+$('createBtn').addEventListener('click', () => { Sound.unlock(); UI.enterRoom(newCode(), { pub: $('pubIn').checked, fresh: true }); });
+$('joinBtn').addEventListener('click', () => {
+  const code = ($('codeIn').value || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{6}$/.test(code)) { UI.onlineError('الرمز ٦ أحرف أو أرقام.'); return; }
+  Sound.unlock(); UI.enterRoom(code, { fresh: true });
+});
+$('codeIn').addEventListener('keydown', e => { if (e.key === 'Enter') $('joinBtn').click(); });
+$('copyBtn').addEventListener('click', async () => {
+  const code = $('roomCode').textContent;
+  const link = location.origin + location.pathname + '?room=' + code;
+  try {
+    if (navigator.share) { await navigator.share({ title: 'أحمر ضد أزرق', text: `تعال العب معي! رمز الغرفة: ${code}`, url: link }); return; }
+  } catch (e) {}
+  try { await navigator.clipboard.writeText(link); UI.toast('نُسخ الرابط'); } catch (e) { UI.toast('الرمز: ' + code); }
+});
+$('nameIn').value = store.get('rvb_name', '');
+UI.selectTab(store.get('rvb_tab', 'watch') === 'play' ? 'play' : store.get('rvb_tab', 'watch') === 'online' ? 'online' : 'watch');
 
 // تحكّم اللاعب: لمس/سحب على اللوحة، أو الأسهم على الحاسب
 function ptrPos(e) { return { x: (e.clientX - CX) / R, y: (e.clientY - CY) / R }; }
@@ -1229,9 +1792,8 @@ canvas.addEventListener('pointerdown', e => {
   e.preventDefault();
   try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   G.ptr = ptrPos(e);
-  G.taps.push({ x: G.ptr.x, y: G.ptr.y, t: 0, color: G.balls[G.player].c.light });
   const b = G.balls[G.player];
-  pushToward(G.ptr.x - b.x, G.ptr.y - b.y);
+  if (b) { G.taps.push({ x: G.ptr.x, y: G.ptr.y, t: 0, color: b.c.light }); pushMine(G.ptr.x - b.x, G.ptr.y - b.y); }
 });
 canvas.addEventListener('pointermove', e => { if (G.ptr) G.ptr = ptrPos(e); });
 const endPtr = () => { G.ptr = null; };
@@ -1246,50 +1808,58 @@ function syncKeys() {
   G.keys.x = Math.sign(x); G.keys.y = Math.sign(y);
 }
 window.addEventListener('keydown', e => {
-  if (!KEYS[e.key] || G.player < 0) return;
+  if (!KEYS[e.key] || G.player < 0 || e.target.tagName === 'INPUT') return;
   e.preventDefault();
-  if (!held.has(e.key)) { held.add(e.key); syncKeys(); pushToward(G.keys.x, G.keys.y); }
+  if (!held.has(e.key)) { held.add(e.key); syncKeys(); pushMine(G.keys.x, G.keys.y); }
 });
 window.addEventListener('keyup', e => { if (held.delete(e.key)) syncKeys(); });
-document.getElementById('again').addEventListener('click', showStart);
-restartBtn.addEventListener('click', showStart);
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 120));
+window.addEventListener('beforeunload', () => { if (Net.wanted) Net.send({ t: 'bye' }); });
 
-/* منفذ اختبار: تشغيل محاكاة كاملة بلا رسم، يعيد المدة والفائز */
+/* منفذ اختبار: محاكاة كاملة بلا رسم */
 window.RVB = {
-  G, update, resetWorld, giveWeapon, spawnPickup, TUNE,
-  simulate(maxT) {
-    resetWorld(); G.phase = 'fight'; G.prediction = -1; G.player = -1;
+  G, Net, UI, update, resetWorld, giveWeapon, spawnPickup, TUNE, applySnap, encodeSnap,
+  simulate(n, maxT) {
+    G.mode = 'watch'; G.replica = false; resetWorld(n || 2); G.phase = 'fight'; G.prediction = -1; G.player = -1;
     const lim = maxT || 240;
     while (G.phase === 'fight' && G.t < lim) update(STEP);
     const r = { t: G.t, winner: G.winner, hp: G.balls.map(b => b.hp), stats: G.stats };
-    resetWorld(); G.phase = 'idle';
+    resetWorld(n || 2); G.phase = 'idle';
     return r;
   },
-  /* لاعب آلي جشع: يطارد أقرب سلاح، ومع السكين يطارد الخصم، ويهرب من فوهته */
-  simulatePlay(player, maxT) {
-    resetWorld(); G.phase = 'fight'; G.prediction = -1; G.player = player;
+  simulatePlay(player, n, maxT) {
+    G.mode = 'play'; G.replica = false; resetWorld(n || 2); G.phase = 'fight'; G.prediction = -1; G.player = player;
     const lim = maxT || 240;
-    const me = G.balls[player], o = G.balls[1 - player];
+    const me = G.balls[player];
     while (G.phase === 'fight' && G.t < lim) {
-      if (G.pushCd <= 0) {
+      if (me.pushCd <= 0 && !me.dead) {
         let tx = null, ty = null, best = 9;
         for (const p of G.pickups) { const d = Math.hypot(p.x - me.x, p.y - me.y); if (d < best) { best = d; tx = p.x; ty = p.y; } }
-        if (me.weapon && me.weapon.def.kind !== 'gun') { tx = o.x; ty = o.y; }
-        else if (tx == null && o.weapon) { tx = me.x - (o.x - me.x); ty = me.y - (o.y - me.y); }
-        if (tx != null) pushToward(tx - me.x, ty - me.y);
+        const o = nearestEnemy(me);
+        if (me.weapon && me.weapon.def.kind !== 'gun' && o) { tx = o.x; ty = o.y; }
+        else if (tx == null && o && o.weapon) { tx = me.x - (o.x - me.x); ty = me.y - (o.y - me.y); }
+        if (tx != null) pushBall(me, tx - me.x, ty - me.y);
       }
       update(STEP);
     }
     const r = { t: G.t, winner: G.winner, won: G.winner === player, hp: G.balls.map(b => b.hp) };
-    resetWorld(); G.phase = 'idle'; G.player = -1;
+    resetWorld(n || 2); G.phase = 'idle'; G.player = -1; G.mode = 'watch';
     return r;
   },
 };
 
 resize();
 showStart();
+// دخول مباشر برابط غرفة (من قائمة الغرف أو رابط صاحبك)
+try {
+  const rm = ROOM_PARAM;
+  if (/^[A-Z0-9]{6}$/.test(rm)) {
+    UI.selectTab('online'); $('codeIn').value = rm;
+    // مقعد محفوظ لهذه الغرفة (تحديث الصفحة أثناء اللعب): ارجع مباشرة بلا ضغطة
+    if (store.get('rvb_seat_' + rm, '')) UI.enterRoom(rm, {});
+  }
+} catch (e) {}
 requestAnimationFrame(frame);
 })();
 </script>

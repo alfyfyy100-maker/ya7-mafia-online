@@ -3,6 +3,7 @@
 ##  ⚠️ لا تحذف ولا تعدّل وسوم الترحيل v8 / v9 / v10 / v11 — الحذف = خطأ 10074
 ##  الجديد في v85: ربط KIRM_ROOM + وسم الترحيل v12 (لعبة الكِيرَم أونلاين)
 ##  الجديد في v171: ربط SQUARES_ROOM + وسم الترحيل v17 (سباق المربعات أونلاين)
+##  الجديد في v173: ربط RVB_ROOM + وسم الترحيل v18 (أحمر ضد أزرق أونلاين)
 ## ════════════════════════════════════════════════════════════════
 
 name = "ya7-mafia-online"
@@ -86,6 +87,11 @@ class_name = "HuntRoom"
 name = "SQUARES_ROOM"
 class_name = "SquaresRoom"
 
+# ── جديد في v173: غرفة أحمر ضد أزرق ──
+[[durable_objects.bindings]]
+name = "RVB_ROOM"
+class_name = "RedVsBlueRoom"
+
 ## ── قاعدة D1 ──
 [[d1_databases]]
 binding = "DB"
@@ -148,6 +154,13 @@ new_sqlite_classes = ["HuntRoom"]
 [[migrations]]
 tag = "v17"
 new_sqlite_classes = ["SquaresRoom"]
+
+# ── جديد في v173: أحمر ضد أزرق ──
+# v17 محجوز لسباق المربعات، فأحمر ضد أزرق يأخذ v18. الوسوم تُضاف فقط ولا
+# تُعدَّل — تعديل وسم قديم أو تكراره يفشل النشر كله (خطأ 10074).
+[[migrations]]
+tag = "v18"
+new_sqlite_classes = ["RedVsBlueRoom"]
 
 ## ════════════════════════════════════════════════════════════════
 ##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:
