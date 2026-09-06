@@ -739,6 +739,90 @@ async function sendPush(env, sub, title, body, url) {
 }
 
 /* إشعار حساب واحد على كل أجهزته المشترِكة */
+/* ══════════ سجل الغرف الحيّة وإشعار المشرف ══════════
+   الكائنات الدائمة لا تُعدّ من الخارج، فالغرفة تُقيَّد في D1 عند إنشائها
+   ليقدر المشرف يعرف أن هناك غرفة أصلًا. المقيَّد اسمُ الغرفة ووقتها
+   لا محتواها — ولا صوت يمرّ من هنا إطلاقًا. */
+const MOD_WATCH_USERNAMES = ['ya7'];          // من يصله الإشعار — غيّرها متى شئت
+const MOD_ROOM_TTL_MS = 12 * 60 * 60 * 1000;  // الصفوف الأقدم تُكنس
+
+function roomSlugOf(pathname) {
+  const m = String(pathname || '').match(/^\/([a-z]+)\/room\/create$/);
+  if (!m) return 'mafia';
+  return m[1] === 'got' ? 'khawana' : m[1];
+}
+
+async function modEnsureTable(env) {
+  try {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS mod_rooms (
+         code       TEXT PRIMARY KEY,
+         game       TEXT NOT NULL,
+         host_name  TEXT,
+         created_at INTEGER NOT NULL
+       )`).run();
+    return true;
+  } catch { return false; }
+}
+
+/* البلاغ الصوتي هو الاستثناء الوحيد من «تخزين صفر»، وهو استثناء يطلبه
+   المُبلِّغ نفسه: المقطع المُبلَّغ عنه وحده يُنسَخ إلى D1 ليُراجَع لاحقًا،
+   وبقية مقاطع الجولة تبقى في الذاكرة وتموت معها. */
+const MOD_REPORT_TTL_MS = 30 * 24 * 60 * 60 * 1000;   // البلاغ يُكنس بعد شهر
+const MOD_REPORTS_PER_ROOM = 40;                       // سقف يمنع إغراق القاعدة
+
+async function modEnsureReports(env) {
+  try {
+    await env.DB.prepare(
+      `CREATE TABLE IF NOT EXISTS mod_clip_reports (
+         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+         code        TEXT NOT NULL,
+         game        TEXT NOT NULL,
+         round       INTEGER,
+         target_pid  TEXT, target_name TEXT, target_did TEXT,
+         by_pid      TEXT, by_name TEXT, by_did TEXT,
+         kind        TEXT, prompt TEXT,
+         mime        TEXT, ms INTEGER, b64 TEXT,
+         created_at  INTEGER NOT NULL,
+         status      TEXT DEFAULT 'new'
+       )`).run();
+    await env.DB.prepare(
+      `CREATE UNIQUE INDEX IF NOT EXISTS mod_rep_once
+         ON mod_clip_reports (code, round, target_pid, by_pid)`).run();
+    return true;
+  } catch { return false; }
+}
+
+async function modWatcherDids(env) {
+  const out = [];
+  for (const u of MOD_WATCH_USERNAMES) {
+    try {
+      const row = await env.DB.prepare(
+        'SELECT device_id FROM players WHERE username_norm = ?1'
+      ).bind(normUsername(u)).first();
+      if (row && row.device_id) out.push(row.device_id);
+    } catch {}
+  }
+  return out;
+}
+
+/* تُنادى داخل ctx.waitUntil: لا تؤخّر ردّ إنشاء الغرفة ولا تُسقطه لو فشلت. */
+async function modNoteRoom(env, game, code, hostName) {
+  if (!env.DB) return;
+  if (!await modEnsureTable(env)) return;
+  const now = Date.now();
+  try {
+    await env.DB.prepare(
+      `INSERT INTO mod_rooms (code, game, host_name, created_at) VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(code) DO UPDATE SET game=?2, host_name=?3, created_at=?4`
+    ).bind(code, game, String(hostName || '').slice(0, 40), now).run();
+  } catch { return; }
+  try {
+    await env.DB.prepare('DELETE FROM mod_rooms WHERE created_at < ?1')
+      .bind(now - MOD_ROOM_TTL_MS).run();
+  } catch {}
+}
+
 async function notifyAccount(env, deviceId, title, body, url) {
   if (!env.DB || !deviceId) return;
   try {
@@ -10197,7 +10281,13 @@ async function routeRequest(request, env, ctx) {
         }));
         if (resp.status !== 409) {
           // لا نحسب إلا الغرفة اللي انولدت فعلًا
-          if (resp.ok) noteCreate(ip);
+          if (resp.ok) {
+            noteCreate(ip);
+            /* القيد والإشعار خارج مسار الرد: اللاعب ما ينتظرهما، وفشلهما
+               لا يمنع الغرفة من الانفتاح. */
+            ctx.waitUntil(modNoteRoom(
+              env, roomSlugOf(url.pathname), code, body && body.name));
+          }
           // الإدراج في اللوبي اختياري وصريح: بلا public:true تبقى الغرفة خاصة
           if (resp.ok && body && body.public === true && env.PUBLIC_LOBBY) {
             const g = url.pathname.startsWith('/tari/') ? 'tari'
@@ -10302,7 +10392,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v175';   // v173 = طاريك · v174 = أحمر ضد أزرق · v175 = طاريك بلا مؤقّتات + أنماط كتابية
+const WORKER_VERSION = 'v176';   // v174 = أحمر ضد أزرق · v175 = طاريك بلا مؤقّتات · v176 = البلاغات الصوتية
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -13166,6 +13256,92 @@ async function adminPanelInner(request, env, url, body) {
       ok: true, player: pl, friends: fr, friendsList, games,
       reports: { from: (from && from.n) || 0, about },
     });
+  }
+
+  /* ── الغرف الحيّة: القائمة من D1 لأن الكائنات الدائمة لا تُعدّ ── */
+  if (sub === '/rooms/live') {
+    await modEnsureTable(env);
+    const rows = await admAll(env,
+      `SELECT code, game, host_name, created_at FROM mod_rooms
+        WHERE created_at > ?1 ORDER BY created_at DESC LIMIT 60`,
+      [now - MOD_ROOM_TTL_MS]);
+    return Response.json({ ok: true, rooms: rows, names: GAME_NAMES });
+  }
+
+  /* ── لقطة غرفة، ثم المقطع الحيّ، ثم الطرد ──
+     الثلاثة تمرّ على الكائن نفسه. لا شيء منها يُكتب في D1 ولا في تخزين
+     الكائن: المقطع يُقرأ من الذاكرة ويُرسَل ويُنسى. */
+  if (sub === '/rooms/peek' || sub === '/rooms/kick') {
+    const code = String(body.code || '').toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(code)) return Response.json({ ok: false, error: 'bad-code' });
+    const game = String(body.game || 'tari').toLowerCase();
+    if (!/^[a-z]{3,12}$/.test(game)) return Response.json({ ok: false, error: 'bad-game' });
+    const ns = roomNS(env, game === 'khawana' ? 'got' : game);
+    if (!ns) return Response.json({ ok: false, error: 'binding-missing' });
+
+    let path = '/mod/peek';
+    if (sub === '/rooms/kick') {
+      const pid = String(body.pid || '');
+      if (!validPlayerId(pid)) return Response.json({ ok: false, error: 'bad-pid' });
+      path = '/mod/kick?pid=' + encodeURIComponent(pid);
+    }
+    try {
+      const stub = ns.get(ns.idFromName(code));
+      const resp = await stub.fetch(new Request(url.origin + '/room/' + code + path, {
+        method: 'GET', headers: { 'X-Ya7-Internal': '1' },
+      }));
+      if (resp.status === 404) return Response.json({ ok: false, error: 'unsupported' });
+      const j = await resp.json();
+      return Response.json(j);
+    } catch (e) {
+      return Response.json({ ok: false, error: String((e && e.message) || e) });
+    }
+  }
+
+  /* ── البلاغات الصوتية: القائمة بلا صوت، والصوت بنداءٍ منفصل ──
+     القائمة تُحمَّل كل مرة، فلو حملت المقاطع لصارت ميغابايتات في نداء
+     واحد. المقطع يُطلَب لبلاغٍ واحد عند الضغط على «استمع». */
+  if (sub === '/reports/clips') {
+    await modEnsureReports(env);
+    const rows = await admAll(env,
+      `SELECT id, code, game, round, target_name, target_did,
+              by_name, kind, prompt, ms, created_at, status
+         FROM mod_clip_reports
+        WHERE created_at > ?1
+        ORDER BY created_at DESC LIMIT 100`,
+      [now - MOD_REPORT_TTL_MS]);
+    return Response.json({ ok: true, reports: rows });
+  }
+
+  if (sub === '/reports/clip') {
+    const id = Number(body.id);
+    if (!Number.isInteger(id) || id <= 0) return Response.json({ ok: false, error: 'bad-id' });
+    const row = await admFirst(env,
+      'SELECT mime, ms, b64 FROM mod_clip_reports WHERE id = ?1', [id]);
+    if (!row) return Response.json({ ok: false, error: 'not-found' });
+    return Response.json({ ok: true, mime: row.mime, ms: row.ms | 0, b64: row.b64 });
+  }
+
+  /* إغلاق بلاغ: يُحذف الصف بمقطعه — لا يبقى صوت بعد الفصل فيه. */
+  if (sub === '/reports/close') {
+    const id = Number(body.id);
+    if (!Number.isInteger(id) || id <= 0) return Response.json({ ok: false, error: 'bad-id' });
+    await env.DB.prepare('DELETE FROM mod_clip_reports WHERE id = ?1').bind(id).run();
+    return Response.json({ ok: true });
+  }
+
+  /* ── حظر صاحب مقطع مخالف باستخدام معرّف جهازه من الغرفة ── */
+  if (sub === '/rooms/ban') {
+    const did = String(body.did || '');
+    if (!did || did.length > 64) return Response.json({ ok: false, error: 'bad-did' });
+    const row = await admFirst(env,
+      'SELECT username FROM players WHERE device_id = ?1', [did]);
+    if (!row) return Response.json({ ok: false, error: 'no-account',
+      ar: 'اللاعب دخل بلا حساب — اطرده من الغرفة، ما فيه حساب يُحظر' });
+    await env.DB.prepare(
+      'UPDATE players SET banned = 1, token_ver = token_ver + 1 WHERE device_id = ?1'
+    ).bind(did).run();
+    return Response.json({ ok: true, username: row.username });
   }
 
   /* ── إجراءات على حساب ── */
@@ -16507,7 +16683,42 @@ export class TariRoom {
     const url = new URL(request.url);
     if (url.pathname.endsWith('/ws')) return this.handleWebSocket(request);
     if (url.pathname.endsWith('/create')) return this.handleCreate(request);
+    /* منافذ الإشراف. الحارس ترويسة داخلية فقط لأن الموجّه تحقّق من
+       ADMIN_TOKEN قبل أن يصل النداء للكائن — نفس نمط admLobbyRooms.
+       ولا واحدة منها تكتب شيئًا: الاستماع قراءةٌ من this.clips وحدها،
+       فحدّ «تخزين صفر» باقٍ كما هو. */
+    if (request.headers.get('X-Ya7-Internal') === '1') {
+      if (url.pathname.endsWith('/mod/peek')) return this.modPeek();
+      if (url.pathname.endsWith('/mod/kick')) return this.modKick(url);
+    }
     return new Response('غير موجود', { status: 404 });
+  }
+
+  /* لقطة الغرفة للمشرف: من يملك مقطعًا في هذي الجولة، لا المقطع نفسه. */
+  modPeek() {
+    const r = this.room;
+    const k = this.kind();
+    return Response.json({
+      ok: true, alive: !!r.code, code: r.code || null,
+      phase: r.phase, round: r.round, totalRounds: r.totalRounds,
+      kind: r.kind || null, kindName: (k && k.name) || '',
+      audio: !!(k && k.inputType === 'audio'),
+      starName: r.starId ? this.nameOf(r.starId) : null,
+      prompt: r.prompt ? String(r.prompt.text || '') : '',
+      players: r.players.map(p => ({
+        pid: p.id, name: p.name, did: p.did || null,
+        connected: !!p.connected, host: p.id === r.hostId,
+        star: p.id === r.starId,
+        connectedOnly: true,
+      })),
+    });
+  }
+
+  async modKick(url) {
+    const pid = String(url.searchParams.get('pid') || '');
+    if (!this.findPlayer(pid)) return Response.json({ ok: false, error: 'not-found' });
+    await this.kickPlayer(pid);
+    return Response.json({ ok: true });
   }
 
   async handleCreate(request) {
@@ -17059,6 +17270,8 @@ export class TariRoom {
           return;
         }
 
+        case 'reportClip': return this.onReportClip(playerId, msg);
+
         case 'ready': {
           if (r.phase !== 'reveal') return;
           if (!r.readys) r.readys = {};
@@ -17168,6 +17381,64 @@ export class TariRoom {
     const c = this.clips.get(id);
     if (!c) { this.sendPrivate(playerId, { type: 'clipMiss', id }); return; }
     this.sendPrivate(playerId, { type: 'clip', id, mime: c.mime, b64: c.b64, ms: c.ms });
+  }
+
+  /* ── بلاغ على مقطع صوتي ──
+     هذا هو الاستثناء الوحيد من «تخزين صفر»، ويطلبه المُبلِّغ صراحةً:
+     المقطع المُبلَّغ عنه وحده يُنسَخ إلى D1، وبقية مقاطع الجولة تبقى في
+     الذاكرة وتموت معها كما كانت. */
+  async onReportClip(playerId, msg) {
+    const r = this.room;
+    if (r.phase !== 'vote' && r.phase !== 'reveal') return;   // خارجهما المقطع غير معروض
+    if (!this.env || !this.env.DB) return;
+    const me = this.findPlayer(playerId);
+    if (!me) return;
+
+    const target = String((msg && msg.id) || '');
+    if (!validPlayerId(target)) return;
+    if (target === playerId) return;                          // لا بلاغ على النفس
+    if (!r.order.includes(target)) return;                    // ما هو من مقاطع هذي الجولة
+    const clip = this.clips.get(target);
+    if (!clip) return;                                        // نصّية أو انمسحت
+
+    const tp = this.findPlayer(target);
+    const now = Date.now();
+    try {
+      if (!await modEnsureReports(this.env)) return;
+      const cnt = await this.env.DB.prepare(
+        'SELECT COUNT(*) AS n FROM mod_clip_reports WHERE code = ?1'
+      ).bind(r.code).first();
+      if (cnt && (cnt.n | 0) >= MOD_REPORTS_PER_ROOM) return; // سقف يمنع إغراق القاعدة
+
+      /* الفهرس الفريد يمنع تكرار المُبلِّغ نفسه على المقطع نفسه، فتكرار
+         الضغط لا يضاعف الصفوف ولا يضاعف الإشعارات. */
+      const res = await this.env.DB.prepare(
+        `INSERT OR IGNORE INTO mod_clip_reports
+           (code, game, round, target_pid, target_name, target_did,
+            by_pid, by_name, by_did, kind, prompt, mime, ms, b64, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)`
+      ).bind(
+        r.code, 'tari', r.round | 0,
+        target, (tp && tp.name) || '', (tp && tp.did) || null,
+        playerId, me.name || '', me.did || null,
+        r.kind || '', r.prompt ? String(r.prompt.text || '').slice(0, 200) : '',
+        clip.mime || 'audio/webm', clip.ms | 0, clip.b64, now
+      ).run();
+      const added = !res || res.changes == null ? true : res.changes > 0;
+      if (!added) return;                                     // مكرر: لا إشعار ثانٍ
+
+      await this.env.DB.prepare('DELETE FROM mod_clip_reports WHERE created_at < ?1')
+        .bind(now - MOD_REPORT_TTL_MS).run();
+    } catch { return; }
+
+    try {
+      const dids = await modWatcherDids(this.env);
+      await Promise.all(dids.map(d => notifyAccount(
+        this.env, d, '🚩 بلاغ على مقطع صوتي',
+        'غرفة ' + r.code + ' · عن ' + ((tp && tp.name) || 'لاعب'),
+        'https://dozplay.com/'
+      )));
+    } catch {}
   }
 
   /* إجماع شاشة الكشف. المنقطعون لا يُنتظرون — وإلا علقت الشاشة على غائب. */
