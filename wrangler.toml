@@ -4,13 +4,14 @@
 ##  الجديد في v85: ربط KIRM_ROOM + وسم الترحيل v12 (لعبة الكِيرَم أونلاين)
 ##  الجديد في v171: ربط SQUARES_ROOM + وسم الترحيل v17 (سباق المربعات أونلاين)
 ##  الجديد في v172: ربط TARI_ROOM + وسم الترحيل v18 (طاريك — لعبة الحفلات)
+##  الجديد في v174: ربط RVB_ROOM + وسم الترحيل v19 (أحمر ضد أزرق أونلاين)
 ## ════════════════════════════════════════════════════════════════
 
 name = "ya7-mafia-online"
 main = "worker.js"
 compatibility_date = "2025-05-01"
 
-## ── Durable Objects: ثماني عشرة ربطة ──
+## ── Durable Objects: تسع عشرة ربطة ──
 [[durable_objects.bindings]]
 name = "MAFIA_ROOM"
 class_name = "MafiaRoom"
@@ -92,6 +93,11 @@ class_name = "SquaresRoom"
 name = "TARI_ROOM"
 class_name = "TariRoom"
 
+# ── جديد في v174: غرفة أحمر ضد أزرق (معركة الكرات) ──
+[[durable_objects.bindings]]
+name = "RVB_ROOM"
+class_name = "RedVsBlueRoom"
+
 ## ── قاعدة D1 ──
 [[d1_databases]]
 binding = "DB"
@@ -161,6 +167,13 @@ new_sqlite_classes = ["SquaresRoom"]
 [[migrations]]
 tag = "v18"
 new_sqlite_classes = ["TariRoom"]
+
+# ── جديد في v174: أحمر ضد أزرق ──
+# v18 محجوز لطاريك، فأحمر ضد أزرق يأخذ v19. الوسوم تُضاف فقط ولا تُعدَّل —
+# تعديل وسم قديم أو تكراره يفشل النشر كله (خطأ 10074).
+[[migrations]]
+tag = "v19"
+new_sqlite_classes = ["RedVsBlueRoom"]
 
 ## ════════════════════════════════════════════════════════════════
 ##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:
