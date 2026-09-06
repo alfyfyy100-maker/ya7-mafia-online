@@ -770,6 +770,13 @@ async function sendPush(env, sub, title, body, url) {
    الكائنات الدائمة لا تُعدّ من الخارج، فالغرفة تُقيَّد في D1 عند إنشائها
    ليقدر المشرف يعرف أن هناك غرفة أصلًا. المقيَّد اسمُ الغرفة ووقتها
    لا محتواها — ولا صوت يمرّ من هنا إطلاقًا. */
+/* أوضاع الجولات: خريطة بيانات لا شروط متفرّقة، فإضافة وضعٍ لاحقًا سطر. */
+const TARI_MODE_KINDS = {
+  mix: null,                       // بلا قصر — كل الأنماط
+  sfx: ['sfx'],                    // أصوات خارجية
+  players: ['mimic', 'tone'],      // تقليد لاعبٍ آخر: موقفه ونبرته
+};
+
 const MOD_WATCH_USERNAMES = ['ya7'];          // من يصله الإشعار — غيّرها متى شئت
 const MOD_ROOM_TTL_MS = 12 * 60 * 60 * 1000;  // الصفوف الأقدم تُكنس
 
@@ -10405,7 +10412,7 @@ async function routeRequest(request, env, ctx) {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، لودو، الشفرة، المطاردة، سباق المربعات، طاريك، وأحمر ضد أزرق أونلاين — استوديو يا٧ · /health للفحص',
+      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، لودو، الشفرة، المطاردة، سباق المربعات، طاريك، والحلبة أونلاين — استوديو يا٧ · /health للفحص',
       { status: 200 }), origin);
 }
 
@@ -10419,7 +10426,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v179';   // v177 = تقليد الأصوات · v178 = إصلاحات القياس · v179 = الدخول أولًا
+const WORKER_VERSION = 'v183';   // v180 = جولات الصوت · v181 = من بلّغ باليوزر · v182 = أوضاع الجولات الثلاثة
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10436,7 +10443,7 @@ const LOBBY_GAMES = {
   mutarada:{ name: 'مطاردة الحواري', path: '/mutarada/' },
   squares: { name: 'سباق المربعات', path: '/squares/' },
   tari:    { name: 'طاريك',         path: '/tari/' },
-  redvsblue: { name: 'أحمر ضد أزرق', path: '/redvsblue/' },
+  redvsblue: { name: 'الحلبة', path: '/redvsblue/' },
 };
 
 /* أسماء كل الألعاب للعرض، لا الأونلاين وحدها: سجل اللاعب يشمل ما لعبه
@@ -10475,7 +10482,7 @@ const GAME_NAMES = {
   ghazw: 'غَزْو',
   bilyardo: 'بلياردو',
   squares: 'سباق المربعات', tari: 'طاريك',
-  redvsblue: 'أحمر ضد أزرق',
+  redvsblue: 'الحلبة',
 };
 
 /* ═══════════════════════ البلياردو (BilliardRoom) ═══════════════════════
@@ -13330,12 +13337,21 @@ async function adminPanelInner(request, env, url, body) {
      واحد. المقطع يُطلَب لبلاغٍ واحد عند الضغط على «استمع». */
   if (sub === '/reports/clips') {
     await modEnsureReports(env);
+    /* اليوزر لا معرّف الجهاز: قاعدة اللوحة أن كل إجراء باليوزر، وقد
+       خالفتُها في أول نسخة. والعدّ الأخير يكشف من يبلّغ كثيرًا — وهو ما
+       يميّز البلاغ الكاذب المتكرّر عن بلاغٍ عابر. */
     const rows = await admAll(env,
-      `SELECT id, code, game, round, target_name, target_did,
-              by_name, kind, prompt, ms, created_at, status
-         FROM mod_clip_reports
-        WHERE created_at > ?1
-        ORDER BY created_at DESC LIMIT 100`,
+      `SELECT r.id, r.code, r.game, r.round, r.kind, r.prompt, r.ms,
+              r.created_at, r.status,
+              r.target_name, tp.username AS target_user, tp.banned AS target_banned,
+              r.by_name,     bp.username AS by_user,     bp.banned AS by_banned,
+              (SELECT COUNT(*) FROM mod_clip_reports x
+                WHERE x.by_did IS NOT NULL AND x.by_did = r.by_did) AS by_count
+         FROM mod_clip_reports r
+         LEFT JOIN players tp ON tp.device_id = r.target_did
+         LEFT JOIN players bp ON bp.device_id = r.by_did
+        WHERE r.created_at > ?1
+        ORDER BY r.created_at DESC LIMIT 100`,
       [now - MOD_REPORT_TTL_MS]);
     return Response.json({ ok: true, reports: rows });
   }
@@ -13355,20 +13371,6 @@ async function adminPanelInner(request, env, url, body) {
     if (!Number.isInteger(id) || id <= 0) return Response.json({ ok: false, error: 'bad-id' });
     await env.DB.prepare('DELETE FROM mod_clip_reports WHERE id = ?1').bind(id).run();
     return Response.json({ ok: true });
-  }
-
-  /* ── حظر صاحب مقطع مخالف باستخدام معرّف جهازه من الغرفة ── */
-  if (sub === '/rooms/ban') {
-    const did = String(body.did || '');
-    if (!did || did.length > 64) return Response.json({ ok: false, error: 'bad-did' });
-    const row = await admFirst(env,
-      'SELECT username FROM players WHERE device_id = ?1', [did]);
-    if (!row) return Response.json({ ok: false, error: 'no-account',
-      ar: 'اللاعب دخل بلا حساب — اطرده من الغرفة، ما فيه حساب يُحظر' });
-    await env.DB.prepare(
-      'UPDATE players SET banned = 1, token_ver = token_ver + 1 WHERE device_id = ?1'
-    ).bind(did).run();
-    return Response.json({ ok: true, username: row.username });
   }
 
   /* ── إجراءات على حساب ── */
@@ -16559,6 +16561,17 @@ const TARI_BANK = [
   { kind: 'free', text: 'كمّل: أسوأ نصيحة ممكن يعطيك إياها {نجم}…' },
   { kind: 'free', text: 'كمّل: لو دخل {نجم} مسابقة، بيفوز بجائزة…' },
 
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يشرح شيئًا ما يفهمه' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يتفاوض على السعر' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يشجّع فريقه وهو خسران' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يعتذر عن غلطة ما يشوفها غلطة' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يسولف عن أكلة عجبته' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يوقّظ أحدًا نايمًا' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يرد على رسالة تأخّر عليها أسبوعًا' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يمدح نفسه بلا ما يقول إنه يمدح نفسه' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يعطي إرشادات الطريق' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يفاصل ويقول «آخر كلام»' },
+
   { kind: 'sentence', text: '{نجم} ما يقدر يعيش يوم واحد بدون…' },
   { kind: 'sentence', text: 'أول شي يسويه {نجم} أول ما يدخل البيت…' },
   { kind: 'sentence', text: 'لو انقطع النت عن {نجم} أسبوعًا، بيصير…' },
@@ -16732,7 +16745,7 @@ export class TariRoom {
       players: [],
       bank: [], used: [],
       totalRounds: 0, finale: true, wantRounds: 0,
-      round: 0, kindBag: [], starQueue: [], judge: 'vote', marks: {},
+      round: 0, kindBag: [], starQueue: [], judge: 'vote', marks: {}, mode: 'mix',
       kind: '', prompt: null, starId: null, ask: '',
       tones: null,     // pid -> نبرة الجولة (نمط النبرة وحده)
       subs: {},        // pid -> { has, text?, choice?, tag?, skipped? }   ← لا صوت هنا أبدًا
@@ -17060,6 +17073,15 @@ export class TariRoom {
        التشابه. لا يتغيّر في منتصف اللعبة حتى لا تُقاس جولة بمسطرة
        وأختها بمسطرة أخرى. */
     r.judge = (cfg && cfg.judge === 'score') ? 'score' : 'vote';
+    /* جولات الصوت فقط: يختاره المضيف حين يريد جلسة تقليدٍ خالصة بدل
+       أن ينتظر القرعة. يسقط وحده لو كان بنك الأصوات فاضيًا. */
+    /* ثلاثة أوضاع: خليط · أصوات خارجية · تقليد لاعب. الوضع يسقط إلى
+       الخليط لو كان بنك نمطه فاضيًا، فلا تعلق اللعبة بلا ما تلعبه. */
+    const wanted = (cfg && cfg.mode) || ((cfg && cfg.onlySfx) ? 'sfx' : 'mix');
+    const kinds = Object.prototype.hasOwnProperty.call(TARI_MODE_KINDS, wanted)
+      ? TARI_MODE_KINDS[wanted] : undefined;
+    r.mode = (kinds === null) ? wanted
+      : (kinds && r.bank.some(p => kinds.includes(p.kind))) ? wanted : 'mix';
     /* السلسلة تحتاج نصًّا أصليًا: بلا مطالبة من نمطها لا ختام. */
     if (r.finale && (!TARI_FINALE || !r.bank.some(p => p.kind === TARI_FINALE))) r.finale = false;
     const asked = Number(cfg && cfg.rounds);
@@ -17080,6 +17102,18 @@ export class TariRoom {
   nextKind() {
     const r = this.room;
     const have = new Set(r.bank.map(p => p.kind));
+    /* الوضع يقصر القرعة على أنماطه، ولا يُطبَّق إلا إن كان في البنك ما
+       يسدّه — وإلا رجعنا للخليط بدل جولةٍ بلا سؤال. */
+    const want = TARI_MODE_KINDS[r.mode];
+    if (want && want.length) {
+      const inMode = want.filter(k => have.has(k));
+      if (inMode.length) {
+        if (!r.kindBag.length || !r.kindBag.every(k => inMode.includes(k))) {
+          r.kindBag = tariShuffle(inMode);
+        }
+        return r.kindBag.shift();
+      }
+    }
     const pool = Object.keys(TARI_KINDS).filter(k => !TARI_KINDS[k].finaleKind && have.has(k));
     if (!pool.length) return r.bank.length ? r.bank[0].kind : 'free';
     if (!r.kindBag.length) r.kindBag = tariShuffle(pool);
@@ -17491,6 +17525,10 @@ export class TariRoom {
           if (Number.isFinite(n)) r.wantRounds = Math.min(12, Math.max(3, Math.round(n)));
           if (typeof msg.finale === 'boolean') r.finale = msg.finale;
           if (msg.judge === 'score' || msg.judge === 'vote') r.judge = msg.judge;
+          /* الوجود لا الصدق: قيمة mix في الجدول null (بلا قصر)، فاختبارها
+             كشرطٍ يمنع الرجوع للخليط بعد الخروج منه. */
+          if (typeof msg.mode === 'string' &&
+              Object.prototype.hasOwnProperty.call(TARI_MODE_KINDS, msg.mode)) r.mode = msg.mode;
           await this.persist(); this.broadcastState();
           return;
         }
@@ -17815,6 +17853,7 @@ export class TariRoom {
       lostAudio: !!r.lostAudio,
       kind: r.kind || null,
       judge: r.judge || 'vote',
+      mode: r.mode || 'mix',
       scored: this.isScored(),
       sound: (r.prompt && r.prompt.sound) || null,
       kindName: k ? k.name : '',
@@ -17875,7 +17914,7 @@ applyRoomCommon(TariRoom, 'tari');
    مفهومة، ويبقى ما فوقه إساءةً تُهمَل بصمت. */
 TariRoom.prototype.WS_MAX = TARI_CLIP_MAX * 2 + 4096;
 
-/* ══════════════════════ أحمر ضد أزرق أونلاين (RedVsBlueRoom) ══════════════════════
+/* ══════════════════════ الحلبة أونلاين (RedVsBlueRoom) ══════════════════════
    معركة كرات (٢ إلى ٤) داخل حلبة، كل لاعب يدفع كرته من جواله. بخلاف سباق
    المربعات، هنا مدخلات مستمرة أثناء المعركة، فالمحاكاة لا تصلح حتمية
    مبذورة على كل جهاز (دوال المثلثات تختلف بآخر خانة بين المتصفحات
