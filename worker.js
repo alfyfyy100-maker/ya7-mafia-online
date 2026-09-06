@@ -10430,7 +10430,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v188';   // v180 = جولات الصوت · v181 = من بلّغ باليوزر · v182 = أوضاع الجولات الثلاثة
+const WORKER_VERSION = 'v191';   // v180 = جولات الصوت · v181 = من بلّغ باليوزر · v182 = أوضاع الجولات الثلاثة
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -16626,7 +16626,7 @@ const TARI_BANK = [
   { kind: 'guess', text: 'لو صار {نجم} مسؤولًا عن الرحلة، وش يصير؟', opts: ['جدول دقيقة بدقيقة', 'يضيّعنا وينكر', 'ينسى الحجز', 'ينجح ويذكّرنا كل يوم'] },
   { kind: 'guess', text: 'وش يطلب {نجم} لو عزمناه على عشاء؟', opts: ['أغلى شي في القائمة', 'نفس طلب اللي جنبه', 'شي ما أحد سمع فيه', 'يقول «أنا شبعان» ثم يأكل من الكل'] },
   { kind: 'guess', text: 'لو تأخّرنا على {نجم} ساعة، وش يسوي؟', opts: ['يتصل كل خمس دقائق', 'يطلع ويرجع البيت', 'ما ينتبه أصلًا', 'يجي بعدنا بساعتين'] },
-  { kind: 'guess', text: 'مين يشبه {نجم} في المجموعة أكثر؟', opts: ['أهدأ واحد فينا', 'أعلى واحد صوت', 'اللي دايم متأخّر', 'اللي دايم يخطّط'] },
+  { kind: 'guess', text: 'أي وصف يناسب {نجم} أكثر؟', opts: ['أهدأ واحد فينا', 'أعلى واحد صوت', 'اللي دايم متأخّر', 'اللي دايم يخطّط'] },
   { kind: 'guess', text: 'وش يسوي {نجم} في اجتماع ممل؟', opts: ['يتظاهر بالانتباه', 'ينام صح', 'يسأل سؤالًا يطوّل الاجتماع', 'يطلع بحجّة'] },
 
   { kind: 'free', text: 'كمّل: أكثر جملة يقولها {نجم} كل يوم هي…' },
@@ -17194,7 +17194,20 @@ export class TariRoom {
     }
     const pool = Object.keys(TARI_KINDS).filter(k => !TARI_KINDS[k].finaleKind && have.has(k));
     if (!pool.length) return r.bank.length ? r.bank[0].kind : 'free';
-    if (!r.kindBag.length) r.kindBag = tariShuffle(pool);
+    if (!r.kindBag.length) {
+      r.kindBag = tariShuffle(pool);
+      /* في الوضع المنوّع: ثمانية أنماط تعني أن جولةً واحدة من ثمانٍ هي
+         صوتٌ جاهز — فجلسةٌ من أربع جولات قد تنتهي بلا صوتٍ واحد، وهو
+         ما يخيّب من اختار «منوّع» لأجل الأصوات. نضمن ظهورها مبكرًا:
+         تُنقل إلى موضعٍ في أول ثلاثة من كل دورة. التنوّع باقٍ — الترتيب
+         وحده هو ما ضُبط. */
+      const i = r.kindBag.indexOf('sfx');
+      if (i > 2) {
+        const j = randInt(3);
+        r.kindBag.splice(i, 1);
+        r.kindBag.splice(j, 0, 'sfx');
+      }
+    }
     return r.kindBag.shift();
   }
 
@@ -17915,6 +17928,11 @@ export class TariRoom {
     let text = (r.prompt && r.prompt.text) || '';
     if (text && r.starId) text = text.replace(/\{نجم\}/g, this.nameOf(r.starId));
     if (text && myTone) text = text.replace(/\{نبرة\}/g, myTone);
+    /* ⚠️ السلسلة: الجملة سرّ. حقل chain.text تحته حسابٌ دقيق يمنحها
+       لأوّل السلسلة وحده ثم يحجبها حتى العرض — وكان الحقل العام prompt
+       يرسلها للجميع فيلغي ذلك الحساب كلّه، فيقرأها كلُّ لاعبٍ من شاشته
+       بدل أن يسمع من قبله. اللعبة كلها تقوم على ألّا تُرى. */
+    if (this.isChain() && r.phase !== 'reveal') text = '';
 
     const exp = this.expected();
     const iInput = exp.includes(playerId) && !mine;
