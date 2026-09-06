@@ -752,6 +752,7 @@ function roomNS(env, g) {
     case 'shifra':   return env.SHIFRA_ROOM;
     case 'mutarada': return env.HUNT_ROOM;
     case 'squares':  return env.SQUARES_ROOM;
+    case 'tari':     return env.TARI_ROOM;
     default:         return env.MAFIA_ROOM;
   }
 }
@@ -918,6 +919,9 @@ function gameNS(env, key) {
     case 'ludo':     return env.LUDO_ROOM;
     case 'kirm':     return env.KIRM_ROOM;
     case 'bilyardo': return env.BILLIARD_ROOM;
+    /* طاريك: بدون هذا السطر يرجع /seat-check دائمًا null فتُمنع دردشة
+       الغرفة عن أصحاب المقاعد أنفسهم — تفشل بصمت لا برسالة. */
+    case 'tari':     return env.TARI_ROOM;
     default:         return null;
   }
 }
@@ -9772,7 +9776,7 @@ export default {
           BTAQATI_ROOM: !!env.BTAQATI_ROOM, KIRM_ROOM: !!env.KIRM_ROOM,
           BILLIARD_ROOM: !!env.BILLIARD_ROOM, HUNT_ROOM: !!env.HUNT_ROOM,
           BALOOT_ROOM: !!env.BALOOT_ROOM, SHIFRA_ROOM: !!env.SHIFRA_ROOM,
-          SQUARES_ROOM: !!env.SQUARES_ROOM,
+          SQUARES_ROOM: !!env.SQUARES_ROOM, TARI_ROOM: !!env.TARI_ROOM,
           PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
           CHAT_ROOM: !!env.CHAT_ROOM,
           DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
@@ -10075,8 +10079,33 @@ export default {
       return withCors(resp, origin);
     }
 
-    if (url.pathname === '/baloot/room/create' || url.pathname === '/bilyardo/room/create' || url.pathname === '/kirm/room/create' || url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
-      const gameNS = url.pathname.startsWith('/baloot/') ? env.BALOOT_ROOM
+    /* ── بنك طاريك الافتراضي: قراءة عامة ──
+       شاشة الأسئلة تحتاج القائمة الافتراضية بمعرّفاتها قبل أي دخول غرفة،
+       عشان يقدر اللاعب يطفّي سؤالًا أو يعدّل عليه وهو خارج اللعب. نقرأها
+       من هنا لا ننسخها في الصفحة: نسختان من نفس البنك تفترقان بأول تعديل،
+       فيصير السؤال المطفَّأ في الصفحة شغّالًا في الخادم بلا سبب ظاهر. */
+    if (url.pathname === '/tari/bank') {
+      if (request.method !== 'GET') return withCors(new Response('method', { status: 405 }), origin);
+      return withCors(new Response(JSON.stringify({
+        ok: true,
+        kinds: Object.fromEntries(Object.entries(TARI_KINDS).map(([k, v]) => [k, {
+          name: v.name, inputType: v.inputType, recorders: v.recorders,
+          clipMs: v.clipMs || 0, textMax: v.textMax || TARI_ANS_MAX,
+          needsOpts: !!v.needsOpts, needsTones: !!v.needsTones,
+        }])),
+        bank: TARI_BANK.map((p, i) => ({
+          id: p.kind + ':' + i, kind: p.kind, text: p.text,
+          opts: p.opts || null, tones: p.tones || null,
+        })),
+        limits: { add: TARI_ADD_MAX, text: TARI_TEXT_MAX, opt: TARI_OPT_MAX, opts: TARI_OPTS_MAX },
+      }), {
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'public, max-age=300' },
+      }), origin);
+    }
+
+    if (url.pathname === '/tari/room/create' || url.pathname === '/baloot/room/create' || url.pathname === '/bilyardo/room/create' || url.pathname === '/kirm/room/create' || url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
+      const gameNS = url.pathname.startsWith('/tari/') ? env.TARI_ROOM
+                    : url.pathname.startsWith('/baloot/') ? env.BALOOT_ROOM
                     : url.pathname.startsWith('/bilyardo/') ? env.BILLIARD_ROOM
                     : url.pathname.startsWith('/kirm/') ? env.KIRM_ROOM
                     : url.pathname.startsWith('/btaqati/') ? env.BTAQATI_ROOM
@@ -10112,7 +10141,8 @@ export default {
           if (resp.ok) noteCreate(ip);
           // الإدراج في اللوبي اختياري وصريح: بلا public:true تبقى الغرفة خاصة
           if (resp.ok && body && body.public === true && env.PUBLIC_LOBBY) {
-            const g = url.pathname.startsWith('/baloot/') ? 'baloot'
+            const g = url.pathname.startsWith('/tari/') ? 'tari'
+                    : url.pathname.startsWith('/baloot/') ? 'baloot'
                     : url.pathname.startsWith('/bilyardo/') ? 'bilyardo'
                     : url.pathname.startsWith('/kirm/') ? 'kirm'
                     : url.pathname.startsWith('/btaqati/') ? 'btaqati'
@@ -10172,10 +10202,10 @@ export default {
       }), origin);
     }
 
-    const match = url.pathname.match(/^\/(baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra|mutarada|squares)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra|mutarada|squares|tari)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='baloot' ? env.BALOOT_ROOM : g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : g==='shifra' ? env.SHIFRA_ROOM : g==='mutarada' ? env.HUNT_ROOM : g==='squares' ? env.SQUARES_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='baloot' ? env.BALOOT_ROOM : g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : g==='shifra' ? env.SHIFRA_ROOM : g==='mutarada' ? env.HUNT_ROOM : g==='squares' ? env.SQUARES_ROOM : g==='tari' ? env.TARI_ROOM : env.MAFIA_ROOM;
       if (!gameNS) {
         return withCors(new Response(
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
@@ -10214,7 +10244,7 @@ export default {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v171';
+const WORKER_VERSION = 'v172';
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10230,6 +10260,7 @@ const LOBBY_GAMES = {
   bilyardo:{ name: 'بلياردو',       path: '/bilyardo/' },
   mutarada:{ name: 'مطاردة الحواري', path: '/mutarada/' },
   squares: { name: 'سباق المربعات', path: '/squares/' },
+  tari:    { name: 'طاريك',         path: '/tari/' },
 };
 
 /* أسماء كل الألعاب للعرض، لا الأونلاين وحدها: سجل اللاعب يشمل ما لعبه
@@ -10266,7 +10297,7 @@ const GAME_NAMES = {
   'blocked-road': 'الطريق المسدود', guest13: 'الضيف الثالث عشر', juraa: 'جرعة',
   sukoon: 'سُكون', ramad: 'رماد', murawagha: 'مُراوَغة', darbah: 'ضربة', snake: 'أفعى نيون',
   bilyardo: 'بلياردو',
-  squares: 'سباق المربعات',
+  squares: 'سباق المربعات', tari: 'طاريك',
 };
 
 /* ═══════════════════════ البلياردو (BilliardRoom) ═══════════════════════
@@ -13200,6 +13231,7 @@ async function adminPanelInner(request, env, url, body) {
         BALOOT_ROOM: !!env.BALOOT_ROOM, SHIFRA_ROOM: !!env.SHIFRA_ROOM,
         KIRM_ROOM: !!env.KIRM_ROOM, BILLIARD_ROOM: !!env.BILLIARD_ROOM,
         HUNT_ROOM: !!env.HUNT_ROOM, SQUARES_ROOM: !!env.SQUARES_ROOM,
+        TARI_ROOM: !!env.TARI_ROOM,
         CHAT_ROOM: !!env.CHAT_ROOM, DB: !!env.DB,
         ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
         ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
@@ -15966,3 +15998,1109 @@ export class SquaresRoom {
     }
   }
 }
+
+
+/* ═════════════════ طاريك — لعبة حفلات أونلاين (TariRoom) ═════════════════
+   «طاريك» = ذكرناك في السالفة. وهذا هو قلب اللعبة: كل جولة تدور حول لاعب
+   واحد اسمه **النجم**، والباقون يتفاعلون معه أو عنه — تقليدًا أو نبرةً أو
+   توقّعًا أو جملةً. مستوحاة من That's You! بإيقاع أسرع.
+
+   النقاط على **الإجماع** لا على الصح: كلّما وافق رأيَك عددٌ أكبر زادت
+   نقاطك. ما فيه جواب «صحيح» واحد يحكم الجولة.
+
+   ── لماذا الأنماط بيانات لا كود ──
+   المحرّك واحد لكل الأنماط: brief → collect → vote → reveal. ما يفرّق نمطًا
+   عن آخر أربعةُ حقول فقط — inputType (وش يُدخِل اللاعب)، recorders (مين
+   يُدخِل)، vote (هل فيه تصويت)، scoring (كيف تُوزَّع النقاط) — ومعها
+   مؤقّتاتها. ولذلك:
+     • نمط جديد  = مدخل واحد في TARI_KINDS.
+     • مطالبة جديدة = سطر واحد في البنك (أو في prompts.json عند اللاعب).
+   ولا سطر واحد في المحرّك يسأل «هل هذا نمط التقليد؟». هذا ليس ترفًا
+   معماريًا: الصور والرسم مؤجّلان عمدًا لنسخة لاحقة، وإضافتهما يومها
+   inputType:'photo' و 'draw' يمرّان على نفس المحرّك بلا تغيير سطر فيه —
+   ما يتغيّر هو عنصر الإدخال في الصفحة وحده.
+
+   ── الصوت: تخزين صفر على أي سيرفر ──
+   التسجيلات **لا تدخل this.room أبدًا**، وthis.room وحده هو ما يُكتب في
+   state.storage. مكانها this.clips: خريطة في ذاكرة الكائن، تُمسح عند
+   بداية كل جولة وعند نهايتها وعند انتهاء اللعبة وعند طرد صاحبها. سقوطُ
+   الكائن أو نشرةٌ جديدة يمسحانها كذلك — وهذا مقصود لا عَرَض: ما فيه
+   لحظة واحدة تكون فيها نسخةٌ من صوت أحدٍ على قرص.
+   وحتى في الذاكرة: المقطع يُبَث لمن يحق له سماعه فقط، ولا يُبَث تلقائيًا
+   في الحالة العامّة — يُطلَب بـ getClip ويُفحَص الحق عند كل طلب.        */
+
+const TARI_MAXP = 9;
+const TARI_MINP = 3;
+
+/* سقف المقطع بعد base64. ٦ ثوانٍ بـ24kbps ≈ ٢٤ ألف حرف؛ سفاري يسجّل
+   mp4 بمعدّل أعلى فيصل ~٦٥ ألفًا. ٢٤٠ ألفًا تعطي هامشًا واسعًا وتبقى
+   بعيدة جدًا عن سقف رسالة WebSocket (١ ميغا). */
+const TARI_CLIP_MAX = 240 * 1024;
+const TARI_CLIP_MIME = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/aac'];
+
+/* سقف بنك اللاعب المخصّص: المطالبات تُرسل من المضيف عند البدء وتعيش في
+   this.room، فلها سقفٌ صريح — بلاه يصير حجم الغرفة المحفوظة بيد العميل. */
+const TARI_ADD_MAX = 200;
+const TARI_TEXT_MAX = 140;
+const TARI_OPT_MAX = 40;
+const TARI_OPTS_MAX = 6;
+const TARI_ANS_MAX = 70;
+
+/* ── أنماط الجولات ──
+   inputType : audio | text | choice        ← وسيأتي photo/draw بلا تغيير محرّك
+   recorders : all | others | chain         ← مين يُدخل هذي الجولة
+   vote      : pickOne | none               ← هل بعد الجمع تصويت
+   scoring   : { vote, agree, part, top }   ← كل رقم نقاطٌ تُوزَّع، والصفر يُلغي بابه
+       vote  : لصاحب المُدخَل عن كل صوت ناله
+       agree : للمصوِّت عن كل لاعبٍ آخر وافق اختياره  ← هذا هو «الإجماع»
+       part  : لمن شارك أصلًا
+       top   : زيادة لصاحب أعلى الأصوات
+   starAside : النجم يُدخِل أيضًا لكن خارج الحساب، ويُكشف مُدخَله في العرض
+               (وجوده يمنع شاشة انتظار للنجم، وهو نصف متعة الجولة)          */
+const TARI_KINDS = {
+  mimic: {
+    name: 'تقليد',
+    inputType: 'audio', recorders: 'others', vote: 'pickOne',
+    scoring: { vote: 10, agree: 5, part: 2, top: 8 },
+    clipMs: 6000, collectMs: 34000, voteMs: 22000, revealMs: 8000, revealPerItemMs: 2500,
+    anon: true, ask: 'أي تقليد أقرب لـ{نجم}؟',
+  },
+  tone: {
+    name: 'نبرة',
+    inputType: 'audio', recorders: 'all', vote: 'pickOne',
+    scoring: { vote: 10, agree: 5, part: 2, top: 8 },
+    clipMs: 6000, collectMs: 32000, voteMs: 22000, revealMs: 8000, revealPerItemMs: 2500,
+    /* النبرة تُعرَض مع المقطع وقت التصويت رغم إخفاء الاسم: بدونها ما فيه
+       شيء يُحكَم عليه — «مين أصدق؟» بلا معرفة النبرة المطلوبة سؤال بلا معنى. */
+    needsTones: true,                // ولا نبرة = لا جولة
+    anon: true, tagged: true, ask: 'مين طلعت نبرته أصدق؟',
+  },
+  guess: {
+    name: 'توقّع الأغلبية',
+    inputType: 'choice', recorders: 'all', vote: 'none', starAside: true,
+    needsOpts: true,                 // مطالبةٌ بلا خيارات ناقصة، فتُرفض
+    scoring: { agree: 8 },
+    collectMs: 24000, revealMs: 11000,
+    anon: false, ask: '',
+  },
+  free: {
+    name: 'نص حر',
+    inputType: 'text', recorders: 'all', vote: 'pickOne', starAside: true,
+    scoring: { vote: 10, agree: 5, part: 2, top: 8 },
+    textMax: TARI_ANS_MAX, collectMs: 34000, voteMs: 24000, revealMs: 10000, revealPerItemMs: 0,
+    anon: true, ask: 'أي جواب يشبه {نجم} أكثر؟',
+  },
+  chain: {
+    name: 'السلسلة',
+    /* finaleKind: أي نمط يحمل هذي الراية هو ختام اللعبة. راية لا اسم،
+       فتبديل الختام لاحقًا يبقى تعديل بيانات كذلك. */
+    finaleKind: true,
+    inputType: 'audio', recorders: 'chain', vote: 'pickOne',
+    scoring: { vote: 10, agree: 5, part: 8, top: 15 },
+    clipMs: 6000, turnMs: 26000, voteMs: 24000, revealMs: 9000, revealPerItemMs: 3000,
+    anon: false, ask: 'أي حلقة ضحّكتكم أكثر؟',
+  },
+};
+
+/* البنك الافتراضي. كل مطالبة لها معرّف ثابت (kind:i) عشان يقدر اللاعب
+   يطفّيها من شاشة الأسئلة بلا حذف من الكود. {نجم} يُستبدل باسم النجم،
+   و{نبرة} بنبرة اللاعب نفسه في نمط النبرة. */
+/* نمط الختام يُعرف من رايته لا من اسمه — نقطة واحدة يقرأها المحرّك. */
+const TARI_FINALE = Object.keys(TARI_KINDS).find(k => TARI_KINDS[k].finaleKind) || null;
+
+const TARI_BANK = [
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يرد على مكالمة ما يبيها' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يطلب طلبه المعتاد من المطعم' },
+  { kind: 'mimic', text: 'قلّد {نجم} أول ما يصحى من النوم' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يحاول يقنعكم بفكرة سخيفة' },
+  { kind: 'mimic', text: 'قلّد ضحكة {نجم}' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يشرح شي ما يفهمه' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يعتذر عن تأخّره' },
+  { kind: 'mimic', text: 'قلّد {نجم} وهو يفاصل على السعر' },
+
+  { kind: 'tone', text: 'قول بنبرة {نبرة}: «ما توقعت هذا منك أبدًا»', tones: ['غاضب', 'خايف', 'متحمّس', 'زعلان', 'مستهزئ'] },
+  { kind: 'tone', text: 'قول بنبرة {نبرة}: «طيب… وش الخطة الحين؟»', tones: ['غاضب', 'خايف', 'متحمّس', 'ملل قاتل', 'واثق زيادة'] },
+  { kind: 'tone', text: 'قول بنبرة {نبرة}: «أنا قلت لكم من البداية»', tones: ['متشمّت', 'زعلان', 'متحمّس', 'خايف', 'هادئ جدًا'] },
+  { kind: 'tone', text: 'كمّل بنبرة {نبرة}: «لو تدرون وش صار اليوم…»', tones: ['متحمّس', 'خايف', 'غاضب', 'نعسان', 'غامض'] },
+  { kind: 'tone', text: 'قول بنبرة {نبرة}: «لا لا لا، ارجع اشرح لي من الأول»', tones: ['غاضب', 'مستمتع', 'خايف', 'مصدوم', 'ساخر'] },
+  { kind: 'tone', text: 'قول بنبرة {نبرة}: «خلاص، أنا موافق»', tones: ['متردّد', 'متحمّس', 'يائس', 'غاضب', 'مشكوك فيه'] },
+
+  { kind: 'guess', text: 'وش يسوي {نجم} لو وصل المطعم ولقى الطلب غلط؟', opts: ['يأكله وما يقول شي', 'ينادي العامل بهدوء', 'يسوي مشكلة', 'يطلع ويطلب من مكان ثاني'] },
+  { kind: 'guess', text: 'وش أول شي يسويه {نجم} أول ما يوصل البيت؟', opts: ['يرمي نفسه على السرير', 'يفتح الثلاجة', 'يفتح جواله ساعة', 'يبدأ يرتّب'] },
+  { kind: 'guess', text: 'لو ضاع جوال {نجم}، وش أول رد فعل؟', opts: ['يدور بهدوء', 'يتّهم أقرب واحد له', 'ينهار تمامًا', 'يقول «معليه» ويكمل'] },
+  { kind: 'guess', text: 'لو صار {نجم} مسؤولًا عن الرحلة، وش يصير؟', opts: ['جدول دقيقة بدقيقة', 'يضيّعنا وينكر', 'ينسى الحجز', 'ينجح ويذكّرنا كل يوم'] },
+  { kind: 'guess', text: 'وش يطلب {نجم} لو عزمناه على عشاء؟', opts: ['أغلى شي في القائمة', 'نفس طلب اللي جنبه', 'شي ما أحد سمع فيه', 'يقول «أنا شبعان» ثم يأكل من الكل'] },
+  { kind: 'guess', text: 'لو تأخّرنا على {نجم} ساعة، وش يسوي؟', opts: ['يتصل كل خمس دقائق', 'يطلع ويرجع البيت', 'ما ينتبه أصلًا', 'يجي بعدنا بساعتين'] },
+  { kind: 'guess', text: 'مين يشبه {نجم} في المجموعة أكثر؟', opts: ['أهدأ واحد فينا', 'أعلى واحد صوت', 'اللي دايم متأخّر', 'اللي دايم يخطّط'] },
+  { kind: 'guess', text: 'وش يسوي {نجم} في اجتماع ممل؟', opts: ['يتظاهر بالانتباه', 'ينام صح', 'يسأل سؤالًا يطوّل الاجتماع', 'يطلع بحجّة'] },
+
+  { kind: 'free', text: 'كمّل: أكثر جملة يقولها {نجم} كل يوم هي…' },
+  { kind: 'free', text: 'كمّل: لو صار {نجم} رئيسًا، أول قرار له…' },
+  { kind: 'free', text: 'كمّل: أغرب شي ممكن تلقاه في سيارة {نجم}…' },
+  { kind: 'free', text: 'اكتب عذر {نجم} المفضّل للتأخير' },
+  { kind: 'free', text: 'كمّل: {نجم} ما يقدر يعيش بدون…' },
+  { kind: 'free', text: 'اكتب عنوان فيلم عن حياة {نجم}' },
+  { kind: 'free', text: 'كمّل: أسوأ نصيحة ممكن يعطيك إياها {نجم}…' },
+  { kind: 'free', text: 'كمّل: لو دخل {نجم} مسابقة، بيفوز بجائزة…' },
+
+  { kind: 'chain', text: 'القهوة بردت والسالفة ما خلصت والباب مفتوح' },
+  { kind: 'chain', text: 'سبع سيارات وقفت عند البقالة ولا واحد نزل' },
+  { kind: 'chain', text: 'خالتي تقول إن القط يفهم عربي أفصح مني' },
+  { kind: 'chain', text: 'الرحلة تأخّرت ساعتين وأنا نسيت الشنطة في البيت' },
+  { kind: 'chain', text: 'ثلاث ثواني وانطفت الكهرباء والكيكة نص مستوية' },
+];
+
+/* المطالبة تُسلّم للمحرّك «مُسوّاة»: ما ينقصها يُكمَّل من نمطها.
+   وهنا بالضبط نقطة الدمج: الافتراضي + المخصّص + المطفَّأ. */
+function tariNormPrompt(p, id) {
+  if (!p || typeof p !== 'object') return null;
+  const kind = TARI_KINDS[p.kind] ? p.kind : null;
+  if (!kind) return null;
+  const text = cleanText(p.text, TARI_TEXT_MAX);
+  if (!text) return null;
+  const out = { id: String(id), kind, text };
+  if (Array.isArray(p.opts)) {
+    const opts = [];
+    for (const o of p.opts) {
+      const s = cleanText(o, TARI_OPT_MAX);
+      if (s && !opts.includes(s)) opts.push(s);
+      if (opts.length >= TARI_OPTS_MAX) break;
+    }
+    if (opts.length >= 2) out.opts = opts;
+  }
+  if (Array.isArray(p.tones)) {
+    const tones = [];
+    for (const t of p.tones) {
+      const s = cleanText(t, 24);
+      if (s && !tones.includes(s)) tones.push(s);
+      if (tones.length >= TARI_OPTS_MAX) break;
+    }
+    if (tones.length) out.tones = tones;
+  }
+  /* المطالبة الناقصة تُسقط هنا بدل أن تفجّر جولةً في منتصف اللعب.
+     وما ينقصها يقوله النمط عن نفسه (needsOpts / needsTones) — لا شرطٌ
+     على اسمه. هذا ما يجعل نمطًا قادمًا يُضاف بمدخل بيانات واحد. */
+  const k = TARI_KINDS[kind];
+  if (k.needsOpts && !out.opts) return null;
+  if (k.needsTones && !out.tones) return null;
+  return out;
+}
+
+/* ── دمج البنك: الافتراضي + إضافات اللاعب − المطفَّأ ──
+   يُنادى مرة واحدة عند بدء اللعبة. الإضافات تجي من المضيف (ملف
+   prompts.json أو شاشة الأسئلة في الصفحة) — مثل خريطة المطاردة تمامًا:
+   بيانات عامّة يراها الجميع على أي حال، فلا سرّ فيها يُحمى، ووجودها عند
+   العميل يعني أن إضافة سؤال ما تحتاج نشرة وركر.
+   والبنك الافتراضي يبقى في الخادم: عميلٌ لم يرسل شيئًا تشتغل عنده اللعبة. */
+function tariBuildBank(add, off) {
+  const dead = new Set();
+  if (Array.isArray(off)) for (const k of off.slice(0, TARI_ADD_MAX * 2)) {
+    if (typeof k === 'string') dead.add(k.slice(0, 40));
+  }
+  const bank = [];
+  TARI_BANK.forEach((p, i) => {
+    const id = p.kind + ':' + i;
+    if (dead.has(id)) return;
+    const n = tariNormPrompt(p, id);
+    if (n) bank.push(n);
+  });
+  if (Array.isArray(add)) {
+    let n = 0;
+    for (const p of add) {
+      if (n >= TARI_ADD_MAX) break;
+      const norm = tariNormPrompt(p, 'x:' + n);
+      if (!norm) continue;
+      /* نصٌّ مكرّر حرفيًا لا يُضاف مرّتين: المستخدم يستورد ملفه مرّتين
+         بالخطأ فتصير نصف الجولات نفس السؤال. */
+      if (bank.some(b => b.kind === norm.kind && b.text === norm.text)) continue;
+      bank.push(norm);
+      n++;
+    }
+  }
+  return bank;
+}
+
+function tariShuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = randInt(i + 1); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+
+export class TariRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.sockets = new Map();
+    this.timer = null;
+    /* ⚠️ الحدّ الفاصل في كل هذا الملف: this.clips في الذاكرة، وthis.room
+       على القرص. أي سطر ينقل مقطعًا من الأولى للثانية يكسر «تخزين صفر». */
+    this.clips = new Map();     // subId -> { mime, b64, ms }
+    this.state.blockConcurrencyWhile(async () => {
+      this.room = (await this.state.storage.get('room')) || this.blankRoom();
+      /* مقاطع الجولة ماتت مع الذاكرة. لو رجع الكائن ومرحلةُ جمعٍ أو
+         تصويتٍ صوتية معلّقة، فما فيه ما يُسمَع — نرجّع الغرفة للردهة
+         بدل أن تعلق على شاشة تصويتٍ فارغة ست ساعات. */
+      if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
+        const k = TARI_KINDS[this.room.kind];
+        if (k && k.inputType === 'audio' && this.room.phase !== 'brief') this.room.lostAudio = true;
+      }
+    });
+  }
+
+  blankRoom() {
+    return {
+      code: null, hostId: null, phase: 'lobby',   // lobby|brief|collect|vote|reveal|over
+      players: [],
+      bank: [], used: [],
+      totalRounds: 0, finale: true, wantRounds: 0,
+      round: 0, kindBag: [], starQueue: [],
+      kind: '', prompt: null, starId: null, ask: '',
+      tones: null,     // pid -> نبرة الجولة (نمط النبرة وحده)
+      subs: {},        // pid -> { has, text?, choice?, tag?, skipped? }   ← لا صوت هنا أبدًا
+      votes: {},       // pid -> subId
+      order: [],       // ترتيب العرض/السلسلة
+      turn: 0, turnEndsAt: 0, chainText: '', chainSrc: null,
+      result: null,
+      endsAt: 0, lostAudio: false,
+      log: [],
+    };
+  }
+
+  /* ── مسح المقاطع ── نقطة واحدة، تُنادى من كل مكان يجب أن يُمحى فيه صوت. */
+  purgeClips() { this.clips = new Map(); }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname.endsWith('/ws')) return this.handleWebSocket(request);
+    if (url.pathname.endsWith('/create')) return this.handleCreate(request);
+    return new Response('غير موجود', { status: 404 });
+  }
+
+  async handleCreate(request) {
+    let body;
+    try { body = await request.json(); } catch { return new Response('bad-json', { status: 400 }); }
+    const { name, roomCode } = body || {};
+    if (this.room.code && this.room.players.length && this.room.phase !== 'over') {
+      return new Response('room-exists', { status: 409 });
+    }
+    const fresh = this.blankRoom();
+    fresh.code = roomCode;
+    const hostId = crypto.randomUUID();
+    const hostToken = newSeatToken();
+    fresh.hostId = hostId;
+    fresh.players = [this.blankPlayer(hostId, cleanName(name), hostToken)];
+    this.room = fresh;
+    this.purgeClips();
+    await this.persist();
+    return Response.json({ roomCode: this.room.code, playerId: hostId, seatToken: hostToken });
+  }
+
+  blankPlayer(id, name, seatToken) {
+    return { id, name, connected: false, score: 0, seatToken, did: null, jid: null };
+  }
+
+  async handleWebSocket(request) {
+    const url = new URL(request.url);
+    if (request.headers.get('Upgrade') !== 'websocket') return new Response('يتطلب WebSocket', { status: 426 });
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+
+    const askedId = url.searchParams.get('playerId');
+    const name = url.searchParams.get('name');
+    const token = url.searchParams.get('token');
+
+    // ── التوكن أولًا، والمعرّف المعلن لا يمنح مقعدًا أبدًا ──
+    let player = this.seatByToken(token);
+    if (player) {
+      const oldId = player.id;
+      const newId = (validPlayerId(askedId) && !this.room.players.some(p => p.id === askedId)) ? askedId : oldId;
+      if (newId !== oldId) {
+        player.id = newId;
+        for (const bag of ['subs', 'votes']) {
+          if (this.room[bag] && oldId in this.room[bag]) {
+            this.room[bag][newId] = this.room[bag][oldId];
+            delete this.room[bag][oldId];
+          }
+        }
+        for (const k of Object.keys(this.room.votes || {})) {
+          if (this.room.votes[k] === oldId) this.room.votes[k] = newId;
+        }
+        this.room.order = (this.room.order || []).map(x => (x === oldId ? newId : x));
+        if (this.room.starId === oldId) this.room.starId = newId;
+        if (this.room.chainSrc === oldId) this.room.chainSrc = newId;
+        if (this.room.hostId === oldId) this.room.hostId = newId;
+        this.room.starQueue = (this.room.starQueue || []).map(x => (x === oldId ? newId : x));
+        const c = this.clips.get(oldId);
+        if (c) { this.clips.set(newId, c); this.clips.delete(oldId); }
+        const stale = this.sockets.get(oldId);
+        if (stale && stale !== server) { try { stale.close(); } catch {} }
+        this.sockets.delete(oldId);
+      }
+      player.connected = true;
+      if (name) player.name = uniqueName({ players: this.room.players.filter(p => p !== player) }, name);
+    }
+
+    if (!player) {
+      if (!this.room.code) {
+        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
+        server.send(JSON.stringify({ type: 'error', message: 'الجولة شغّالة — انتظر نهايتها وادخل' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      /* ردهةٌ ممتلئة بأشباح: مقعد المنقطع يبقى عمدًا — انقطاع ثوانٍ في
+         شبكة جوال ما يستاهل شطب مقعدٍ ونقاطٍ معه. لكن حين يزحم مقعدٌ ميت
+         داخلًا حيًّا فالحيّ أولى. لا يُشطب إلا عند الحاجة، وفي الردهة وحدها. */
+      const cap = Math.min(TARI_MAXP, MAX_PLAYERS);
+      if (this.room.players.length >= cap && this.room.phase === 'lobby') {
+        this.room.players = this.room.players.filter(p => p.connected);
+        if (!this.findPlayer(this.room.hostId)) this.room.hostId = null;
+      }
+      if (this.room.players.length >= cap) {
+        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة (٩ لاعبين)' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      const back = reclaimSeat(this.room, this.sockets, name, url.searchParams.get('jid'));
+      if (back) {
+        player = back;
+        player.connected = true;
+      } else {
+        player = this.blankPlayer(crypto.randomUUID(), uniqueName(this.room, name), newSeatToken());
+        player.connected = true;
+        this.room.players.push(player);
+      }
+      const jid = url.searchParams.get('jid');
+      if (jid && /^[a-f0-9]{32}$/i.test(jid)) player.jid = jid;
+    }
+
+    if (!this.room.hostId || !this.findPlayer(this.room.hostId)) this.room.hostId = player.id;
+    this.noteAccount(url, player);
+
+    const stale0 = this.sockets.get(player.id);
+    if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
+    this.sockets.set(player.id, server);
+    this.hostAlive();
+    this.resumePhase();
+
+    const pid = player.id;
+    server.addEventListener('message', evt => this.onMessage(pid, evt));
+    server.addEventListener('close', () => this.onClose(pid, server));
+    server.addEventListener('error', () => this.onClose(pid, server));
+
+    if (!player.seatToken) player.seatToken = newSeatToken();
+    await this.persist();
+    this.sendPrivate(pid, {
+      type: 'welcome', playerId: pid, roomCode: this.room.code, seatToken: player.seatToken,
+      kinds: this.kindsBrief(), bank: TARI_BANK.map((p, i) => ({ id: p.kind + ':' + i, kind: p.kind, text: p.text })),
+    });
+    this.broadcastState();
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /* وصف الأنماط للعميل: الصفحة تبني عنصر الإدخال من inputType وحده،
+     فما تحتاج تعرف أي شيء عن أي نمط بعينه — نفس مبدأ الخادم. */
+  kindsBrief() {
+    const out = {};
+    for (const [k, v] of Object.entries(TARI_KINDS)) {
+      out[k] = {
+        name: v.name, inputType: v.inputType, recorders: v.recorders,
+        clipMs: v.clipMs || 0, textMax: v.textMax || TARI_ANS_MAX,
+      };
+    }
+    return out;
+  }
+
+  findPlayer(id) { return this.room.players.find(p => p.id === id); }
+  activePlayers() { return this.room.players.filter(p => p.connected); }
+  nameOf(id) { const p = this.findPlayer(id); return p ? p.name : '—'; }
+
+  /* ─────────────── المؤقّتات ─────────────── */
+  setPhaseTimer(ms, fn) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(async () => { this.timer = null; try { await fn(); } catch (e) {} }, Math.max(0, ms));
+  }
+  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
+
+  /* المؤقّت يعيش في ذاكرة الكائن وحدها، والنشرة الجديدة تُعيد تشغيل كل
+     الكائنات — فتنجو الحالة ويضيع المؤقّت وتتجمّد الغرفة للأبد. أي رسالة
+     أو اتصال جديد يعيد تسليحه من endsAt المحفوظة. */
+  resumePhase() {
+    if (this.timer) return;
+    let due = null;
+    try { due = this.pendingPhase(); } catch { return; }
+    if (!due || typeof due.fn !== 'function') return;
+    this.setPhaseTimer(Math.max(0, Number(due.ms) || 0), due.fn);
+  }
+
+  pendingPhase() {
+    const r = this.room;
+    switch (r.phase) {
+      case 'brief':   return { ms: r.endsAt - Date.now() + 200, fn: () => this.startCollect() };
+      case 'collect': return this.isChain()
+        ? { ms: r.turnEndsAt - Date.now() + 300, fn: () => this.chainTimeout() }
+        : { ms: r.endsAt - Date.now() + 300, fn: () => this.endCollect() };
+      case 'vote':    return { ms: r.endsAt - Date.now() + 300, fn: () => this.endVote() };
+      case 'reveal':  return { ms: r.endsAt - Date.now() + 300, fn: () => this.afterReveal() };
+      default: return null;
+    }
+  }
+
+  kind() { return TARI_KINDS[this.room.kind] || null; }
+  isChain() { const k = this.kind(); return !!k && k.recorders === 'chain'; }
+
+  /* مين يُتوقَّع منه إدخالٌ هذي الجولة. المنقطع خارج الحساب دائمًا —
+     وهذا وحده ما يمنع «ننتظر اللاعبين» حين يقفل أحدهم التبويب. */
+  expected() {
+    const r = this.room;
+    const k = this.kind();
+    if (!k) return [];
+    const live = this.activePlayers();
+    if (k.recorders === 'chain') return r.order.filter(id => { const p = this.findPlayer(id); return p && p.connected; });
+    if (k.recorders === 'others') return live.filter(p => p.id !== r.starId).map(p => p.id);
+    return live.map(p => p.id);
+  }
+
+  allSubmitted() {
+    const exp = this.expected();
+    if (!exp.length) return true;
+    return exp.every(id => this.room.subs[id]);
+  }
+
+  /* المصوّتون: كل متصل عدا من ما عنده إلا مُدخَله هو. النجم يصوّت دائمًا
+     في جولات others — وهذا مقصود، رأيه جزء من الإجماع. */
+  voters() {
+    const r = this.room;
+    return this.activePlayers()
+      .filter(p => (r.order || []).some(id => id !== p.id))
+      .map(p => p.id);
+  }
+  allVoted() {
+    const v = this.voters();
+    if (!v.length) return true;
+    return v.every(id => this.room.votes[id]);
+  }
+
+  /* ─────────────── دورة اللعبة ─────────────── */
+  async startGame(cfg) {
+    const r = this.room;
+    const live = this.activePlayers();
+    if (live.length < TARI_MINP) throw new Error('تحتاجون ثلاثة لاعبين على الأقل.');
+    r.bank = tariBuildBank(cfg && cfg.add, cfg && cfg.off);
+    if (!r.bank.length) throw new Error('بنك الأسئلة فاضي — رجّع الأسئلة الافتراضية.');
+    r.finale = cfg && cfg.finale === false ? false : true;
+    /* السلسلة تحتاج نصًّا أصليًا: بلا مطالبة من نمطها لا ختام. */
+    if (r.finale && (!TARI_FINALE || !r.bank.some(p => p.kind === TARI_FINALE))) r.finale = false;
+    const asked = Number(cfg && cfg.rounds);
+    const base = Number.isFinite(asked) && asked > 0 ? Math.min(12, Math.max(3, Math.round(asked))) : live.length;
+    r.wantRounds = base;
+    r.totalRounds = base + (r.finale ? 1 : 0);
+    r.round = 0;
+    r.used = [];
+    r.kindBag = [];
+    r.starQueue = [];
+    r.log = [];
+    for (const p of r.players) p.score = 0;
+    await this.startRound();
+  }
+
+  /* كيس الأنماط: يُملأ بأنماط غير الختام مخلوطة، فما تتكرّر جولتان
+     متتاليتان بنفس الشكل ما دام في البنك تنوّع. */
+  nextKind() {
+    const r = this.room;
+    const have = new Set(r.bank.map(p => p.kind));
+    const pool = Object.keys(TARI_KINDS).filter(k => !TARI_KINDS[k].finaleKind && have.has(k));
+    if (!pool.length) return r.bank.length ? r.bank[0].kind : 'free';
+    if (!r.kindBag.length) r.kindBag = tariShuffle(pool);
+    return r.kindBag.shift();
+  }
+
+  nextStar() {
+    const r = this.room;
+    const live = this.activePlayers().map(p => p.id);
+    r.starQueue = (r.starQueue || []).filter(id => live.includes(id));
+    if (!r.starQueue.length) r.starQueue = tariShuffle(live);
+    return r.starQueue.shift() || (live[0] || null);
+  }
+
+  pickPrompt(kind) {
+    const r = this.room;
+    const of = r.bank.filter(p => p.kind === kind);
+    if (!of.length) return null;
+    let avail = of.filter(p => !r.used.includes(p.id));
+    if (!avail.length) { r.used = r.used.filter(id => !of.some(p => p.id === id)); avail = of; }
+    const pick = avail[randInt(avail.length)];
+    r.used.push(pick.id);
+    return pick;
+  }
+
+  async startRound() {
+    const r = this.room;
+    this.clearPhaseTimer();
+    this.purgeClips();           // ← لا صوت يعبر حدود الجولة
+    r.lostAudio = false;
+    r.round++;
+    if (r.round > r.totalRounds) return this.finish();
+
+    const isFinale = r.finale && r.round === r.totalRounds;
+    const kindKey = isFinale ? TARI_FINALE : this.nextKind();
+    const k = TARI_KINDS[kindKey];
+    const prompt = this.pickPrompt(kindKey);
+    if (!prompt) {                 // بنك بلا مطالبة لهذا النمط: تخطَّ الجولة
+      if (isFinale) { r.finale = false; r.totalRounds--; }
+      return r.round > r.totalRounds ? this.finish() : this.startRound();
+    }
+
+    r.kind = kindKey;
+    r.prompt = { id: prompt.id, text: prompt.text, opts: prompt.opts || null };
+    r.starId = (k.recorders === 'chain') ? null : this.nextStar();
+    r.subs = {}; r.votes = {}; r.result = null; r.order = []; r.turn = 0;
+    r.turnEndsAt = 0; r.chainText = ''; r.chainSrc = null;
+    r.ask = String(k.ask || '').replace(/\{نجم\}/g, r.starId ? this.nameOf(r.starId) : 'المجموعة');
+
+    if (k.recorders === 'chain') {
+      r.order = tariShuffle(this.activePlayers().map(p => p.id));
+      r.chainText = prompt.text;
+    } else if (prompt.tones && prompt.tones.length) {
+      /* لكل مسجّل نبرته: التنوّع الحقيقي داخل الجولة الواحدة، وبه يصير
+         التصويت سؤالًا له معنى بدل «مين صوته أحلى». تُوزَّع على كل
+         المقاعد لا المتصلين وحدهم، فالعائدُ من انقطاعٍ يجد نبرته كما هي. */
+      const bag = tariShuffle(prompt.tones);
+      r.tones = {};
+      tariShuffle(r.players.map(p => p.id)).forEach((id, i) => { r.tones[id] = bag[i % bag.length]; });
+    } else {
+      r.tones = null;
+    }
+
+    r.phase = 'brief';
+    r.endsAt = Date.now() + 4200;
+    r.log.unshift(`جولة ${r.round}: ${k.name}` + (r.starId ? ` — ${this.nameOf(r.starId)}` : ''));
+    r.log = r.log.slice(0, 6);
+    await this.persist();
+    this.broadcastState();
+    this.setPhaseTimer(4200, () => this.startCollect());
+  }
+
+  async startCollect() {
+    const r = this.room;
+    if (r.phase !== 'brief') return;
+    const k = this.kind();
+    this.clearPhaseTimer();
+    r.phase = 'collect';
+    if (k.recorders === 'chain') {
+      r.turn = 0;
+      r.order = r.order.filter(id => { const p = this.findPlayer(id); return p && p.connected; });
+      if (!r.order.length) return this.endCollect();
+      r.chainSrc = null;
+      r.turnEndsAt = Date.now() + k.turnMs;
+      r.endsAt = r.turnEndsAt;
+      await this.persist();
+      this.broadcastState();
+      this.setPhaseTimer(k.turnMs, () => this.chainTimeout());
+      return;
+    }
+    r.endsAt = Date.now() + k.collectMs;
+    await this.persist();
+    this.broadcastState();
+    this.setPhaseTimer(k.collectMs, () => this.endCollect());
+  }
+
+  /* دور السلسلة انتهى بلا تسجيل: يُشطب ويمشي الدور. الجولة ما تنتظر أحدًا. */
+  async chainTimeout() {
+    const r = this.room;
+    if (r.phase !== 'collect' || !this.isChain()) return;
+    const id = r.order[r.turn];
+    if (id && !r.subs[id]) r.subs[id] = { has: false, skipped: true };
+    await this.chainAdvance();
+  }
+
+  async chainAdvance() {
+    const r = this.room;
+    const k = this.kind();
+    r.turn++;
+    // نتخطّى المنقطعين فورًا بدل انتظار مهلتهم كاملة
+    while (r.turn < r.order.length) {
+      const id = r.order[r.turn];
+      const p = this.findPlayer(id);
+      if (p && p.connected) break;
+      r.subs[id] = { has: false, skipped: true };
+      r.turn++;
+    }
+    if (r.turn >= r.order.length) return this.endCollect();
+    /* من يسمعه صاحب الدور: آخر من سجّل فعلًا قبله. ما قبله كلهم تخطّوا؟
+       إذن هو أوّل السلسلة ويرى النص الأصلي. */
+    r.chainSrc = null;
+    for (let i = r.turn - 1; i >= 0; i--) {
+      const prev = r.order[i];
+      if (r.subs[prev] && r.subs[prev].has && this.clips.has(prev)) { r.chainSrc = prev; break; }
+    }
+    r.turnEndsAt = Date.now() + k.turnMs;
+    r.endsAt = r.turnEndsAt;
+    await this.persist();
+    this.broadcastState();
+    this.setPhaseTimer(k.turnMs, () => this.chainTimeout());
+  }
+
+  async endCollect() {
+    const r = this.room;
+    if (r.phase !== 'collect') return;
+    this.clearPhaseTimer();
+    const k = this.kind();
+
+    /* ترتيب العرض: من أدخل فعلًا، والنجم المُستثنى (starAside) خارجه —
+       مُدخَله يُكشف في العرض ولا يُصوَّت عليه ولا يُحسب في الإجماع. */
+    const items = [];
+    for (const id of this.expected()) {
+      const s = r.subs[id];
+      if (!s || !s.has) continue;
+      if (k.starAside && id === r.starId) continue;
+      if (k.inputType === 'audio' && !this.clips.has(id)) continue;   // مقطع ضاع = خارج العرض
+      items.push(id);
+    }
+    r.order = k.recorders === 'chain' ? r.order.filter(id => items.includes(id)) : tariShuffle(items);
+
+    if (k.vote === 'pickOne' && r.order.length >= 2) return this.startVote();
+    return this.scoreAndReveal();
+  }
+
+  async startVote() {
+    const r = this.room;
+    const k = this.kind();
+    this.clearPhaseTimer();
+    r.phase = 'vote';
+    r.votes = {};
+    r.endsAt = Date.now() + k.voteMs;
+    await this.persist();
+    this.broadcastState();
+    this.setPhaseTimer(k.voteMs, () => this.endVote());
+  }
+
+  async endVote() {
+    if (this.room.phase !== 'vote') return;
+    this.clearPhaseTimer();
+    return this.scoreAndReveal();
+  }
+
+  /* ── الحساب: دالة واحدة لكل الأنماط ──
+     مصدر «الأصوات» يختلف: في جولة بتصويت هي r.votes، وفي جولة اختيارٍ
+     بلا تصويت (توقّع الأغلبية) فالاختيار نفسه هو الصوت. وما عدا ذلك
+     نفس الحساب حرفيًا — وهذا هو معنى أن يكون النمط بيانات. */
+  async scoreAndReveal() {
+    const r = this.room;
+    const k = this.kind();
+    const sc = k.scoring || {};
+    const gains = {};
+    const add = (id, n) => { if (!n) return; gains[id] = (gains[id] || 0) + n; };
+
+    // 1) الأصوات: إمّا تصويت صريح، أو الاختيار نفسه
+    const ballots = {};                       // voterId -> key
+    if (k.vote === 'pickOne') {
+      for (const [voter, subId] of Object.entries(r.votes)) {
+        if (r.order.includes(subId) && subId !== voter && this.findPlayer(voter)) ballots[voter] = subId;
+      }
+    } else if (k.inputType === 'choice') {
+      for (const [id, s] of Object.entries(r.subs)) {
+        if (!s || !s.has || typeof s.choice !== 'number') continue;
+        if (k.starAside && id === r.starId) continue;
+        ballots[id] = 'o' + s.choice;
+      }
+    }
+
+    const tally = {};
+    for (const key of Object.values(ballots)) tally[key] = (tally[key] || 0) + 1;
+
+    // 2) الإجماع: كل من وافقك يزيدك — هذا قلب اللعبة كلها
+    for (const [voter, key] of Object.entries(ballots)) add(voter, (sc.agree || 0) * Math.max(0, tally[key] - 1));
+
+    // 3) المشاركة، وأصوات المُدخَل، وزيادة الأعلى
+    if (k.vote === 'pickOne') {
+      for (const id of r.order) {
+        add(id, sc.part || 0);
+        add(id, (sc.vote || 0) * (tally[id] || 0));
+      }
+      let best = 0;
+      for (const id of r.order) best = Math.max(best, tally[id] || 0);
+      if (best > 0) for (const id of r.order) if ((tally[id] || 0) === best) add(id, sc.top || 0);
+    } else {
+      for (const id of Object.keys(ballots)) add(id, sc.part || 0);
+    }
+
+    for (const [id, n] of Object.entries(gains)) { const p = this.findPlayer(id); if (p) p.score += n; }
+
+    // 4) لقطة العرض — نصوص وأسماء فقط، ولا بايت صوت واحد فيها
+    const items = r.order.map(id => ({
+      id, name: this.nameOf(id),
+      audio: k.inputType === 'audio' && this.clips.has(id),
+      text: r.subs[id] && typeof r.subs[id].text === 'string' ? r.subs[id].text : null,
+      choice: r.subs[id] && typeof r.subs[id].choice === 'number' ? r.subs[id].choice : null,
+      tag: (r.subs[id] && r.subs[id].tag) || null,
+      votes: tally[id] || 0,
+      gain: gains[id] || 0,
+    }));
+    let asideText = null, asideChoice = null;
+    if (k.starAside && r.starId && r.subs[r.starId] && r.subs[r.starId].has) {
+      const s = r.subs[r.starId];
+      asideText = typeof s.text === 'string' ? s.text : null;
+      asideChoice = typeof s.choice === 'number' ? s.choice : null;
+    }
+    const optTally = [];
+    if (k.inputType === 'choice' && r.prompt && r.prompt.opts) {
+      r.prompt.opts.forEach((_, i) => optTally.push(tally['o' + i] || 0));
+    }
+    let top = null;
+    if (items.length) {
+      const m = Math.max(...items.map(x => x.votes));
+      if (m > 0) top = items.filter(x => x.votes === m).map(x => x.id);
+    }
+    r.result = {
+      items, top, optTally, asideText, asideChoice,
+      byWho: Object.fromEntries(Object.entries(ballots).map(([v, key]) => [v, key])),
+      gains,
+    };
+
+    r.phase = 'reveal';
+    const per = (k.revealPerItemMs || 0) * items.length;
+    r.endsAt = Date.now() + (k.revealMs || 8000) + per;
+    await this.persist();
+    this.broadcastState();
+    this.setPhaseTimer((k.revealMs || 8000) + per, () => this.afterReveal());
+  }
+
+  async afterReveal() {
+    const r = this.room;
+    if (r.phase !== 'reveal') return;
+    this.clearPhaseTimer();
+    this.purgeClips();            // ← «يُحذف فور انتهاء الجولة» حرفيًا
+    if (r.round >= r.totalRounds) return this.finish();
+    return this.startRound();
+  }
+
+  async finish() {
+    this.clearPhaseTimer();
+    this.purgeClips();
+    const r = this.room;
+    r.phase = 'over';
+    r.endsAt = 0;
+    r.starId = null;
+    await this.recordResults(topBy(r.players, p => p.score));
+    await this.persist();
+    this.broadcastState();
+  }
+
+  /* ─────────────── الرسائل ─────────────── */
+  async onMessage(playerId, evt) {
+    if (!this.allowMsg(playerId)) return;
+    this.resumePhase();
+    let msg; try { msg = JSON.parse(evt.data); } catch { return; }
+    if (!msg || typeof msg !== 'object') return;
+    const r = this.room;
+    const me = this.findPlayer(playerId);
+    if (!me) return;
+    const isHost = playerId === r.hostId;
+
+    try {
+      switch (msg.type) {
+        case 'startGame':
+          if (!isHost || (r.phase !== 'lobby' && r.phase !== 'over')) return;
+          await this.startGame(msg);
+          return;
+
+        case 'setOpts': {
+          if (!isHost || (r.phase !== 'lobby' && r.phase !== 'over')) return;
+          const n = Number(msg.rounds);
+          if (Number.isFinite(n)) r.wantRounds = Math.min(12, Math.max(3, Math.round(n)));
+          if (typeof msg.finale === 'boolean') r.finale = msg.finale;
+          await this.persist(); this.broadcastState();
+          return;
+        }
+
+        case 'submit': return this.onSubmit(playerId, msg);
+        case 'clip':   return this.onClip(playerId, msg);
+        case 'getClip': return this.onGetClip(playerId, msg);
+
+        case 'vote': {
+          if (r.phase !== 'vote') return;
+          const id = String(msg.id || '');
+          if (!r.order.includes(id) || id === playerId) return;
+          r.votes[playerId] = id;
+          await this.persist(); this.broadcastState();
+          if (this.allVoted()) await this.endVote();
+          return;
+        }
+
+        case 'hostForceAdvance':
+          /* المضيف — وكذلك نجمُ الجولة على شاشة جمعه: صاحب الجولة أولى
+             الناس بأن يقول «كفى، اعرضوا». وبها تختفي آخر شاشة انتظار. */
+          if (!isHost && !(r.phase === 'collect' && playerId === r.starId)) return;
+          await this.forceAdvance();
+          return;
+
+        case 'kickPlayer':
+          if (!isHost) return;
+          await this.kickPlayer(String(msg.targetId || ''));
+          return;
+
+        case 'playAgain':
+          if (!isHost || r.phase !== 'over') return;
+          this.clearPhaseTimer(); this.purgeClips();
+          r.phase = 'lobby'; r.round = 0; r.result = null; r.prompt = null;
+          r.kind = ''; r.starId = null; r.subs = {}; r.votes = {}; r.order = [];
+          for (const p of r.players) p.score = 0;
+          await this.persist(); this.broadcastState();
+          return;
+      }
+    } catch (e) {
+      this.sendPrivate(playerId, { type: 'error', message: String((e && e.message) || e) });
+    }
+  }
+
+  /* ── نص أو اختيار ── */
+  async onSubmit(playerId, msg) {
+    const r = this.room;
+    if (r.phase !== 'collect') return;
+    const k = this.kind();
+    if (!k || k.inputType === 'audio') return;
+    if (!this.expected().includes(playerId)) return;
+    if (r.subs[playerId]) return;                    // مرّة واحدة، ولا تراجع
+
+    if (k.inputType === 'choice') {
+      const i = Number(msg.choice);
+      const opts = (r.prompt && r.prompt.opts) || [];
+      if (!Number.isInteger(i) || i < 0 || i >= opts.length) return;
+      r.subs[playerId] = { has: true, choice: i };
+    } else {
+      const t = cleanText(msg.text, k.textMax || TARI_ANS_MAX);
+      if (!t) return;
+      r.subs[playerId] = { has: true, text: t };
+    }
+    await this.persist();
+    this.broadcastState();
+    if (this.allSubmitted()) await this.endCollect();
+  }
+
+  /* ── مقطع صوتي ──
+     يدخل الذاكرة ولا يمسّ this.room: هناك لا تُحفظ إلا رايةُ «سجّل».  */
+  async onClip(playerId, msg) {
+    const r = this.room;
+    if (r.phase !== 'collect') return;
+    const k = this.kind();
+    if (!k || k.inputType !== 'audio') return;
+    if (!this.expected().includes(playerId)) return;
+    if (this.isChain() && r.order[r.turn] !== playerId) return;      // كلٌّ في دوره
+    if (r.subs[playerId]) return;
+
+    const b64 = typeof msg.b64 === 'string' ? msg.b64 : '';
+    if (!b64 || b64.length > TARI_CLIP_MAX) {
+      this.sendPrivate(playerId, { type: 'error', message: 'التسجيل كبير — أعِد المحاولة بمقطع أقصر.' });
+      return;
+    }
+    if (!/^[A-Za-z0-9+/=]+$/.test(b64)) return;
+    const rawMime = String(msg.mime || 'audio/webm').split(';')[0].trim().toLowerCase();
+    const mime = TARI_CLIP_MIME.includes(rawMime) ? rawMime : 'audio/webm';
+    const ms = Math.min(Number(msg.ms) || 0, (k.clipMs || 6000) + 1500);
+
+    this.clips.set(playerId, { mime, b64, ms });
+    r.subs[playerId] = { has: true, ms, tag: (r.tones && r.tones[playerId]) || null };
+
+    await this.persist();
+    this.broadcastState();
+    if (this.isChain()) return this.chainAdvance();
+    if (this.allSubmitted()) await this.endCollect();
+  }
+
+  /* ── تسليم مقطع عند الطلب ──
+     ما يُبَث تلقائيًا: يُطلَب، ويُفحَص الحق عند كل طلب. وفي السلسلة
+     تحديدًا الحقّ ضيّق جدًا — صاحب الدور يسمع سابقه وحده، ولا أحد
+     يسمع شيئًا قبل أن تكتمل. بدون هذا الحارس تنهار اللعبة: من يسمع
+     الأصل ما عاد يقلّد تشويهًا. */
+  onGetClip(playerId, msg) {
+    const r = this.room;
+    const id = String((msg && msg.id) || '');
+    if (!this.findPlayer(playerId)) return;
+    let ok = false;
+    if (r.phase === 'collect' && this.isChain()) {
+      ok = (r.order[r.turn] === playerId) && !!r.chainSrc && id === r.chainSrc;
+    } else if (r.phase === 'vote' || r.phase === 'reveal') {
+      ok = r.order.includes(id);
+    }
+    if (!ok) { this.sendPrivate(playerId, { type: 'clipMiss', id }); return; }
+    const c = this.clips.get(id);
+    if (!c) { this.sendPrivate(playerId, { type: 'clipMiss', id }); return; }
+    this.sendPrivate(playerId, { type: 'clip', id, mime: c.mime, b64: c.b64, ms: c.ms });
+  }
+
+  async forceAdvance() {
+    const r = this.room;
+    switch (r.phase) {
+      case 'brief':   return this.startCollect();
+      case 'collect': return this.isChain() ? this.chainTimeout() : this.endCollect();
+      case 'vote':    return this.endVote();
+      case 'reveal':  return this.afterReveal();
+      default: return;
+    }
+  }
+
+  async onClose(playerId, ws) {
+    /* الإغلاق المتأخّر لمقبسٍ استُبدل أصلًا يشطب مقعد الاتصال الجديد.
+       نتجاهله ما لم يكن هو المقبس المسجَّل. */
+    if (ws && this.sockets.get(playerId) !== ws) return;
+    const p = this.findPlayer(playerId);
+    if (p) p.connected = false;
+    this.sockets.delete(playerId);
+    this.migrateHostIfNeeded();
+    await this.persist();
+    this.broadcastState();
+    await this.maybeAdvanceOnDisconnect();
+  }
+
+  migrateHostIfNeeded() {
+    const r = this.room;
+    const host = r.players.find(p => p.id === r.hostId);
+    if (host && host.connected) return false;
+    const next = r.players.find(p => p.connected && p.id !== r.hostId);
+    if (!next) return false;
+    r.hostId = next.id;
+    r.log.unshift(`انتقلت الاستضافة إلى ${next.name}`);
+    r.log = r.log.slice(0, 6);
+    this.broadcastPublic({ type: 'hostChanged', hostId: next.id, hostName: next.name });
+    return true;
+  }
+
+  async kickPlayer(targetId) {
+    const r = this.room;
+    if (!targetId || targetId === r.hostId) return;
+    const t = this.findPlayer(targetId);
+    if (!t) return;
+    this.sendPrivate(targetId, { type: 'kicked' });
+    const ws = this.sockets.get(targetId);
+    if (ws) { try { ws.close(4002, 'kicked'); } catch {} }
+    this.sockets.delete(targetId);
+    r.players = r.players.filter(p => p.id !== targetId);
+    delete r.subs[targetId];
+    delete r.votes[targetId];
+    if (r.tones) delete r.tones[targetId];
+    r.order = r.order.filter(id => id !== targetId);
+    this.clips.delete(targetId);        // صوته يُمحى معه فورًا
+    if (r.starId === targetId) r.starId = null;
+    this.migrateHostIfNeeded();
+    await this.persist();
+    this.broadcastState();
+    await this.maybeAdvanceOnDisconnect();
+  }
+
+  /* المنقطع لا يعلّق الجولة أبدًا: كل انقطاع يُعيد سؤال «هل اكتمل؟» */
+  async maybeAdvanceOnDisconnect() {
+    const r = this.room;
+    if (r.phase === 'collect') {
+      if (this.isChain()) {
+        const cur = r.order[r.turn];
+        const p = cur ? this.findPlayer(cur) : null;
+        if (!p || !p.connected) { if (cur && !r.subs[cur]) r.subs[cur] = { has: false, skipped: true }; await this.chainAdvance(); }
+      } else if (this.allSubmitted()) await this.endCollect();
+    } else if (r.phase === 'vote' && this.allVoted()) await this.endVote();
+  }
+
+  /* ─────────────── البث ─────────────── */
+  publicPlayers() {
+    const r = this.room;
+    return r.players.map(p => ({
+      id: p.id, name: p.name, connected: p.connected, score: p.score | 0,
+      host: p.id === r.hostId, star: p.id === r.starId,
+      done: !!(r.subs[p.id] && r.subs[p.id].has),
+      voted: !!r.votes[p.id],
+    }));
+  }
+
+  stateFor(playerId) {
+    const r = this.room;
+    const k = this.kind();
+    const me = this.findPlayer(playerId);
+    const mine = r.subs[playerId] || null;
+    const myTone = (r.tones && r.tones[playerId]) || null;
+
+    /* نص المطالبة كما يراه هذا اللاعب: {نجم} للجميع، و{نبرة} له وحده. */
+    let text = (r.prompt && r.prompt.text) || '';
+    if (text && r.starId) text = text.replace(/\{نجم\}/g, this.nameOf(r.starId));
+    if (text && myTone) text = text.replace(/\{نبرة\}/g, myTone);
+
+    const exp = this.expected();
+    const iInput = exp.includes(playerId) && !mine;
+    const chainTurn = this.isChain() ? r.order[r.turn] : null;
+
+    /* عناصر التصويت: مجهولة الاسم حين يقتضي النمط، ومعها وسمها العام
+       (النبرة) لأن الحكم بدونه بلا معنى. */
+    const showNames = !!(k && !k.anon) || r.phase === 'reveal';
+    const items = (r.phase === 'vote' || r.phase === 'reveal')
+      ? r.order.map((id, i) => ({
+          id,
+          label: showNames ? this.nameOf(id) : `مشاركة ${i + 1}`,
+          audio: !!(k && k.inputType === 'audio'),
+          text: (k && k.inputType !== 'audio' && r.subs[id]) ? (r.subs[id].text || null) : null,
+          choice: (r.subs[id] && typeof r.subs[id].choice === 'number') ? r.subs[id].choice : null,
+          tag: (k && k.tagged && r.subs[id]) ? (r.subs[id].tag || null) : null,
+          mine: id === playerId,
+        }))
+      : [];
+
+    return {
+      type: 'state',
+      now: Date.now(), code: r.code, phase: r.phase, hostId: r.hostId,
+      round: r.round, totalRounds: r.totalRounds, wantRounds: r.wantRounds, finale: r.finale,
+      endsAt: r.endsAt, minPlayers: TARI_MINP, maxPlayers: TARI_MAXP,
+      lostAudio: !!r.lostAudio,
+      kind: r.kind || null,
+      kindName: k ? k.name : '',
+      inputType: k ? k.inputType : null,
+      clipMs: k ? (k.clipMs || 0) : 0,
+      textMax: k ? (k.textMax || TARI_ANS_MAX) : TARI_ANS_MAX,
+      starId: r.starId, starName: r.starId ? this.nameOf(r.starId) : null,
+      prompt: text || null,
+      opts: (r.prompt && r.prompt.opts) || null,
+      ask: r.ask || '',
+      bankSize: (r.bank || []).length,
+      chain: this.isChain() ? {
+        turn: r.turn, total: r.order.length,
+        whoId: chainTurn, whoName: chainTurn ? this.nameOf(chainTurn) : null,
+        /* النص الأصلي لأوّل السلسلة وحده — ومن بعده لا أحد يراه حتى العرض. */
+        text: (r.phase === 'reveal') ? r.chainText
+              : (chainTurn === playerId && !r.chainSrc ? r.chainText : null),
+        srcId: (chainTurn === playerId) ? r.chainSrc : null,
+      } : null,
+      items,
+      result: r.phase === 'reveal' ? r.result : null,
+      players: this.publicPlayers(),
+      log: r.log.slice(0, 4),
+      you: {
+        id: playerId, host: playerId === r.hostId, star: playerId === r.starId,
+        score: me ? me.score | 0 : 0,
+        input: iInput, expected: exp.includes(playerId),
+        tone: myTone,
+        submitted: !!mine, myText: (mine && mine.text) || null,
+        myChoice: (mine && typeof mine.choice === 'number') ? mine.choice : null,
+        myVote: r.votes[playerId] || null,
+        canVote: r.phase === 'vote' && r.order.some(id => id !== playerId),
+      },
+    };
+  }
+
+  sendState(ws, playerId) { try { ws.send(JSON.stringify(this.stateFor(playerId))); } catch {} }
+  broadcastState() { for (const [pid, ws] of this.sockets) this.sendState(ws, pid); }
+  broadcastPublic(payload) {
+    const s = JSON.stringify(payload);
+    for (const [, ws] of this.sockets) { try { ws.send(s); } catch {} }
+  }
+  sendPrivate(playerId, payload) {
+    const ws = this.sockets.get(playerId);
+    if (ws) { try { ws.send(JSON.stringify(payload)); } catch {} }
+  }
+
+  /* ⚠️ ما يُكتب هنا this.room وحده. this.clips ليست جزءًا منه ولا تُمرَّر
+     إليه — وهذا هو ضمان «تخزين صفر»، لا تعليقٌ في التوثيق. */
+  async persist() { await this.touchRoom(); await this.state.storage.put('room', this.room); }
+}
+applyRoomCommon(TariRoom, 'tari');

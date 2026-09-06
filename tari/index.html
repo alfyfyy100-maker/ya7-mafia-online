@@ -1,0 +1,1065 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0e0b1a">
+<title>طاريك — لعبة حفلات</title>
+<style>
+:root{
+  --bg:#0e0b1a; --bg2:#171034; --card:#1e1640; --card2:#271b52;
+  --ink:#f4f1ff; --dim:#a99fd0; --line:#3a2d6b;
+  --hot:#ff4d8d; --gold:#ffc94d; --mint:#4de2b8; --sky:#5aa8ff;
+  --bad:#ff6b6b;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{
+  background:radial-gradient(120% 80% at 50% 0%,#2a1b5e 0%,var(--bg) 60%) fixed;
+  color:var(--ink);
+  font-family:"SF Arabic","Noto Naskh Arabic","Segoe UI",Tahoma,system-ui,sans-serif;
+  font-size:17px;line-height:1.6;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  overscroll-behavior:none;
+}
+#app{max-width:560px;margin:0 auto;padding:14px 14px 40px;min-height:100%}
+.screen{display:none;animation:in .22s ease}
+.screen.on{display:block}
+@keyframes in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+h1{font-size:2.5rem;margin:.2em 0 .05em;letter-spacing:-1px}
+h2{font-size:1.35rem;margin:.2em 0 .5em}
+h3{font-size:1.05rem;margin:.6em 0 .3em;color:var(--dim)}
+p{margin:.4em 0}
+.sub{color:var(--dim);font-size:.92rem}
+.center{text-align:center}
+
+.card{background:linear-gradient(160deg,var(--card),var(--card2));border:1px solid var(--line);
+  border-radius:20px;padding:16px;margin:12px 0;box-shadow:0 10px 30px #0006}
+.card.tight{padding:12px}
+
+button{font:inherit;font-weight:700;color:var(--ink);background:var(--card2);
+  border:1px solid var(--line);border-radius:14px;padding:13px 16px;cursor:pointer;
+  transition:transform .08s, filter .15s;width:100%;margin:5px 0}
+button:active{transform:scale(.975)}
+button:disabled{opacity:.45;cursor:default}
+.b-hot{background:linear-gradient(135deg,var(--hot),#c9376f);border-color:#ff7aae}
+.b-gold{background:linear-gradient(135deg,var(--gold),#e0a020);border-color:#ffdd8a;color:#2a1c00}
+.b-mint{background:linear-gradient(135deg,var(--mint),#22b58e);border-color:#8ff0d8;color:#04241c}
+.b-ghost{background:#ffffff10}
+.b-sm{padding:8px 12px;font-size:.88rem;width:auto;margin:0}
+.row{display:flex;gap:8px;align-items:center}
+.row>button{margin:0}
+.wrap{display:flex;flex-wrap:wrap;gap:8px}
+
+input,textarea,select{font:inherit;width:100%;background:#0d0824;color:var(--ink);
+  border:1px solid var(--line);border-radius:14px;padding:13px 14px;margin:5px 0}
+textarea{min-height:84px;resize:vertical}
+input:focus,textarea:focus,select:focus{outline:2px solid var(--hot);outline-offset:1px}
+label{display:block;font-size:.86rem;color:var(--dim);margin-top:8px}
+
+.code{font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:.32em;
+  font-size:2.1rem;font-weight:800;color:var(--gold);text-align:center}
+
+/* شريط الوقت — قصير وظاهر دائمًا */
+.clock{height:10px;background:#00000055;border-radius:99px;overflow:hidden;margin:10px 0 4px}
+.clock>i{display:block;height:100%;background:linear-gradient(90deg,var(--mint),var(--gold));
+  border-radius:99px;transition:width .25s linear}
+.clock.warn>i{background:linear-gradient(90deg,var(--gold),var(--hot))}
+.secs{font-variant-numeric:tabular-nums;font-weight:800;font-size:.95rem;color:var(--dim);text-align:center}
+
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.chip{background:#ffffff12;border:1px solid var(--line);border-radius:99px;
+  padding:5px 11px;font-size:.85rem;display:inline-flex;align-items:center;gap:6px}
+.chip.done{background:#4de2b825;border-color:var(--mint);color:#c9fff0}
+.chip.off{opacity:.42}
+.chip.star{background:#ffc94d25;border-color:var(--gold);color:#ffeab8}
+.dot{width:8px;height:8px;border-radius:99px;background:var(--dim);display:inline-block}
+.dot.on{background:var(--mint)}
+
+.tag{display:inline-block;background:#ffffff14;border:1px solid var(--line);
+  border-radius:99px;padding:3px 10px;font-size:.8rem;color:var(--dim)}
+.tag.hot{background:#ff4d8d22;border-color:var(--hot);color:#ffc8dd}
+.tag.gold{background:#ffc94d22;border-color:var(--gold);color:#ffeab8}
+
+.prompt{font-size:1.28rem;font-weight:800;line-height:1.5;margin:10px 0}
+.star{color:var(--gold)}
+
+.item{background:#ffffff0d;border:1px solid var(--line);border-radius:16px;
+  padding:12px;margin:8px 0}
+.item.picked{border-color:var(--hot);background:#ff4d8d1c}
+.item.win{border-color:var(--gold);background:#ffc94d18}
+.item .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.item .txt{font-size:1.05rem;font-weight:700;margin:6px 0}
+
+.score{display:flex;justify-content:space-between;padding:9px 4px;border-bottom:1px solid var(--line)}
+.score:last-child{border-bottom:0}
+.score b{color:var(--gold);font-variant-numeric:tabular-nums}
+.gain{color:var(--mint);font-size:.85rem;font-weight:700}
+
+.rec{width:120px;height:120px;border-radius:99px;margin:10px auto;display:grid;place-items:center;
+  background:radial-gradient(circle,#ff4d8d,#a01f4d);border:4px solid #ff9ec4;
+  font-size:1rem;font-weight:800;cursor:pointer;user-select:none;box-shadow:0 0 0 0 #ff4d8d80}
+.rec.live{animation:pulse 1.1s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 #ff4d8d80}70%{box-shadow:0 0 0 22px #ff4d8d00}100%{box-shadow:0 0 0 0 #ff4d8d00}}
+
+.toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:50;
+  background:#000000d8;border:1px solid var(--line);border-radius:14px;padding:11px 16px;
+  max-width:92vw;font-size:.92rem;display:none}
+.toast.on{display:block}
+.toast.bad{border-color:var(--bad);color:#ffd7d7}
+
+.net{position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:60;
+  background:#3a2d6bdd;border:1px solid var(--line);border-radius:99px;padding:5px 14px;
+  font-size:.82rem;display:none}
+.net.on{display:block}
+
+.mini{font-size:.8rem;color:var(--dim)}
+.hr{height:1px;background:var(--line);margin:14px 0}
+.pill{font-size:.75rem;background:#ffffff14;border-radius:99px;padding:2px 9px;color:var(--dim)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.right{text-align:left}
+audio{width:100%;margin-top:6px}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+<div class="net" id="net"></div>
+<div id="app">
+
+<!-- ═════ البيت ═════ -->
+<section class="screen on" id="s-home">
+  <div class="center">
+    <h1>طاريك</h1>
+    <p class="sub">كل جولة عن واحد فيكم — والباقي يقلّدونه، يتوقّعونه، ويفضحونه.<br>
+      النقاط على <b>الإجماع</b> لا على الصح.</p>
+  </div>
+  <div class="card">
+    <label for="i-name">اسمك</label>
+    <input id="i-name" maxlength="14" placeholder="مثلاً: سعود" autocomplete="nickname">
+    <button class="b-hot" id="b-create">أنشئ غرفة</button>
+    <div class="hr"></div>
+    <label for="i-code">أو ادخل برمز غرفة</label>
+    <input id="i-code" maxlength="6" placeholder="ABC123" autocapitalize="characters"
+           style="text-transform:uppercase;letter-spacing:.2em;text-align:center">
+    <button class="b-ghost" id="b-join">ادخل الغرفة</button>
+  </div>
+  <div class="card tight">
+    <button class="b-ghost" id="b-openq">🗂️ الأسئلة — أضِف أسئلتك</button>
+    <p class="mini center" style="margin:6px 0 0">أسئلتك تنضمّ للبنك الافتراضي تلقائيًا</p>
+  </div>
+  <p class="mini center">٣ إلى ٩ لاعبين · كل واحد على جواله · التسجيلات تُمحى فور انتهاء الجولة</p>
+</section>
+
+<!-- ═════ شاشة الأسئلة ═════ -->
+<section class="screen" id="s-prompts">
+  <div class="row" style="justify-content:space-between">
+    <h2 style="margin:0">الأسئلة</h2>
+    <button class="b-sm b-ghost" id="b-backhome">رجوع</button>
+  </div>
+  <p class="sub" id="q-count"></p>
+
+  <div class="card">
+    <h3>أضِف سؤالًا</h3>
+    <label for="q-kind">النمط</label>
+    <select id="q-kind"></select>
+    <p class="mini" id="q-hint"></p>
+    <label for="q-text">نص السؤال</label>
+    <textarea id="q-text" maxlength="140" placeholder="اكتب سؤالك… استعمل {نجم} مكان اسم لاعب الجولة"></textarea>
+    <div id="q-extra"></div>
+    <button class="b-mint" id="q-add">أضِف للبنك</button>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <h3 style="margin:0">أسئلتي</h3>
+      <button class="b-sm b-ghost" id="q-export">صدّر JSON</button>
+    </div>
+    <div id="q-mine"></div>
+  </div>
+
+  <div class="card">
+    <h3>البنك الافتراضي</h3>
+    <p class="mini">اضغط على أي سؤال لتطفئه — المطفَّأ ما يجي في اللعب.</p>
+    <div id="q-def"></div>
+  </div>
+  <button class="b-ghost" id="q-reset">أرجِع كل شيء للأصل</button>
+</section>
+
+<!-- ═════ الغرفة ═════ -->
+<section class="screen" id="s-room">
+  <div id="room-body"></div>
+</section>
+
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   طاريك — واجهة اللاعب
+   ⚠️ عنوان الوركر: لازم يطابق اسم الوركر المنشور. غيّره هنا وحده.
+   ══════════════════════════════════════════════════════════════════ */
+const API = 'https://ya7-mafia-online.alfyfyy100.workers.dev';
+
+/* ── الشاشة تبني عنصر الإدخال من inputType لا من اسم النمط ──
+   هذا ليس تفصيلًا: لو كان فيها if لكل نمط لصار «الأنماط بيانات» ادّعاءً.
+   ولمّا تجي الصور والرسم لاحقًا، تُضاف حالة inputType واحدة هنا ولا
+   يتغيّر شيء آخر في الصفحة ولا في الخادم.                          */
+
+const $  = s => document.querySelector(s);
+const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
+const esc = s => String(s == null ? '' : s);
+
+/* ─────────── تخزين محلي ─────────── */
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem('tari.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('tari.' + k, JSON.stringify(v)); } catch {} },
+};
+/* jid: معرّف التبويب. يمنع تكرار المقعد لو ضغط اللاعب «ادخل» مرتين
+   قبل ما يصحى الـ Durable Object. في sessionStorage عمدًا: لا يُسرَّب
+   بين تبويبين ولا يعيش بعد إغلاق المتصفّح. */
+const JID = (() => {
+  try {
+    let j = sessionStorage.getItem('tari.jid');
+    if (!/^[a-f0-9]{32}$/.test(j || '')) {
+      j = [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, '0')).join('');
+      sessionStorage.setItem('tari.jid', j);
+    }
+    return j;
+  } catch { return ''; }
+})();
+
+function toast(msg, bad) {
+  const t = $('#toast');
+  t.textContent = msg; t.className = 'toast on' + (bad ? ' bad' : '');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.className = 'toast', 3400);
+}
+function show(id) { document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === id)); }
+
+/* ══════════════ بنك الأسئلة: الافتراضي + الملف + المضافة ══════════════
+   ثلاثة مصادر تُدمَج في واحد ويُرسَل للخادم عند البدء:
+     • الافتراضي  — من /tari/bank (مصدر واحد، لا نسخة في الصفحة)
+     • prompts.json — ملف بجانب الصفحة، يعدّله صاحب اللعبة من الجوال
+     • المضافة    — من هذي الشاشة، في localStorage
+   والمطفَّأ (off) يُطرح من الافتراضي.                                */
+const Bank = {
+  defs: [], kinds: {}, limits: { add: 200, text: 140, opt: 40, opts: 6 },
+  file: [], mine: [], off: new Set(), ready: false,
+
+  async load() {
+    this.mine = LS.get('custom', []) || [];
+    this.off = new Set(LS.get('off', []) || []);
+    try {
+      const r = await fetch(API + '/tari/bank', { cache: 'no-store' });
+      const j = await r.json();
+      if (j && j.ok) { this.defs = j.bank; this.kinds = j.kinds; this.limits = j.limits || this.limits; this.ready = true; }
+    } catch (e) { /* بلا شبكة: الشاشة تشتغل على المضاف فقط */ }
+    try {
+      const r = await fetch('./prompts.json', { cache: 'no-store' });
+      if (r.ok) {
+        const j = await r.json();
+        this.file = Array.isArray(j && j.add) ? j.add : [];
+        for (const id of (Array.isArray(j && j.off) ? j.off : [])) this.off.add(String(id));
+      }
+    } catch (e) { /* الملف اختياري */ }
+    return this;
+  },
+  save() { LS.set('custom', this.mine); LS.set('off', [...this.off]); },
+  /* ما يُرسَل للخادم: الإضافات والمطفَّأ. الافتراضي عند الخادم أصلًا،
+     فلا نعيد إرساله — ولو أرسلناه لصار البنك مضاعفًا. */
+  payload() { return { add: [...this.file, ...this.mine], off: [...this.off] }; },
+  liveCount() { return this.defs.filter(d => !this.off.has(d.id)).length + this.file.length + this.mine.length; },
+};
+
+/* ─────────── شاشة الأسئلة ─────────── */
+function qRender() {
+  const sel = $('#q-kind');
+  if (!sel.options.length) {
+    for (const [k, v] of Object.entries(Bank.kinds)) sel.append(new Option(v.name, k));
+    sel.onchange = qExtra; qExtra();
+  }
+  $('#q-count').textContent = Bank.ready
+    ? `${Bank.liveCount()} سؤالًا جاهزًا للّعب — ${Bank.defs.length - Bank.off.size} افتراضي، ${Bank.file.length} من الملف، ${Bank.mine.length} من عندك`
+    : 'ما قدرنا نجيب البنك الافتراضي (بلا شبكة؟) — تقدر تضيف أسئلتك وتلعب بها.';
+
+  const mine = $('#q-mine'); mine.textContent = '';
+  if (!Bank.mine.length && !Bank.file.length) mine.append(el('p', 'mini', 'ما أضفت شيئًا بعد.'));
+  Bank.file.forEach(p => {
+    const d = el('div', 'item');
+    d.append(el('div', 'tag', (Bank.kinds[p.kind] || {}).name || p.kind));
+    d.append(el('div', 'txt', p.text));
+    d.append(el('p', 'mini', 'من ملف prompts.json — عدّله من الملف'));
+    mine.append(d);
+  });
+  Bank.mine.forEach((p, i) => {
+    const d = el('div', 'item');
+    const top = el('div', 'top');
+    top.append(el('span', 'tag', (Bank.kinds[p.kind] || {}).name || p.kind));
+    const del = el('button', 'b-sm b-ghost', 'حذف');
+    del.onclick = () => { Bank.mine.splice(i, 1); Bank.save(); qRender(); toast('انحذف'); };
+    top.append(del); d.append(top);
+    d.append(el('div', 'txt', p.text));
+    if (p.opts) d.append(el('p', 'mini', 'الخيارات: ' + p.opts.join(' · ')));
+    if (p.tones) d.append(el('p', 'mini', 'النبرات: ' + p.tones.join(' · ')));
+    mine.append(d);
+  });
+
+  const def = $('#q-def'); def.textContent = '';
+  const byKind = {};
+  for (const p of Bank.defs) (byKind[p.kind] = byKind[p.kind] || []).push(p);
+  for (const [k, list] of Object.entries(byKind)) {
+    def.append(el('h3', null, (Bank.kinds[k] || {}).name || k));
+    const wrap = el('div', 'chips');
+    for (const p of list) {
+      const c = el('div', 'chip' + (Bank.off.has(p.id) ? ' off' : ''), p.text.slice(0, 46) + (p.text.length > 46 ? '…' : ''));
+      c.onclick = () => { Bank.off.has(p.id) ? Bank.off.delete(p.id) : Bank.off.add(p.id); Bank.save(); qRender(); };
+      wrap.append(c);
+    }
+    def.append(wrap);
+  }
+}
+function qExtra() {
+  const k = $('#q-kind').value, meta = Bank.kinds[k] || {}, box = $('#q-extra');
+  box.textContent = '';
+  $('#q-hint').textContent =
+    meta.inputType === 'audio' ? `تسجيل صوتي، حد أقصى ${Math.round((meta.clipMs || 6000) / 1000)} ثوانٍ.`
+    : meta.inputType === 'choice' ? 'اللاعبون يختارون من خيارات تكتبها أنت.'
+    : 'اللاعبون يكتبون جوابهم بحرية.';
+  if (meta.needsOpts) {
+    box.append(el('label', null, 'الخيارات — سطر لكل خيار (من ٢ إلى ' + Bank.limits.opts + ')'));
+    const t = el('textarea'); t.id = 'q-opts'; t.placeholder = 'خيار أول\nخيار ثاني\nخيار ثالث'; box.append(t);
+  }
+  if (meta.needsTones) {
+    box.append(el('label', null, 'النبرات — سطر لكل نبرة'));
+    const t = el('textarea'); t.id = 'q-tones'; t.placeholder = 'غاضب\nخايف\nمتحمّس'; box.append(t);
+  }
+}
+function qAdd() {
+  const kind = $('#q-kind').value;
+  const text = $('#q-text').value.trim().slice(0, Bank.limits.text);
+  const meta = Bank.kinds[kind] || {};
+  if (!text) return toast('اكتب نص السؤال أولًا', true);
+  if (Bank.mine.length >= Bank.limits.add) return toast('وصلت السقف (' + Bank.limits.add + ')', true);
+  const p = { kind, text };
+  if (meta.needsOpts) {
+    const opts = ($('#q-opts') ? $('#q-opts').value : '').split('\n').map(s => s.trim().slice(0, Bank.limits.opt)).filter(Boolean);
+    if (opts.length < 2) return toast('لازم خيارين على الأقل', true);
+    p.opts = opts.slice(0, Bank.limits.opts);
+  }
+  if (meta.needsTones) {
+    const tones = ($('#q-tones') ? $('#q-tones').value : '').split('\n').map(s => s.trim().slice(0, 24)).filter(Boolean);
+    if (!tones.length) return toast('اكتب نبرة واحدة على الأقل', true);
+    p.tones = tones.slice(0, Bank.limits.opts);
+  }
+  Bank.mine.push(p); Bank.save();
+  $('#q-text').value = ''; if ($('#q-opts')) $('#q-opts').value = ''; if ($('#q-tones')) $('#q-tones').value = '';
+  qRender(); toast('انضاف للبنك ✓');
+}
+
+/* ══════════════ الشبكة: اتصال + إعادة محاولة + نبضة ══════════════
+   الدرس الذي كلّفنا عطلًا: `close()` ليست وعدًا بحدث إغلاق. المقبس نصف
+   المفتوح — وهو ما يصير حين تنقطع شبكة الجوال فجأة أو ينام التبويب —
+   يعلق في CLOSING بلا onclose أبدًا. فلو كان رجوعُنا معلّقًا على onclose
+   لبقي اللاعب على شاشة ميتة إلى الأبد.
+   ولذلك هنا:
+     • gen: رقم لكل محاولة. المقبس القديم يصير أخرس فورًا مهما فعل.
+     • seen: وقت آخر بايت وارد. أي رسالة تثبت الحياة، لا readyState.
+     • watch: مراقب كل ٣ث يسقط المعلّق ويمشي بلا انتظار أحد.           */
+const Net = {
+  ws: null, code: '', tries: 0, timer: 0, hb: 0, sup: 0, seen: 0, dead: false, gen: 0,
+
+  open(code) {
+    this.code = code; this.dead = false; this.tries = 0;
+    clearTimeout(this.timer); this.timer = 0;
+    this.connect();
+    clearInterval(this.sup);
+    this.sup = setInterval(() => this.watch(), 3000);
+  },
+
+  connect() {
+    if (this.dead) return;
+    const gen = ++this.gen;
+    const seat = LS.get('seat.' + this.code, null) || {};
+    const u = new URL(API.replace(/^http/, 'ws') + '/tari/room/' + this.code + '/ws');
+    u.searchParams.set('name', App.name);
+    if (JID) u.searchParams.set('jid', JID);
+    if (seat.token) u.searchParams.set('token', seat.token);
+    if (seat.id) u.searchParams.set('playerId', seat.id);
+    let ws;
+    try { ws = new WebSocket(u.toString()); } catch { return this.retry(); }
+    this.ws = ws; this.seen = Date.now();
+    ws.onopen = () => {
+      if (gen !== this.gen) { try { ws.close(); } catch {} return; }
+      this.tries = 0; this.seen = Date.now(); this.note(''); this.startHb();
+    };
+    ws.onmessage = e => {
+      if (gen !== this.gen) return;
+      this.seen = Date.now();               // أي بايت وارد = المقبس حيّ
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (m.type === 'pong') return;
+      App.onMsg(m);
+    };
+    ws.onclose = () => { if (gen === this.gen) this.drop(); };
+    ws.onerror = () => { if (gen === this.gen) this.drop(); };
+  },
+
+  /* إسقاط المقبس الحالي والمضيّ لمحاولة جديدة، بلا انتظار اكتمال إغلاقه. */
+  drop() {
+    this.gen++;
+    this.stopHb();
+    const old = this.ws; this.ws = null;
+    if (old) {
+      old.onopen = old.onmessage = old.onclose = old.onerror = null;
+      try { old.close(); } catch {}
+    }
+    this.retry();
+  },
+
+  retry() {
+    if (this.dead || this.timer) return;
+    const wait = Math.min(8000, 600 * Math.pow(2, this.tries++));
+    this.note('انقطع الاتصال… نرجع خلال ' + Math.round(wait / 1000) + 'ث');
+    this.timer = setTimeout(() => { this.timer = 0; this.connect(); }, wait);
+  },
+
+  now() { if (this.dead) return; clearTimeout(this.timer); this.timer = 0; this.tries = 0; this.connect(); },
+
+  /* مقبسٌ مفتوح بلا بايت واحد منذ ٧٠ث ميتٌ ولو ادّعى غير ذلك (النبضة كل
+     ٢٥ث، فثلاث ضائعة). ومقبسٌ عالق في الاتصال أو الإغلاق أكثر من ٨ث
+     لا ننتظره: نسقطه ونبدأ غيره. */
+  watch() {
+    if (this.dead) return;
+    const ws = this.ws;
+    if (!ws) { if (!this.timer) this.retry(); return; }
+    if (ws.readyState === 1) { if (Date.now() - this.seen > 70000) this.drop(); return; }
+    if (Date.now() - this.seen > 8000) this.drop();
+  },
+
+  send(o) { try { this.ws && this.ws.readyState === 1 && this.ws.send(JSON.stringify(o)); } catch {} },
+  startHb() { this.stopHb(); this.hb = setInterval(() => this.send({ type: 'hb' }), 25000); },
+  stopHb() { clearInterval(this.hb); this.hb = 0; },
+  close() {
+    this.dead = true; this.gen++;
+    clearTimeout(this.timer); this.timer = 0;
+    clearInterval(this.sup); this.sup = 0;
+    this.stopHb(); this.note('');
+    const old = this.ws; this.ws = null;
+    if (old) { old.onclose = old.onerror = null; try { old.close(1000); } catch {} }
+  },
+  note(t) { const n = $('#net'); n.textContent = t; n.className = 'net' + (t ? ' on' : ''); },
+};
+const wake = () => { if (Net.code && !Net.dead && (!Net.ws || Net.ws.readyState !== 1)) Net.now(); };
+addEventListener('online', wake);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(); });
+
+/* ══════════════ الصوت ══════════════
+   noiseSuppression مطلوب صراحةً: التسجيل في حفلة، والضجيج حول اللاعب
+   أعلى من صوته غالبًا. ونوقف المسار فور انتهاء التسجيل حتى تنطفئ علامة
+   المايك — ما نمسك المايك مفتوحًا بين الجولات.                        */
+const Audio_ = {
+  stream: null, mr: null, chunks: [], t0: 0, stopAt: 0, tick: 0,
+  mime() {
+    const list = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/ogg'];
+    for (const m of list) { try { if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; } catch {} }
+    return '';
+  },
+  async start(maxMs, onTick) {
+    if (!navigator.mediaDevices || !window.MediaRecorder) throw new Error('جوالك ما يدعم التسجيل — جرّب متصفحًا آخر.');
+    this.stream = await navigator.mediaDevices.getUserMedia({
+      audio: { noiseSuppression: true, echoCancellation: true, autoGainControl: true, channelCount: 1 },
+    });
+    const mime = this.mime();
+    this.mr = new MediaRecorder(this.stream, Object.assign({ audioBitsPerSecond: 32000 }, mime ? { mimeType: mime } : {}));
+    this.chunks = [];
+    this.mr.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
+    this.t0 = Date.now(); this.stopAt = this.t0 + maxMs;
+    this.mr.start();
+    clearInterval(this.tick);
+    this.tick = setInterval(() => {
+      const left = this.stopAt - Date.now();
+      onTick && onTick(Math.max(0, left));
+      if (left <= 0) this.stop();
+    }, 100);
+    return new Promise(res => { this._done = res; });
+  },
+  stop() {
+    clearInterval(this.tick);
+    if (!this.mr) return;
+    const mr = this.mr; this.mr = null;
+    const done = this._done; this._done = null;
+    mr.onstop = () => {
+      const blob = new Blob(this.chunks, { type: this.chunks[0] ? this.chunks[0].type : 'audio/webm' });
+      this.release();
+      done && done({ blob, ms: Date.now() - this.t0 });
+    };
+    try { mr.stop(); } catch { this.release(); done && done(null); }
+  },
+  /* إلغاء: يوقف المايك ويرمي ما سُجّل بلا معاينة — يُنادى حين يتغيّر
+     الطور تحت من يسجّل. */
+  cancel() {
+    clearInterval(this.tick);
+    const mr = this.mr; this.mr = null;
+    const done = this._done; this._done = null;
+    this.chunks = [];
+    if (mr) { mr.onstop = () => this.release(); try { mr.stop(); } catch { this.release(); } }
+    else this.release();
+    done && done(null);
+  },
+  release() {
+    try { this.stream && this.stream.getTracks().forEach(t => t.stop()); } catch {}
+    this.stream = null;
+  },
+  async toB64(blob) {
+    const buf = new Uint8Array(await blob.arrayBuffer());
+    let s = ''; const CH = 0x8000;
+    for (let i = 0; i < buf.length; i += CH) s += String.fromCharCode.apply(null, buf.subarray(i, i + CH));
+    return btoa(s);
+  },
+};
+
+/* مشغّل المقاطع: يطلبها من الخادم عند الحاجة، ويرمي رابط الكائن بعد
+   التشغيل. لا نحتفظ بنسخة أطول من الجولة — نفس انضباط الخادم. */
+const Play = {
+  cache: new Map(), urls: [], waiting: new Map(), audio: null,
+  put(m) {
+    const w = this.waiting.get(m.id);
+    this.cache.set(m.id, m.b64 ? { b64: m.b64, mime: m.mime } : null);
+    if (w) { this.waiting.delete(m.id); w(this.cache.get(m.id)); }
+  },
+  fetch(id) {
+    if (this.cache.has(id)) return Promise.resolve(this.cache.get(id));
+    Net.send({ type: 'getClip', id });
+    return new Promise(res => {
+      this.waiting.set(id, res);
+      setTimeout(() => { if (this.waiting.has(id)) { this.waiting.delete(id); res(null); } }, 6000);
+    });
+  },
+  url(c) {
+    const bin = atob(c.b64), u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const u = URL.createObjectURL(new Blob([u8], { type: c.mime || 'audio/webm' }));
+    this.urls.push(u); return u;
+  },
+  async play(id, onEnd) {
+    const c = await this.fetch(id);
+    if (!c) { toast('التسجيل ما عاد موجود', true); onEnd && onEnd(); return false; }
+    this.stop();
+    const a = new Audio(this.url(c));
+    this.audio = a;
+    a.onended = () => { onEnd && onEnd(); };
+    a.onerror = () => { toast('ما قدرنا نشغّل المقطع', true); onEnd && onEnd(); };
+    try { await a.play(); } catch { toast('اضغط مرة ثانية للتشغيل', true); onEnd && onEnd(); }
+    return true;
+  },
+  stop() { try { this.audio && this.audio.pause(); } catch {} this.audio = null; },
+  /* المسح: يُنادى مع كل تغيّر جولة — الصفحة ما تحتفظ بصوت بعد جولته */
+  purge() {
+    this.stop();
+    this.cache.clear(); this.waiting.clear();
+    for (const u of this.urls) { try { URL.revokeObjectURL(u); } catch {} }
+    this.urls = [];
+  },
+};
+
+/* ══════════════ اللعبة ══════════════ */
+const App = {
+  name: '', st: null, skew: 0, round: -1, sent: false, pending: null, clock: 0,
+
+  onMsg(m) {
+    if (m.type === 'welcome') {
+      LS.set('seat.' + Net.code, { id: m.playerId, token: m.seatToken });
+      return;
+    }
+    if (m.type === 'clip' || m.type === 'clipMiss') return Play.put(m);
+    if (m.type === 'kicked') { Net.close(); LS.set('seat.' + Net.code, null); show('s-home'); return toast('طردك المضيف من الغرفة', true); }
+    if (m.type === 'hostChanged') return toast('الاستضافة انتقلت إلى ' + esc(m.hostName));
+    if (m.type === 'error') return toast(esc(m.message), true);
+    if (m.type !== 'state') return;
+
+    this.skew = m.now - Date.now();
+    /* جولة جديدة = صفحة نظيفة: لا مقاطع قديمة ولا إدخال معلّق */
+    const rk = m.round + ':' + (m.kind || '') + ':' + m.phase;
+    if (m.round !== this.round) { this.round = m.round; Play.purge(); this.sent = false; this.pending = null; }
+    if (this.st && this.st.phase !== m.phase) { this.pending = null; if (m.phase === 'brief' || m.phase === 'lobby') Play.purge(); }
+    this.st = m;
+    show('s-room');
+    this.draw();
+  },
+
+  left() { const s = this.st; return s && s.endsAt ? Math.max(0, s.endsAt - (Date.now() + this.skew)) : 0; },
+
+  draw() {
+    const s = this.st; if (!s) return;
+    /* كل إدخالٍ من لاعبٍ آخر يبثّ حالة، وإعادة الرسم تمسح زر «أوقف» من
+       تحت إصبع من يسجّل والتسجيل ماضٍ. فلا نعيد الرسم أثناء التسجيل ما
+       دام الطور نفسه؛ ولو تغيّر الطور فالتسجيل ما عاد له مكان يذهب إليه. */
+    const rkey = s.phase + ':' + s.round;
+    if (Audio_.mr) { if (rkey === this._rkey) return; Audio_.cancel(); }
+    this._rkey = rkey;
+    const b = $('#room-body');
+    const keep = document.activeElement && document.activeElement.id === 'ans-text' ? document.activeElement.value : null;
+    b.textContent = '';
+    ({ lobby: this.vLobby, brief: this.vBrief, collect: this.vCollect,
+       vote: this.vVote, reveal: this.vReveal, over: this.vOver }[s.phase] || this.vLobby).call(this, b);
+    if (keep != null && $('#ans-text')) { $('#ans-text').value = keep; $('#ans-text').focus(); }
+    this.startClock();
+  },
+
+  startClock() {
+    clearInterval(this.clock);
+    const bar = $('#clockbar'), lab = $('#clocklab');
+    if (!bar || !this.st.endsAt) return;
+    /* مدى الطور يُلتقط أول مرة نراه: بدونه يُحسب الشريط من الوقت المتبقي
+       عند كل بثّ حالة، فيقفز راجعًا إلى ١٠٠٪ كلما جاوب أحد. */
+    const ckey = this.st.phase + ':' + this.st.round + ':' + this.st.endsAt;
+    if (this._ckey !== ckey) { this._ckey = ckey; this._span = Math.max(1, this.left()); }
+    const span = this._span;
+    const tick = () => {
+      const l = this.left();
+      const pct = span > 0 ? Math.max(0, Math.min(100, (l / span) * 100)) : 0;
+      bar.style.width = pct + '%';
+      bar.parentElement.classList.toggle('warn', l < 6000);
+      if (lab) lab.textContent = Math.ceil(l / 1000) + ' ثانية';
+      if (l <= 0) clearInterval(this.clock);
+    };
+    tick(); this.clock = setInterval(tick, 250);
+  },
+
+  clockEl(parent) {
+    const c = el('div', 'clock'); const i = el('i'); i.id = 'clockbar'; c.append(i); parent.append(c);
+    const l = el('div', 'secs'); l.id = 'clocklab'; parent.append(l);
+  },
+
+  /* زر التخطّي — يظهر في كل شاشة انتظار لمن يملكه */
+  forceBtn(parent, label) {
+    const s = this.st;
+    const can = s.you.host || (s.phase === 'collect' && s.you.star);
+    if (!can) return;
+    const b = el('button', 'b-ghost b-sm', label || 'كفى — كمّلوا ⏭');
+    b.style.width = '100%'; b.style.marginTop = '10px';
+    b.onclick = () => Net.send({ type: 'hostForceAdvance' });
+    parent.append(b);
+  },
+
+  head(parent) {
+    const s = this.st;
+    const row = el('div', 'row'); row.style.justifyContent = 'space-between';
+    const left = el('div');
+    left.append(el('span', 'pill', 'غرفة ' + s.code));
+    if (s.phase !== 'lobby' && s.phase !== 'over') {
+      left.append(document.createTextNode(' '));
+      left.append(el('span', 'pill', `جولة ${s.round}/${s.totalRounds}`));
+    }
+    row.append(left);
+    row.append(el('span', 'pill', 'نقاطك ' + (s.you.score | 0)));
+    parent.append(row);
+  },
+
+  peopleChips(parent, mode) {
+    const s = this.st;
+    const w = el('div', 'chips');
+    for (const p of s.players) {
+      let cls = 'chip';
+      if (p.star) cls += ' star';
+      if (mode === 'done' && p.done) cls += ' done';
+      if (mode === 'voted' && p.voted) cls += ' done';
+      if (!p.connected) cls += ' off';
+      const c = el('div', cls);
+      c.append(el('span', 'dot' + ((mode === 'done' && p.done) || (mode === 'voted' && p.voted) ? ' on' : '')));
+      c.append(document.createTextNode(p.name + (p.host ? ' 👑' : '') + (p.star ? ' ⭐' : '')));
+      w.append(c);
+    }
+    parent.append(w);
+  },
+
+  /* ─── الردهة ─── */
+  vLobby(b) {
+    const s = this.st;
+    this.head(b);
+    const c = el('div', 'card center');
+    c.append(el('p', 'sub', 'رمز الغرفة'));
+    c.append(el('div', 'code', s.code));
+    const share = el('button', 'b-sm b-ghost', 'انسخ الرمز');
+    share.onclick = () => { navigator.clipboard && navigator.clipboard.writeText(s.code); toast('انتسخ ✓'); };
+    share.style.width = 'auto'; c.append(share);
+    b.append(c);
+
+    const pc = el('div', 'card');
+    pc.append(el('h3', null, `اللاعبون (${s.players.length}/${s.maxPlayers})`));
+    for (const p of s.players) {
+      const r = el('div', 'score');
+      const nm = el('span', null, p.name + (p.host ? ' 👑' : '') + (p.connected ? '' : ' (منقطع)'));
+      r.append(nm);
+      if (s.you.host && p.id !== s.you.id) {
+        const k = el('button', 'b-sm b-ghost', 'اطرد');
+        k.onclick = () => confirm('تطرد ' + p.name + '؟') && Net.send({ type: 'kickPlayer', targetId: p.id });
+        r.append(k);
+      }
+      pc.append(r);
+    }
+    b.append(pc);
+
+    if (s.you.host) {
+      const o = el('div', 'card');
+      o.append(el('h3', null, 'الإعدادات'));
+      o.append(el('label', null, 'عدد الجولات'));
+      const sel = el('select');
+      for (let i = 3; i <= 12; i++) sel.append(new Option(i + ' جولات', i, false, i === (s.wantRounds || s.players.length)));
+      sel.onchange = () => Net.send({ type: 'setOpts', rounds: Number(sel.value) });
+      o.append(sel);
+      const fin = el('button', s.finale ? 'b-mint' : 'b-ghost', (s.finale ? '✓ ' : '') + 'الجولة الختامية: السلسلة الصوتية');
+      fin.onclick = () => Net.send({ type: 'setOpts', finale: !s.finale });
+      o.append(fin);
+      o.append(el('p', 'mini', Bank.liveCount() + ' سؤالًا في بنكك (الافتراضي + أسئلتك)'));
+      const start = el('button', 'b-hot', s.players.filter(p => p.connected).length < s.minPlayers
+        ? `تحتاجون ${s.minPlayers} لاعبين` : '▶ ابدأوا');
+      start.disabled = s.players.filter(p => p.connected).length < s.minPlayers;
+      start.onclick = () => Net.send(Object.assign({ type: 'startGame', rounds: Number(sel.value), finale: s.finale }, Bank.payload()));
+      o.append(start);
+      b.append(o);
+    } else {
+      b.append(el('p', 'sub center', 'ينتظر المضيف يبدأ… جهّز حلقك 🎤'));
+    }
+    const leave = el('button', 'b-ghost b-sm', 'اخرج من الغرفة');
+    leave.style.width = '100%';
+    leave.onclick = () => { Net.close(); show('s-home'); };
+    b.append(leave);
+  },
+
+  /* ─── التمهيد ─── */
+  vBrief(b) {
+    const s = this.st;
+    this.head(b);
+    const c = el('div', 'card center');
+    c.append(el('span', 'tag hot', s.kindName));
+    if (s.starName) {
+      c.append(el('h2', null, 'طاري ' + s.starName));
+      c.append(el('p', 'sub', 'الجولة هذي عنه'));
+    } else {
+      c.append(el('h2', null, 'الجولة الختامية'));
+      c.append(el('p', 'sub', 'سلسلة صوتية — كل واحد يقلّد اللي قبله'));
+    }
+    c.append(el('div', 'prompt', s.prompt || ''));
+    this.clockEl(c);
+    this.forceBtn(c, 'يلا ابدأوا ⏭');
+    b.append(c);
+  },
+
+  /* ─── الجمع: عنصر الإدخال يُختار من inputType وحده ─── */
+  vCollect(b) {
+    const s = this.st;
+    this.head(b);
+    const c = el('div', 'card');
+    c.append(el('span', 'tag hot', s.kindName));
+    if (s.starName) c.append(el('span', 'tag gold', '⭐ ' + s.starName));
+    c.append(el('div', 'prompt', s.prompt || ''));
+    if (s.you.tone) c.append(el('div', 'tag gold', 'نبرتك: ' + s.you.tone));
+    if (s.lostAudio) c.append(el('p', 'mini', '⚠️ انقطع الخادم وضاعت تسجيلات هذي الجولة — التسجيلات ما تُحفظ في أي مكان.'));
+    this.clockEl(c);
+
+    if (s.chain) this.vChain(c);
+    else if (s.you.submitted) this.vWaiting(c, 'انرسل ✓', 'done');
+    else if (!s.you.expected) this.vWaiting(c, 'اجلس واستمتع — الباقون يجاوبون عنك', 'done');
+    else this.input(c, s.inputType);
+
+    this.forceBtn(c);
+    b.append(c);
+    if (!s.chain) { const w = el('div', 'card tight'); this.peopleChips(w, 'done'); b.append(w); }
+  },
+
+  /* ليست شاشة انتظار: عدّاد يتحرّك، وعدد الجاهزين يزيد لحظيًا، وزر
+     تخطٍّ لمن يملكه. لا يوجد في اللعبة كلها طورٌ يقف على متأخّر. */
+  vWaiting(c, msg) {
+    const s = this.st;
+    const n = s.players.filter(p => p.done).length;
+    const live = s.players.filter(p => p.connected).length;
+    c.append(el('p', 'center', msg));
+    c.append(el('p', 'sub center', `${n} من ${live} جاهزون — الوقت يمشي على الجميع`));
+  },
+
+  input(c, kind) {
+    const s = this.st;
+    if (kind === 'choice') {
+      for (let i = 0; i < (s.opts || []).length; i++) {
+        const btn = el('button', 'b-ghost', s.opts[i]);
+        btn.onclick = () => { Net.send({ type: 'submit', choice: i }); btn.disabled = true; };
+        c.append(btn);
+      }
+      return;
+    }
+    if (kind === 'text') {
+      const t = el('textarea'); t.id = 'ans-text'; t.maxLength = s.textMax || 70;
+      t.placeholder = 'جوابك… (' + (s.textMax || 70) + ' حرفًا)';
+      c.append(t);
+      const send = el('button', 'b-hot', 'أرسل');
+      send.onclick = () => {
+        const v = t.value.trim();
+        if (!v) return toast('اكتب شيئًا أولًا', true);
+        Net.send({ type: 'submit', text: v }); send.disabled = true;
+      };
+      c.append(send);
+      return;
+    }
+    if (kind === 'audio') return this.recorder(c, s.clipMs || 6000);
+    c.append(el('p', 'sub', 'نوع إدخال غير مدعوم في هذي النسخة.'));
+  },
+
+  /* المسجّل: ضغطة واحدة، يقف وحده عند الحد، ثم إرسال تلقائي بعد ثوانٍ
+     مع فرصة إعادة — سريع ولا يعلّق أحدًا. */
+  recorder(c, maxMs) {
+    const box = el('div', 'center');
+    if (this.pending) {
+      box.append(el('p', 'sub', 'سمّعها قبل ما ترسل'));
+      const a = document.createElement('audio'); a.controls = true; a.src = this.pending.url; box.append(a);
+      const row = el('div', 'row'); row.style.marginTop = '8px';
+      const send = el('button', 'b-hot', 'أرسل الآن');
+      send.onclick = () => this.sendClip();
+      const again = el('button', 'b-ghost', 'أعِد');
+      again.onclick = () => { this.pending = null; this.draw(); };
+      row.append(send, again); box.append(row);
+      box.append(el('p', 'mini', 'يُرسَل تلقائيًا بعد ٥ ثوانٍ'));
+      clearTimeout(this._auto); this._auto = setTimeout(() => this.pending && this.sendClip(), 5000);
+      c.append(box); return;
+    }
+    const btn = el('div', 'rec', '🎤 اضغط وسجّل');
+    const lab = el('p', 'sub', 'حد أقصى ' + Math.round(maxMs / 1000) + ' ثوانٍ');
+    btn.onclick = async () => {
+      if (btn.classList.contains('live')) return Audio_.stop();
+      btn.classList.add('live'); btn.textContent = '⏹ أوقف';
+      try {
+        const out = await Audio_.start(maxMs, left => { lab.textContent = (left / 1000).toFixed(1) + 'ث'; });
+        btn.classList.remove('live');
+        if (!out || !out.blob || !out.blob.size) { toast('ما انسجّل شي — جرّب مرة ثانية', true); return this.draw(); }
+        this.pending = { blob: out.blob, ms: out.ms, url: URL.createObjectURL(out.blob) };
+        Play.urls.push(this.pending.url);
+        this.draw();
+      } catch (e) {
+        btn.classList.remove('live'); btn.textContent = '🎤 اضغط وسجّل';
+        toast(e && e.name === 'NotAllowedError' ? 'لازم تسمح بالمايك عشان تسجّل' : (e.message || 'ما قدرنا نفتح المايك'), true);
+      }
+    };
+    box.append(btn, lab); c.append(box);
+  },
+
+  async sendClip() {
+    clearTimeout(this._auto);
+    const p = this.pending; if (!p || this.sent) return;
+    this.sent = true;
+    try {
+      const b64 = await Audio_.toB64(p.blob);
+      Net.send({ type: 'clip', b64, mime: (p.blob.type || 'audio/webm').split(';')[0], ms: p.ms });
+      this.pending = null; this.sent = false; this.draw();
+    } catch (e) { this.sent = false; toast('ما قدرنا نرسل التسجيل', true); }
+  },
+
+  /* ─── السلسلة ─── */
+  vChain(c) {
+    const s = this.st, ch = s.chain;
+    c.append(el('p', 'sub center', `الحلقة ${ch.turn + 1} من ${ch.total}`));
+    if (ch.whoId !== s.you.id) {
+      c.append(el('h2', 'center', 'دور ' + ch.whoName));
+      c.append(el('p', 'sub center', 'يسمع اللي قبله ويقلّده — بلا ما يشوف النص'));
+      return;
+    }
+    if (ch.text) {
+      c.append(el('p', 'sub center', 'اقرأ هذي الجملة بصوتك:'));
+      c.append(el('div', 'prompt center', '«' + ch.text + '»'));
+    } else if (ch.srcId) {
+      c.append(el('p', 'sub center', 'اسمع اللي قبلك وقلّده — ما راح تشوف النص الأصلي'));
+      const listen = el('button', 'b-gold', '▶ اسمع اللي قبلك');
+      listen.onclick = () => { listen.disabled = true; listen.textContent = '⏳ يشتغل…'; Play.play(ch.srcId, () => { listen.disabled = false; listen.textContent = '🔁 اسمعها مرة ثانية'; }); };
+      c.append(listen);
+    }
+    this.recorder(c, s.clipMs || 6000);
+  },
+
+  /* ─── التصويت ─── */
+  vVote(b) {
+    const s = this.st;
+    this.head(b);
+    const c = el('div', 'card');
+    c.append(el('span', 'tag hot', s.kindName));
+    c.append(el('div', 'prompt', s.ask || 'اختر'));
+    this.clockEl(c);
+    if (!s.you.canVote) c.append(el('p', 'sub center', 'ما فيه شيء تصوّت له هذي الجولة'));
+    for (const it of s.items) {
+      const d = el('div', 'item' + (s.you.myVote === it.id ? ' picked' : ''));
+      const top = el('div', 'top');
+      top.append(el('b', null, it.label + (it.mine ? ' (أنت)' : '')));
+      if (it.tag) top.append(el('span', 'tag gold', it.tag));
+      d.append(top);
+      if (it.text) d.append(el('div', 'txt', it.text));
+      if (it.choice != null && s.opts) d.append(el('div', 'txt', s.opts[it.choice]));
+      if (it.audio) {
+        const pb = el('button', 'b-ghost b-sm', '▶ استمع');
+        pb.style.width = '100%';
+        pb.onclick = () => { pb.disabled = true; pb.textContent = '⏳'; Play.play(it.id, () => { pb.disabled = false; pb.textContent = '🔁 مرة ثانية'; }); };
+        d.append(pb);
+      }
+      if (!it.mine) {
+        const v = el('button', s.you.myVote === it.id ? 'b-gold' : 'b-hot',
+          s.you.myVote === it.id ? '✓ صوتك هنا' : 'اخترها');
+        v.onclick = () => Net.send({ type: 'vote', id: it.id });
+        d.append(v);
+      }
+      c.append(d);
+    }
+    this.forceBtn(c);
+    b.append(c);
+    const w = el('div', 'card tight'); this.peopleChips(w, 'voted'); b.append(w);
+  },
+
+  /* ─── العرض ─── */
+  vReveal(b) {
+    const s = this.st, r = s.result || { items: [] };
+    this.head(b);
+    const c = el('div', 'card');
+    c.append(el('span', 'tag hot', s.kindName));
+    c.append(el('div', 'prompt', s.prompt || ''));
+    if (s.chain && s.chain.text) {
+      c.append(el('p', 'sub', 'الجملة الأصلية كانت:'));
+      c.append(el('div', 'prompt center', '«' + s.chain.text + '»'));
+      const all = el('button', 'b-gold', '▶ شغّل السلسلة كاملة');
+      all.onclick = () => this.playAll(r.items.map(i => i.id), all);
+      c.append(all);
+    }
+    this.clockEl(c);
+    for (const it of r.items) {
+      const win = r.top && r.top.includes(it.id);
+      const d = el('div', 'item' + (win ? ' win' : ''));
+      const top = el('div', 'top');
+      top.append(el('b', null, (win ? '🏆 ' : '') + it.name));
+      const rt = el('div');
+      if (it.tag) rt.append(el('span', 'tag gold', it.tag));
+      if (it.votes) rt.append(el('span', 'tag', it.votes + ' صوت'));
+      if (it.gain) rt.append(el('span', 'gain', ' +' + it.gain));
+      top.append(rt); d.append(top);
+      if (it.text) d.append(el('div', 'txt', it.text));
+      if (it.choice != null && s.opts) d.append(el('div', 'txt', s.opts[it.choice]));
+      if (it.audio) {
+        const pb = el('button', 'b-ghost b-sm', '▶ استمع'); pb.style.width = '100%';
+        pb.onclick = () => { pb.disabled = true; Play.play(it.id, () => { pb.disabled = false; }); };
+        d.append(pb);
+      }
+      c.append(d);
+    }
+    if (r.optTally && r.optTally.length && s.opts) {
+      c.append(el('h3', null, 'وش قالت الأغلبية'));
+      const max = Math.max(1, ...r.optTally);
+      s.opts.forEach((o, i) => {
+        const row = el('div');
+        row.append(el('div', 'mini', o + ' — ' + (r.optTally[i] || 0)));
+        const bar = el('div', 'clock'); const f = el('i');
+        f.style.width = ((r.optTally[i] || 0) / max * 100) + '%'; bar.append(f); row.append(bar);
+        c.append(row);
+      });
+    }
+    if (r.asideText || r.asideChoice != null) {
+      const a = el('div', 'item win');
+      a.append(el('b', null, '⭐ وش قال ' + (s.starName || 'النجم') + ' عن نفسه'));
+      a.append(el('div', 'txt', r.asideText != null ? r.asideText : (s.opts ? s.opts[r.asideChoice] : '')));
+      c.append(a);
+    }
+    this.forceBtn(c, 'الجولة الجاية ⏭');
+    b.append(c);
+    b.append(this.board());
+  },
+
+  async playAll(ids, btn) {
+    btn.disabled = true;
+    for (let i = 0; i < ids.length; i++) {
+      btn.textContent = `▶ الحلقة ${i + 1} من ${ids.length}…`;
+      await new Promise(res => Play.play(ids[i], res));
+      await new Promise(res => setTimeout(res, 350));
+    }
+    btn.disabled = false; btn.textContent = '🔁 شغّلها مرة ثانية';
+  },
+
+  board() {
+    const s = this.st;
+    const c = el('div', 'card');
+    c.append(el('h3', null, 'النقاط'));
+    [...s.players].sort((a, b2) => b2.score - a.score).forEach((p, i) => {
+      const r = el('div', 'score');
+      r.append(el('span', null, ['🥇','🥈','🥉'][i] || (i + 1) + '.') );
+      r.append(el('span', null, ' ' + p.name + (p.connected ? '' : ' (منقطع)')));
+      r.append(el('b', null, String(p.score | 0)));
+      c.append(r);
+    });
+    return c;
+  },
+
+  vOver(b) {
+    const s = this.st;
+    const top = [...s.players].sort((a, b2) => b2.score - a.score);
+    const best = top.length ? top[0].score : 0;
+    const winners = top.filter(p => p.score === best).map(p => p.name);
+    const c = el('div', 'card center');
+    c.append(el('h1', null, '🏆'));
+    c.append(el('h2', null, winners.join(' و ')));
+    c.append(el('p', 'sub', 'صاحب أكثر إجماع في المجموعة'));
+    b.append(c);
+    b.append(this.board());
+    if (s.you.host) {
+      const again = el('button', 'b-hot', 'العبوا مرة ثانية');
+      again.onclick = () => Net.send({ type: 'playAgain' });
+      b.append(again);
+    } else b.append(el('p', 'sub center', 'ينتظر المضيف يعيدها…'));
+    const leave = el('button', 'b-ghost', 'اخرج');
+    leave.onclick = () => { Net.close(); show('s-home'); };
+    b.append(leave);
+  },
+};
+
+/* ══════════════ الدخول والإنشاء ══════════════ */
+async function createRoom() {
+  const name = $('#i-name').value.trim();
+  if (!name) return toast('اكتب اسمك أولًا', true);
+  App.name = name; LS.set('name', name);
+  const btn = $('#b-create'); btn.disabled = true; btn.textContent = 'نفتح الغرفة…';
+  try {
+    const r = await fetch(API + '/tari/room/create', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!r.ok) throw new Error(r.status === 429 ? 'كثرت الغرف من جهازك — انتظر شوي' : ('ما قدرنا ننشئ الغرفة (' + r.status + ')'));
+    const j = await r.json();
+    LS.set('seat.' + j.roomCode, { id: j.playerId, token: j.seatToken });
+    Net.open(j.roomCode);
+  } catch (e) { toast(e.message || 'خطأ في الشبكة', true); }
+  btn.disabled = false; btn.textContent = 'أنشئ غرفة';
+}
+function joinRoom() {
+  const name = $('#i-name').value.trim();
+  const code = $('#i-code').value.trim().toUpperCase();
+  if (!name) return toast('اكتب اسمك أولًا', true);
+  if (!/^[A-Z0-9]{6}$/.test(code)) return toast('الرمز ٦ خانات', true);
+  App.name = name; LS.set('name', name);
+  Net.open(code);
+}
+
+/* ══════════════ التشغيل ══════════════ */
+$('#i-name').value = LS.get('name', '') || '';
+$('#b-create').onclick = createRoom;
+$('#b-join').onclick = joinRoom;
+$('#b-openq').onclick = () => { show('s-prompts'); qRender(); };
+$('#b-backhome').onclick = () => show('s-home');
+$('#q-add').onclick = qAdd;
+$('#q-reset').onclick = () => {
+  if (!confirm('يمسح أسئلتك المضافة ويرجّع كل الافتراضي؟')) return;
+  Bank.mine = []; Bank.off = new Set(); Bank.save(); qRender(); toast('رجع للأصل');
+};
+$('#q-export').onclick = () => {
+  const out = JSON.stringify({ add: [...Bank.file, ...Bank.mine], off: [...Bank.off] }, null, 2);
+  navigator.clipboard ? navigator.clipboard.writeText(out).then(() => toast('انتسخ — الصقه في prompts.json'))
+                      : prompt('انسخ هذا في prompts.json', out);
+};
+addEventListener('beforeunload', () => { Audio_.release(); Play.purge(); });
+
+Bank.load().then(() => { if ($('#s-prompts').classList.contains('on')) qRender(); });
+/* رمز الغرفة من الرابط: ?r=ABC123 — عشان تنفع مشاركة الرابط في الواتساب */
+const q = new URLSearchParams(location.search).get('r');
+if (q && /^[A-Za-z0-9]{6}$/.test(q)) $('#i-code').value = q.toUpperCase();
+</script>
+</body>
+</html>
