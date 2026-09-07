@@ -5827,6 +5827,13 @@ const WL_ROUNDS = 2;
 const WL_AI_ENDPOINT = 'https://ya7-ai-proxy.alfyfyy100.workers.dev/walima/chat';
 const WL_AI_MODEL = 'deepseek/deepseek-v4-flash';
 const WL_MAX_STATEMENT = 400;
+/* مهلة المزوّد، وحارس المرحلة بعدها بفجوة. الاثنان يعالجان مرحلة
+   `thinking` نفسها، فلو تقاربا لأيقظ المنبّهُ runHost بينما النداء
+   الأول ما زال يعمل ⇒ مضيفان يكتبان الحكم. الفجوة تضمن أن askAI
+   تُجهض وتُنظّف tick دائمًا قبل أن يستيقظ المنبّه، فلا يبقى له عمل
+   إلا الحالة التي وُضع لها: أن يكون الكائن مات أثناء النداء. */
+const WL_AI_TIMEOUT_MS = 25000;
+const WL_THINK_MS = 40000;
 
 function wlPick(a){ return a[randInt(a.length)]; }   // المشهد والميول والهدف — كلها سرّ
 function wlShuffle(a){ const c=a.slice(); for(let i=c.length-1;i>0;i--){ const j=randInt(i+1); [c[i],c[j]]=[c[j],c[i]]; } return c; }
@@ -6042,7 +6049,63 @@ export class WalimaRoom {
     return (p && p.kicked) ? null : p;
   }
   findPlayer(id){ return this.room.players.find(p => p.id === id) || null; }
-  async persist(){ await this.state.storage.put('room', this.room); }
+  /* كانت persist تكتب ولا تسلّح شيئًا: وليمة وحدها بين الغرف لا تنادي
+     touchRoom، فما ضُبط لها منبّه قط ⇒ RoomCommon.alarm لا تُستدعى أبدًا
+     ⇒ تخزين غرف الوليمة لا يُكنس نهائيًا. */
+  async persist(){
+    this.room.lastSeen = Date.now();
+    await this.state.storage.put('room', this.room);
+    await this.arm();
+  }
+
+  /* منبّه واحد لكل كائن: نأخذ الأقرب بين حارس التفكير وتنظيف الغرفة.
+     لا نستعمل touchRoom المشتركة لأنها تضبط أفق الـTTL دائمًا فتدهس
+     حارس التفكير الأقرب منه بساعات. */
+  async arm(){
+    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
+    if (this.room.tick) next = Math.min(next, this.room.tick);
+    try { await this.state.storage.setAlarm(next); } catch {}
+  }
+
+  async alarm(){
+    const now = Date.now();
+    if (this.room.tick && now >= this.room.tick - 60) {
+      this.room.tick = 0;
+      try { await this.resumeThinking(); } catch {}
+      return;
+    }
+    const idle = now - (this.room.lastSeen || 0);
+    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
+      await this.state.storage.deleteAll();
+      return;
+    }
+    await this.arm();
+  }
+
+  /* ── فكّ مرحلة تفكيرٍ ماتت ──
+     runHost تكتب thinking:true على القرص ثم تنتظر المزوّد. لو مات
+     الكائن في تلك اللحظة (نشر، انهيار، إخلاء) بقيت الراية مرفوعة أبدًا،
+     وحارسُها `if (this.room.thinking) return` يردّ كل محاولة لاحقة —
+     فالجولة تتجمّد بلا شيء يوقظها. نفكّ الراية ونعيد النداء نفسه:
+     thinkFinal يحفظ أيّهما كان، فلا يصير حكمُ الختام تعليقَ جولة. */
+  async resumeThinking(){
+    if (!this.room || this.room.phase !== 'thinking') { await this.persist(); return; }
+    const final = !!this.room.thinkFinal;
+    this.room.thinking = false;
+    await this.persist();
+    await this.runHost(final);
+  }
+
+  /* غرفٌ قديمة في التخزين بلا tick تُفكّ فورًا — وهي بالضبط الغرف التي
+     تجمّدت قبل هذا الإصلاح. ومن مهلته لم تنتهِ لا يُمسّ. */
+  resumePhase(){
+    const r = this.room;
+    if (!r || r.phase !== 'thinking') return;
+    if (r.tick && Date.now() < r.tick) return;
+    r.tick = 0;
+    r.thinking = false;
+    this.runHost(!!r.thinkFinal).catch(() => {});
+  }
   sendPrivate(id, payload){
     const ws = this.sockets.get(id);
     if (ws) { try { ws.send(JSON.stringify(payload)); } catch {} }
@@ -6385,6 +6448,10 @@ export class WalimaRoom {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: WL_AI_MODEL, max_tokens: 1000, messages: [{ role: 'user', content: prompt }] }),
+      /* بلا سقف: مزوّد معلَّق يُبقي المرحلة في thinking بلا نهاية. مع
+         السقف يرمي fetch فيلتقطه try/catch في runHost ويهبط على
+         fallbackHost — الجولة تكمل بمضيف احتياطي بدل أن تتجمّد. */
+      signal: AbortSignal.timeout(WL_AI_TIMEOUT_MS),
     });
     if (!resp.ok) throw new Error('ai-' + resp.status);
     const data = await resp.json();
@@ -6414,6 +6481,8 @@ export class WalimaRoom {
     if (this.room.thinking) return;
     this.room.thinking = true;
     this.room.phase = 'thinking';
+    this.room.thinkFinal = !!final;
+    this.room.tick = Date.now() + WL_THINK_MS;
     await this.persist();
     this.broadcastState();
 
@@ -6438,6 +6507,7 @@ export class WalimaRoom {
     }
 
     this.room.thinking = false;
+    this.room.tick = 0;
     if (!final) {
       const deltas = {};
       for (const p of this.room.players) {
