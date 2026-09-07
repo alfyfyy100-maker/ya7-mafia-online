@@ -5842,11 +5842,78 @@ function wlSafeJSON(t){
   return null;
 }
 
+/* ═══════════ مقابس السبات (وليمة) ═══════════
+   `this.sockets` كان `Map` في الذاكرة، والذاكرة تُمسح مع أول نومة بينما
+   المقابس نفسها تنجو في `getWebSockets()`. فبعد النومة يجد الكائن خريطة
+   فارغة ولاعبين كلهم `connected:true` في السجل: لا يصلهم بايت، ولا
+   يُطردون، ولا يُعاد وصلهم — صمتٌ كامل لا انقطاعٌ ظاهر يفسّر نفسه.
+
+   الواجهة تقرأ الحقيقة من الرَّنتايم عند كل نداء بدل أن تحفظها، فتبقى
+   المواضع الخمسة عشر التي تلمس `sockets` تعمل حرفيًا بلا تعديل: هنا،
+   وفي `RoomCommon` (sweepDeadSeats/alarm/kick)، وفي `reclaimSeat`.
+
+   المعرّف يعيش في `serializeAttachment` لا في الذاكرة، فينجو النومة. */
+function wsAttachId(ws) {
+  try { const a = ws.deserializeAttachment(); return (a && a.id) ? a.id : null; }
+  catch { return null; }
+}
+
+function hibernatingSockets(state) {
+  const all  = () => { try { return state.getWebSockets(); } catch { return []; } };
+  const live = () => all().filter(ws => wsAttachId(ws));
+  const find = id => {
+    if (!id) return null;
+    for (const ws of all()) if (wsAttachId(ws) === id) return ws;
+    return null;
+  };
+  return {
+    get: id => find(id),
+    has: id => !!find(id),
+    /* `set` مُلزِمة لا مُضيفة: أي مقبس أقدم يحمل نفس المعرّف يُنزع منه
+       أولًا. بلا هذا يبقى مقبسا استلامٍ بنفس المعرّف بعد إعادة الاتصال،
+       فيرجع البحث أوّلهما في ترتيب `getWebSockets()` — وهو الميت. */
+    set(id, ws) {
+      for (const w of all()) {
+        if (w !== ws && wsAttachId(w) === id) {
+          try { w.serializeAttachment({ id: null }); } catch {}
+        }
+      }
+      try { ws.serializeAttachment({ id }); } catch {}
+      return this;
+    },
+    /* الحذف ينزع المعرّف ولا يغلق: النداءات كلها تغلق بنفسها قبله.
+       ومقبسٌ بلا معرّف لا يُعنون ولا يُبَثّ إليه ولا يُحسب في `size`. */
+    delete(id) {
+      const ws = find(id);
+      if (ws) { try { ws.serializeAttachment({ id: null }); } catch {} }
+      return !!ws;
+    },
+    values: () => live(),
+    keys:   () => live().map(wsAttachId),
+    get size() { return live().length; },
+    [Symbol.iterator]() {
+      return live().map(ws => [wsAttachId(ws), ws])[Symbol.iterator]();
+    },
+  };
+}
+
 export class WalimaRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
+    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن أصلًا. النصّان مقصودان
+       حرفيًا: العميل يرسل {"type":"hb"} كل ٢٥ ثانية، وكان يستقبل
+       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon — فالردّ
+       هنا مطابق له بايتًا ببايت. المطابقة في الردّ الآلي حرفيّة تمامًا،
+       ولذلك أُبقيَ معالج hb في المُغلِّف شبكةَ أمان: لو لم يطابق النصُّ
+       يومًا، تنزل النبضة للكائن ويردّ pong كما اليوم — نخسر توفير
+       الفوترة ولا نخسر لاعبًا. */
+    try {
+      this.state.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
+      );
+    } catch {}
+    this.sockets = hibernatingSockets(state);
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -5889,7 +5956,9 @@ export class WalimaRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* المقعد الناجح وحده يمرّ على acceptWebSocket تحت. مسارات الرفض
+       الثلاثة تُغلق بعد سطرين، فتأخذ accept() العادي — لا معنى لتسجيل
+       مقبسٍ في السبات ليموت فورًا. */
 
     const token = url.searchParams.get('token');
     let player = this.seatByToken(token);
@@ -5911,6 +5980,7 @@ export class WalimaRoom {
     // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
     // بدون هذا يتجاوز المهاجم حدّ allowCreate بالكامل ويفرّخ غرفًا بلا سقف.
     if (!player && !this.room.code) {
+      server.accept();
       server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
       server.close();
       return new Response(null, { status: 101, webSocket: client });
@@ -5918,11 +5988,13 @@ export class WalimaRoom {
 
     if (!player) {
       if (this.room.phase !== 'lobby') {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الوليمة بدأت، ما تقدر تنضم الآن' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.players.length >= 10) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'المائدة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -5939,6 +6011,10 @@ export class WalimaRoom {
     if (!player.seatToken) player.seatToken = newSeatToken();
 
     this.noteAccount(url, player);
+    /* السبات يبدأ هنا: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة،
+       فمراحل الكتابة والنقاش الصامتة لا تُحتسب مدةً. لا بدّ أن يسبق أي
+       serializeAttachment — والمقبس غير المقبول لا يملك مرفقًا أصلًا. */
+    this.state.acceptWebSocket(server);
     /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
@@ -5948,8 +6024,9 @@ export class WalimaRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
+    /* لا addEventListener مع السبات: الرسائل تصل webSocketMessage
+       والإغلاق يصل webSocketClose تحت — المستمِع في الذاكرة يموت مع
+       أول نومة، وهذا هو الفخّ كلّه. */
 
     await this.persist();
     this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code, seatToken: player.seatToken });
@@ -6061,6 +6138,37 @@ export class WalimaRoom {
     // ما ننتظر منقطعًا: لو الباقون سلّموا، امضِ
     if (this.room.phase === 'writing' && this.allIn()) await this.runHost(false);
   }
+
+  /* ══════════ مداخل السبات ══════════
+     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
+  async webSocketMessage(ws, raw) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    /* نمرّ على onMessage نفسها لا على نسخةٍ ثانية: مُغلِّف
+       applyRoomCommon يلفّها بسقف الحجم وبردّ hb الاحتياطي. */
+    return this.onMessage(id, { data: raw });
+  }
+
+  /* ── إغلاقٌ لمقعدٍ سُلِب لا يُسقط صاحبه الجديد ──
+     هذا هو حارس onClose القديم بعينه (`sockets.get(playerId) !== ws`)
+     منقولًا إلى مدخل السبات. ولا يكفي أن نتّكل على نزع المرفق عند
+     الاستلام: `close()` يُخرج المقبس من `getWebSockets()` فورًا، فحين
+     تمرّ `sockets.set` لتنزع المعرّف من الأقدم لا تجده أصلًا — فيصل
+     إغلاقُه بعد لحظة حاملًا معرّف اللاعب، فيُشطب المقعد الذي رجع
+     صاحبه للتوّ. المقارنة بالهوية تقفل هذا الباب: من كان المسجَّل
+     الآن لهذا المعرّف مقبسًا آخر، فإغلاق القديم لا يخصّ أحدًا.
+     و`cur === null` تعني أنه هو نفسه وقد خرج بالإغلاق — فيمضي. */
+  async closedSeat(ws) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    const cur = this.sockets.get(id);
+    if (cur && cur !== ws) return;
+    try { ws.serializeAttachment({ id: null }); } catch {}
+    await this.onClose(id);
+  }
+
+  async webSocketClose(ws) { await this.closedSeat(ws); }
+  async webSocketError(ws) { await this.closedSeat(ws); }
 
   /* عددُ الجولات: كان مثبَّتًا على WL_ROUNDS بينما نسخةُ الجهاز الواحد
      تعطي ٢-٥ — وقاعدتُنا أنّ شاشةَ إعداداتِ الأونلاين تطابق نظيرتَها.
