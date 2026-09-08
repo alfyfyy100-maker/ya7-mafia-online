@@ -8422,8 +8422,19 @@ export class DakhilRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
-    this.timer = null;
+    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن. النصّان مطابقان لما
+       يتبادله العميل المشترك اليوم: يرسل {"type":"hb"} ويستقبل
+       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon. */
+    try {
+      this.state.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
+      );
+    } catch {}
+    /* كان Map في الذاكرة: يُبنى فارغًا عند كل صحوة بينما المقابس تنجو
+       في getWebSockets()، فيبقى اللاعبون connected بلا أن يصلهم بايت. */
+    this.sockets = hibernatingSockets(state);
+    /* لا مقبض مؤقّت: الإيقاع على storage.setAlarm فوق المهلة المحفوظة
+       في التخزين — المقبض كان يموت مع كل نومة ونشرة. */
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -8444,23 +8455,56 @@ export class DakhilRoom {
     return new Response('غير موجود', { status: 404 });
   }
 
+  /* touchRoom تضبط أفق الـTTL (ست ساعات) دائمًا فتدهس مهلة المرحلة.
+     arm تأخذ الأقرب بين الاثنين. */
   async persist() {
-    await this.touchRoom();
+    this.room.lastSeen = Date.now();
     await this.state.storage.put('room', this.room);
+    await this.arm();
+  }
+
+  async arm() {
+    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
+    const d = this.phaseDueAt();
+    if (d) next = Math.min(next, d);
+    try { await this.state.storage.setAlarm(next); } catch {}
+  }
+
+  /* موعد استحقاق المرحلة، أو null — نفس شرط pendingPhase حرفًا بحرف */
+  phaseDueAt() {
+    const rd = this.room && this.room.round;
+    /* الموقوف بيد المضيف ليس ضائعًا — إحياؤه يسرق منه الإيقاف */
+    if (!rd || rd.paused || !rd.endsAt) return null;
+    if (this.room.phase !== 'discuss') return null;
+    return rd.endsAt;
+  }
+
+  async alarm() {
+    const now = Date.now();
+    const due = this.phaseDueAt();
+    if (due) {
+      if (now >= due - 60) { try { await this.startVote(); } catch {} }
+      await this.arm();
+      return;
+    }
+    const idle = now - (this.room.lastSeen || 0);
+    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
+      await this.state.storage.deleteAll();
+      return;
+    }
+    await this.arm();
   }
 
   findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
   idxOf(id) { return this.room.players.findIndex(p => p.id === id); }
   activePlayers() { return this.room.players.filter(p => p.connected); }
 
-  setPhaseTimer(ms, fn) {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(async () => {
-      this.timer = null;
-      try { await fn(); } catch (e) {}
-    }, ms);
-  }
-  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
+  /* لم تعد تُنشئ مؤقّتًا في الذاكرة: المهلة المحفوظة هي الموعد، وarm
+     تترجمها إلى منبّه في التخزين. أُبقيت الأسماء لأن مواضع النداء
+     تستعملها، ويكفي أن تُعيد التسليح — النداءات كلها تضبط المهلة أو
+     تمسحها بنفسها قبلها. */
+  setPhaseTimer() { this.arm().catch(() => {}); }
+  clearPhaseTimer() { this.arm().catch(() => {}); }
 
   /* ── إحياء المرحلة بعد إعادة تشغيل الكائن ──
      `setTimeout` يعيش في ذاكرة الـ Durable Object وحدها. وكل نشرة
@@ -8471,12 +8515,14 @@ export class DakhilRoom {
      الآن: أي رسالة أو اتصال جديد يعيد تسليح المؤقّت من المهلة
      المحفوظة (أو يفجّره فورًا لو انقضت). التسليح لا الاستدعاء
      المباشر: فيمرّ من نفس المسار وتنطبق كل حراسه. */
+  /* المنبّه ينجو النومة والنشرة، فالإحياء صار شبكة أمان لا الآلية
+     الأساسية: يفجّر مرحلةً فات موعدها بلا انتظار المنبّه. */
   resumePhase() {
-    if (this.timer) return;
     let due = null;
     try { due = this.pendingPhase(); } catch { return; }
-    if (!due || typeof due.fn !== 'function') return;
-    this.setPhaseTimer(Math.max(0, Number(due.ms) || 0), due.fn);
+    if (!due) return;
+    if (Number(due.ms) <= 0) { Promise.resolve(this.startVote()).catch(() => {}); return; }
+    this.arm().catch(() => {});
   }
 
   pendingPhase() {
@@ -8528,7 +8574,9 @@ export class DakhilRoom {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* السبات: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة. مسارات
+       الرفض تحته تُغلق فورًا، ومقبسٌ بلا مرفق لا تراه الواجهة أصلًا. */
+    this.state.acceptWebSocket(server);
 
     const token = url.searchParams.get('token');
     const name = url.searchParams.get('name');
@@ -8575,8 +8623,8 @@ export class DakhilRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
+    /* لا addEventListener مع السبات: المستمِع في الذاكرة يموت مع أول
+       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
 
     await this.persist();
     this.sendPrivate(player.id, {
@@ -8588,6 +8636,31 @@ export class DakhilRoom {
     this.broadcastState();
     return new Response(null, { status: 101, webSocket: client });
   }
+
+  /* ══════════ مداخل السبات ══════════
+     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
+  async webSocketMessage(ws, raw) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    /* نمرّ على onMessage نفسها: مُغلِّف applyRoomCommon يلفّها بسقف
+       الحجم وبردّ hb الاحتياطي لو لم يطابق النصُّ الردَّ الآلي. */
+    return this.onMessage(id, { data: raw });
+  }
+
+  /* حارس onClose القديم منقولًا: close() قد يُخرج المقبس من
+     getWebSockets() قبل أن تنزع sockets.set معرّفه، فيصل إغلاقه حاملًا
+     معرّف اللاعب ويشطب مقعدًا رجع صاحبه للتوّ. */
+  async closedSeat(ws) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    const cur = this.sockets.get(id);
+    if (cur && cur !== ws) return;
+    try { ws.serializeAttachment({ id: null }); } catch {}
+    await this.onClose(id);
+  }
+
+  async webSocketClose(ws) { await this.closedSeat(ws); }
+  async webSocketError(ws) { await this.closedSeat(ws); }
 
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
