@@ -10968,7 +10968,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v193';   // v180 = جولات الصوت · v181 = من بلّغ باليوزر · v182 = أوضاع الجولات الثلاثة
+const WORKER_VERSION = 'v194';   // v180 = جولات الصوت · v181 = من بلّغ باليوزر · v182 = أوضاع الجولات الثلاثة · v194 = سبات الغرف التسع
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
