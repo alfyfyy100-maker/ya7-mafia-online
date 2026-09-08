@@ -3191,9 +3191,24 @@ export class GotRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
-    // من أعلن دعمه لواجهة الغراب — ما ننتظر إلا هؤلاء، وإلا تجمّدت الليلة على نسخة قديمة مخزّنة في المتصفح
-    this.ravenClients = new Set();
+    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن. النصّان مطابقان لما
+       يتبادله العميل المشترك اليوم: يرسل {"type":"hb"} ويستقبل
+       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon. */
+    try {
+      this.state.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
+      );
+    } catch {}
+    /* كان Map في الذاكرة: يُبنى فارغًا عند كل صحوة بينما المقابس تنجو
+       في getWebSockets()، فيبقى اللاعبون connected بلا أن يصلهم بايت. */
+    this.sockets = hibernatingSockets(state);
+    /* من أعلن دعمه لواجهة الغراب — ما ننتظر إلا هؤلاء، وإلا تجمّدت
+       الليلة على نسخة قديمة مخزّنة في المتصفح.
+       كان Set في الذاكرة: مع السبات يُفرَّغ عند أول إخلاء، فترجع
+       ravenPendingFrom فارغةً وتُحسم الليلة بلا انتظار صاحب الغراب —
+       يخسر دورَه صامتًا. صار في this.room فينجو الإخلاء، ويسقط عند
+       الانقطاع وحده (انظر onClose): الإخلاء ليس انقطاعًا، فالعقد
+       صار «هذا المقبس الحيّ يدعم الغراب» لا «أعلن مرةً فأبدًا». */
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -3240,7 +3255,9 @@ export class GotRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* السبات: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة. مسارات
+       الرفض تحته تُغلق فورًا، ومقبسٌ بلا مرفق لا تراه الواجهة أصلًا. */
+    this.state.acceptWebSocket(server);
 
     // ── الهوية بالتوكن السري فقط (نفس علّة مافيا: المعرّف يُبَث للجميع) ──
     const token = url.searchParams.get('token');
@@ -3302,8 +3319,8 @@ export class GotRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
+    /* لا addEventListener مع السبات: المستمِع في الذاكرة يموت مع أول
+       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
 
     await this.persist();
     this.broadcastLobby();
@@ -3361,13 +3378,38 @@ export class GotRoom {
     if (msg.type === 'baelishAlign') await this.handleBaelishAlign(playerId, msg.side);
     if (msg.type === 'ravenSend') await this.handleRavenSend(playerId, msg);
     if (msg.type === 'ravenSkip') await this.handleRavenSkip(playerId);
-    if (msg.type === 'ravenReady') this.ravenClients.add(playerId);
+    if (msg.type === 'ravenReady') await this.noteRavenClient(playerId);
     if (msg.type === 'startAccusation' && playerId === this.room.hostId && this.room.phase === 'day') await this.startAccusation();
     if (msg.type === 'accuseVote' && this.room.phase === 'accusing') await this.handleAccuseVote(playerId, msg.targetId);
     if (msg.type === 'startFinalVote' && playerId === this.room.hostId && this.room.phase === 'trial') await this.startFinalVote();
     if (msg.type === 'finalVote' && this.room.phase === 'finalVoting') await this.handleFinalVote(playerId, msg.guilty);
     if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
+
+  /* ══════════ مداخل السبات ══════════
+     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
+  async webSocketMessage(ws, raw) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    /* نمرّ على onMessage نفسها: مُغلِّف applyRoomCommon يلفّها بسقف
+       الحجم وبردّ hb الاحتياطي لو لم يطابق النصُّ الردَّ الآلي. */
+    return this.onMessage(id, { data: raw });
+  }
+
+  /* حارس onClose القديم منقولًا: close() قد يُخرج المقبس من
+     getWebSockets() قبل أن تنزع sockets.set معرّفه، فيصل إغلاقه حاملًا
+     معرّف اللاعب ويشطب مقعدًا رجع صاحبه للتوّ. */
+  async closedSeat(ws) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    const cur = this.sockets.get(id);
+    if (cur && cur !== ws) return;
+    try { ws.serializeAttachment({ id: null }); } catch {}
+    await this.onClose(id);
+  }
+
+  async webSocketClose(ws) { await this.closedSeat(ws); }
+  async webSocketError(ws) { await this.closedSeat(ws); }
 
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
@@ -3379,6 +3421,12 @@ export class GotRoom {
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
+    /* الإعلان يسقط مع الاتصال: معناه «هذا المقبس الحيّ يدعم الغراب»
+       لا «هذا اللاعب أعلن مرة». ya7-raven.js يعترض new WebSocket نفسه
+       فيُعيد الإرسال مع كل فتح مقبس — فلا يضيع دورٌ بإعادة اتصال.
+       وبلا هذا السطر يبقى العلم محفوظًا للأبد، فلو رجع اللاعب بصفحة
+       قديمة مخبَّأة بلا واجهة غراب انتظرته الليلةُ وهو لا يملك الزرّ. */
+    if (this.room.ravenClients) delete this.room.ravenClients[playerId];
     this.migrateHostIfNeeded();
     await this.persist();
     this.broadcastLobby();
@@ -3635,10 +3683,20 @@ export class GotRoom {
     if (this.allNightActionsIn()) await this.resolveNight();
   }
 
+  /* إعلان دعم الغراب يُحفظ مرة واحدة لكل لاعب — لا كتابة على كل رسالة */
+  async noteRavenClient(playerId){
+    const k = safeKey(String(playerId || ''));
+    if (!k) return;
+    this.room.ravenClients = this.room.ravenClients || {};
+    if (this.room.ravenClients[k]) return;
+    this.room.ravenClients[k] = 1;
+    await this.persist();
+  }
+
   // الليلة ما تُحسم قبل ما صاحب الغراب يرسل أو يتخطّى — نفس أسلوب برون
   ravenPendingFrom(){
     return this.alivePlayers().filter(p =>
-      !p.isBot && p.connected && this.ravenClients.has(p.id) &&
+      !p.isBot && p.connected && !!(this.room.ravenClients || {})[p.id] &&
       (p.role === 'varys' || p.role === 'baelish') &&
       !(this.room.ravenUsed || {})[p.id] &&
       !(((this.room.nightActions || {}).ravenDone || {})[p.id]) &&
