@@ -11049,9 +11049,14 @@ export class BilliardRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    /* الردّ pong لا hb-ok: طبقة Net في صفحات اللعب تبتلع pong باسمه
+       صراحةً (if (m.type === 'pong') return;) وتمرّر ما عداه إلى
+       App.onMsg — فكان hb-ok يصل اللعبة رسالةً مجهولة كل ٢٥ ثانية.
+       ولا خطر انقطاعٍ في الحالتين: مراقب الحياة يتصفّر بأي بايت وارد
+       قبل التحليل، فلا يعتمد على نصّ الردّ إطلاقًا. */
     try {
       this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"hb-ok"}')
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
       );
     } catch {}
     this.state.blockConcurrencyWhile(async () => {
@@ -14885,9 +14890,14 @@ export class BalootRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    /* الردّ pong لا hb-ok: طبقة Net في صفحات اللعب تبتلع pong باسمه
+       صراحةً (if (m.type === 'pong') return;) وتمرّر ما عداه إلى
+       App.onMsg — فكان hb-ok يصل اللعبة رسالةً مجهولة كل ٢٥ ثانية.
+       ولا خطر انقطاعٍ في الحالتين: مراقب الحياة يتصفّر بأي بايت وارد
+       قبل التحليل، فلا يعتمد على نصّ الردّ إطلاقًا. */
     try {
       this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"hb-ok"}')
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
       );
     } catch {}
     this.state.blockConcurrencyWhile(async () => {
