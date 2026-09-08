@@ -6885,8 +6885,17 @@ export class DaqashRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
-    this.timer = null;
+    /* نفس نصَّي وليمة حرفيًا: العميل المشترك يرسل {"type":"hb"} ويستقبل
+       {"type":"pong"}. ولا نلمس 'ping' — داقش تفهمها «أرسل الحالة
+       كاملة»، فجعلُها ردًّا آليًا يقطع تحديث الحالة عن اللاعبين. */
+    try {
+      this.state.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
+      );
+    } catch {}
+    this.sockets = hibernatingSockets(state);
+    /* لا مقبض مؤقّت بعد اليوم: الإيقاع كله على storage.setAlarm فوق
+       hand.endsAt المحفوظ أصلًا. المقبض كان يموت مع كل نومة ونشرة. */
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -6907,9 +6916,52 @@ export class DaqashRoom {
     return new Response('غير موجود', { status: 404 });
   }
 
+  /* touchRoom المشتركة تضبط أفق الـTTL (ست ساعات) دائمًا، فتدهس مهلة
+     الدور (٢٥ث) وتُجمّد اليد. arm تأخذ الأقرب بين الاثنين. */
   async persist() {
-    await this.touchRoom();
+    this.room.lastSeen = Date.now();
     await this.state.storage.put('room', this.room);
+    await this.arm();
+  }
+
+  /* منبّه واحد لكل كائن: أقرب موعد بين مهلة الطور وتنظيف الغرفة */
+  async arm() {
+    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
+    const d = this.phaseDueAt();
+    if (d) next = Math.min(next, d);
+    try { await this.state.storage.setAlarm(next); } catch {}
+  }
+
+  /* موعد استحقاق الطور الجاري، أو null إن لم يكن ثمّة طور موقوت.
+     المصدر hand.endsAt المحفوظ في التخزين — وهو موجود قبل هذا
+     التعديل، فالترحيل استبدال مُشغِّل لا اختراع مصدر حقيقة. */
+  phaseDueAt() {
+    const r = this.room;
+    if (!r || r.phase === 'lobby' || r.phase === 'over') return null;
+    const h = r.hand;
+    if (!h || !h.endsAt) return null;
+    return h.endsAt + 400;
+  }
+
+  async alarm() {
+    const now = Date.now();
+    const due = this.phaseDueAt();
+    if (due) {
+      if (now >= due - 60) {
+        const h = this.room.hand;
+        /* حارس (no, seq) يبقى كما هو داخل onTimeout، وحارس endsAt معه.
+           نمرّر الحاليّين لأن المنبّه واحد لا يتعدّد كالمؤقّتات. */
+        try { await this.onTimeout(h.no, h.seq); } catch {}
+      }
+      await this.arm();
+      return;
+    }
+    const idle = now - (this.room.lastSeen || 0);
+    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
+      await this.state.storage.deleteAll();
+      return;
+    }
+    await this.arm();
   }
 
   findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
@@ -6976,7 +7028,8 @@ export class DaqashRoom {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* مسارات الرفض الثلاثة تحت تُغلق فورًا فتأخذ accept() العادي؛
+       المقعد الناجح وحده يُسجَّل في السبات. */
 
     const token = url.searchParams.get('token');
     const name = url.searchParams.get('name');
@@ -6999,16 +7052,19 @@ export class DaqashRoom {
     } else {
       // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket
       if (!this.room.code) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — انتظر الجولة الجاية' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.players.length >= DQ_MAX_PLAYERS) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -7023,6 +7079,8 @@ export class DaqashRoom {
     }
 
     this.noteAccount(url, player);
+    /* السبات يبدأ هنا: لا بدّ أن يسبق أي serializeAttachment. */
+    this.state.acceptWebSocket(server);
     /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
@@ -7032,8 +7090,8 @@ export class DaqashRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
+    /* لا addEventListener مع السبات — المستمِع في الذاكرة يموت مع أول
+       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
 
     await this.persist();
     this.sendPrivate(player.id, {
@@ -7045,6 +7103,27 @@ export class DaqashRoom {
     this.broadcastState();
     return new Response(null, { status: 101, webSocket: client });
   }
+
+  /* ══════════ مداخل السبات ══════════
+     نسخة وليمة نفسها: المعرّف من المرفق لا من الإغلاق، وحارس الهوية
+     يمنع إغلاقَ مقبسٍ سُلِب مقعده من شطب صاحبه الجديد. */
+  async webSocketMessage(ws, raw) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    return this.onMessage(id, { data: raw });
+  }
+
+  async closedSeat(ws) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    const cur = this.sockets.get(id);
+    if (cur && cur !== ws) return;
+    try { ws.serializeAttachment({ id: null }); } catch {}
+    await this.onClose(id);
+  }
+
+  async webSocketClose(ws) { await this.closedSeat(ws); }
+  async webSocketError(ws) { await this.closedSeat(ws); }
 
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
@@ -7426,7 +7505,7 @@ export class DaqashRoom {
     };
     this.log('الموزّع: ' + r.players[d].name);
     await this.persist();
-    this.armTurn();
+    await this.armTurn();
     this.broadcastState();
   }
 
@@ -7457,14 +7536,13 @@ export class DaqashRoom {
   // ═══════════ المؤقّت ═══════════
   /* الـ DO يبقى حيًّا ما دامت هناك اتصالات مفتوحة، فـ setTimeout كافٍ.
      ومع ذلك نتحقق من endsAt عند كل رسالة، حتى لو نام المؤقّت. */
-  setPhaseTimer(ms, fn) {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(async () => {
-      this.timer = null;
-      try { await fn(); } catch (e) {}
-    }, ms);
+  /* لم تعد تُنشئ مؤقّتًا في الذاكرة: hand.endsAt هو الموعد، وarm يترجمه
+     إلى منبّه في التخزين. أُبقيت الأسماء لأن كل مواضع النداء تستعملها. */
+  clearPhaseTimer() {
+    const h = this.room && this.room.hand;
+    if (h) h.endsAt = 0;          // لا طور موقوت الآن ⇒ يسقط المنبّه على TTL
+    try { this.arm(); } catch {}
   }
-  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
 
   /* ── إحياء المرحلة بعد إعادة تشغيل الكائن ──
      `setTimeout` يعيش في ذاكرة الـ Durable Object وحدها. وكل نشرة
@@ -7475,12 +7553,21 @@ export class DaqashRoom {
      الآن: أي رسالة أو اتصال جديد يعيد تسليح المؤقّت من المهلة
      المحفوظة (أو يفجّره فورًا لو انقضت). التسليح لا الاستدعاء
      المباشر: فيمرّ من نفس المسار وتنطبق كل حراسه. */
+  /* المنبّه ينجو النومة والنشرة، فالإحياء صار شبكة أمان لا الآلية
+     الأساسية: يعالج الحالة القديمة بلا endsAt، ويفجّر طورًا فات موعده
+     بلا انتظار المنبّه. */
   resumePhase() {
-    if (this.timer) return;
     let due = null;
     try { due = this.pendingPhase(); } catch { return; }
-    if (!due || typeof due.fn !== 'function') return;
-    this.setPhaseTimer(Math.max(0, Number(due.ms) || 0), due.fn);
+    if (!due) return;
+    if (Number(due.ms) <= 0) {
+      const h = this.room.hand;
+      if (h) this.onTimeout(h.no, h.seq).catch(() => {});
+      return;
+    }
+    /* persist لا arm: pendingPhase قد تكون منحت endsAt جديدًا لحالة
+       قديمة، ومنه يُشتقّ المنبّه — فلا ينفع في الذاكرة وحدها. */
+    this.persist().catch(() => {});
   }
 
   pendingPhase() {
@@ -7504,12 +7591,12 @@ export class DaqashRoom {
     const ms = this.room.cfg.turnSec * 1000;
     h.endsAt = Date.now() + ms;
     const snapNo = h.no, snapSeq = h.seq;
-    this.setPhaseTimer(ms + 400, () => this.onTimeout(snapNo, snapSeq));
     /* المهلة كانت تُضبط بعد `persist()` دائمًا، فما تصل التخزين أبدًا:
        المحفوظ يبقى endsAt=0. فحتى لو نجت الحالة من إعادة التشغيل، لا
-       يبقى في التخزين ما يُعرف منه متى ينتهي الدور. الحفظ هنا بلا
-       انتظار — الكتابة الفعلية على كل حركة قائمة أصلًا. */
-    try { this.persist(); } catch {}
+       يبقى في التخزين ما يُعرف منه متى ينتهي الدور.
+       والحفظ صار منتظَرًا: كتابة غير منتظَرة قد يقطعها الإخلاء، ومنها
+       يُشتقّ المنبّه نفسه — فضياعها يعني ضياع الموعد لا تأخّره. */
+    return this.persist();
   }
 
   async onTimeout(handNo, seq) {
@@ -7672,7 +7759,7 @@ export class DaqashRoom {
        نتخطّى المطويين، وإن بقي حيٌّ واحد ننهي المزاد فورًا. */
     while (h.turn < h.order.length && h.folded[h.order[h.turn]]) h.turn++;
     if (this.live(h).length <= 1) h.turn = h.order.length;
-    if (h.turn < h.order.length) { this.armTurn(); return; }
+    if (h.turn < h.order.length) { await this.armTurn(); return; }
     await this.startOffer();
   }
 
@@ -7687,7 +7774,7 @@ export class DaqashRoom {
       L.length === 0 && h.order.forEach(i => { this.room.players[i].chips += h.bets[i]; });
       h.phase = 'reveal'; h.revealed = false;
       h.title = 'كلهم انسحبوا — رُدّت الرهانات';
-      this.bump(); this.armRevealTimer();
+      this.bump(); await this.armRevealTimer();
       return;
     }
     if (L.length === 1) {
@@ -7698,7 +7785,7 @@ export class DaqashRoom {
       h.prize = h.pot;
       h.phase = 'reveal'; h.revealed = true; h.shown = L.slice();
       h.title = this.room.players[w].name + ' بقي لحاله وأخذ القدر — ' + h.pot;
-      this.bump(); this.armRevealTimer();
+      this.bump(); await this.armRevealTimer();
       return;
     }
     // الموزّع انسحب: تنتقل المهمة لآخر لاعب حي، ويُعاد حساب others تلقائيًا
@@ -7708,7 +7795,7 @@ export class DaqashRoom {
     }
     h.phase = 'offer';
     this.bump();
-    this.armTurn();
+    await this.armTurn();
   }
 
   async actOffer(playerId, msg) {
@@ -7767,7 +7854,7 @@ export class DaqashRoom {
     h.votesOpen = false;
     this.log(this.room.players[h.dealerIdx].name + ' عرض التوزيع');
     this.bump();
-    this.armTurn();
+    await this.armTurn();
   }
 
   // ═══════════ التصويت ═══════════
@@ -7821,7 +7908,7 @@ export class DaqashRoom {
       h.title = 'رضوا كلهم — ' + this.room.players[h.dealerIdx].name
         + ' أخذ ' + h.offer[h.dealerIdx] + ' بلا كشف';
       this.bump();
-      this.armRevealTimer();
+      await this.armRevealTimer();
       await this.persist();
       this.broadcastState();
       return;
@@ -7854,7 +7941,7 @@ export class DaqashRoom {
     }
     h.phase = 'reveal';
     this.bump();
-    this.armRevealTimer();
+    await this.armRevealTimer();
     await this.persist();
     this.broadcastState();
   }
@@ -7938,8 +8025,7 @@ export class DaqashRoom {
   armRevealTimer() {
     const h = this.room.hand;
     h.endsAt = Date.now() + DQ_REVEAL_MS;
-    const snapNo = h.no, snapSeq = h.seq;
-    this.setPhaseTimer(DQ_REVEAL_MS + 400, () => this.onTimeout(snapNo, snapSeq));
+    return this.persist();        // الموعد لا ينفع في الذاكرة وحدها
   }
 
   async nextHand() {
