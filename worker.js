@@ -9339,8 +9339,19 @@ export class KirmRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
-    this.timer = null;
+    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن. النصّان مطابقان لما
+       يتبادله العميل المشترك اليوم: يرسل {"type":"hb"} ويستقبل
+       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon. */
+    try {
+      this.state.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
+      );
+    } catch {}
+    /* كان Map في الذاكرة: يُبنى فارغًا عند كل صحوة بينما المقابس تنجو
+       في getWebSockets()، فيبقى اللاعبون connected بلا أن يصلهم بايت. */
+    this.sockets = hibernatingSockets(state);
+    /* لا مقبض مؤقّت: الإيقاع على storage.setAlarm فوق turnEndsAt
+       المحفوظ — المقبض كان يموت مع كل نومة ونشرة. */
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -9360,9 +9371,43 @@ export class KirmRoom {
     return new Response('غير موجود', { status: 404 });
   }
 
+  /* touchRoom تضبط أفق الـTTL (ست ساعات) دائمًا فتدهس مهلة الدور.
+     arm تأخذ الأقرب بين الاثنين. */
   async persist() {
-    await this.touchRoom();
+    this.room.lastSeen = Date.now();
     await this.state.storage.put('room', this.room);
+    await this.arm();
+  }
+
+  async arm() {
+    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
+    const d = this.phaseDueAt();
+    if (d) next = Math.min(next, d);
+    try { await this.state.storage.setAlarm(next); } catch {}
+  }
+
+  /* موعد استحقاق الدور — نفس شرط resumePhase القديم حرفًا بحرف */
+  phaseDueAt() {
+    const r = this.room;
+    if (!r) return null;
+    if ((r.phase !== 'aim' && r.phase !== 'placing') || !r.turnEndsAt) return null;
+    return r.turnEndsAt;
+  }
+
+  async alarm() {
+    const now = Date.now();
+    const due = this.phaseDueAt();
+    if (due) {
+      if (now >= due - 60) { try { await this.turnTimeout(); } catch {} }
+      await this.arm();
+      return;
+    }
+    const idle = now - (this.room.lastSeen || 0);
+    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
+      await this.state.storage.deleteAll();
+      return;
+    }
+    await this.arm();
   }
 
   findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
@@ -9374,18 +9419,16 @@ export class KirmRoom {
      بلا مهلة، لاعب ينسحب بلا قطع اتصال يجمّد الغرفة للأبد. والمؤقّت
      يعيش في ذاكرة الكائن وحده، فأي نشرة تمسحه — لذلك `resumePhase`
      يعيد تسليحه من `turnEndsAt` المحفوظ. */
-  setTurnTimer(ms) {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(async () => {
-      this.timer = null;
-      try { await this.turnTimeout(); } catch {}
-    }, Math.max(0, ms));
-  }
+  /* لم تعد تُنشئ مؤقّتًا: turnEndsAt هو الموعد، وarm تترجمه إلى منبّه
+     في التخزين. أُبقي الاسم لأن armTurn تستعمله. */
+  setTurnTimer() { this.arm().catch(() => {}); }
+  /* المنبّه ينجو النومة والنشرة، فالإحياء صار شبكة أمان: يفجّر دورًا
+     فات موعده بلا انتظار المنبّه. */
   resumePhase() {
-    if (this.timer) return;
-    const r = this.room;
-    if ((r.phase !== 'aim' && r.phase !== 'placing') || !r.turnEndsAt) return;
-    this.setTurnTimer(r.turnEndsAt - Date.now());
+    const due = this.phaseDueAt();
+    if (!due) return;
+    if (Date.now() >= due) { this.turnTimeout().catch(() => {}); return; }
+    this.arm().catch(() => {});
   }
   async turnTimeout() {
     const r = this.room;
@@ -9446,7 +9489,9 @@ export class KirmRoom {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* السبات: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة. مسارات
+       الرفض تحته تُغلق فورًا، ومقبسٌ بلا مرفق لا تراه الواجهة أصلًا. */
+    this.state.acceptWebSocket(server);
 
     const token = url.searchParams.get('token');
     const name = url.searchParams.get('name');
@@ -9489,8 +9534,8 @@ export class KirmRoom {
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
+    /* لا addEventListener مع السبات: المستمِع في الذاكرة يموت مع أول
+       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
 
     /* ردهة بلا مضيف متصل: المضيف قفل التبويب وهو وحده فبقي hostId له،
        ومن يدخل بعده كان يجد «بانتظار المضيف يبدأ…» إلى الأبد. */
@@ -9513,6 +9558,31 @@ export class KirmRoom {
     this.broadcastState();
     return new Response(null, { status: 101, webSocket: client });
   }
+
+  /* ══════════ مداخل السبات ══════════
+     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
+  async webSocketMessage(ws, raw) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    /* نمرّ على onMessage نفسها: مُغلِّف applyRoomCommon يلفّها بسقف
+       الحجم وبردّ hb الاحتياطي لو لم يطابق النصُّ الردَّ الآلي. */
+    return this.onMessage(id, { data: raw });
+  }
+
+  /* حارس onClose القديم منقولًا: close() قد يُخرج المقبس من
+     getWebSockets() قبل أن تنزع sockets.set معرّفه، فيصل إغلاقه حاملًا
+     معرّف اللاعب ويشطب مقعدًا رجع صاحبه للتوّ. */
+  async closedSeat(ws) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    const cur = this.sockets.get(id);
+    if (cur && cur !== ws) return;
+    try { ws.serializeAttachment({ id: null }); } catch {}
+    await this.onClose(id);
+  }
+
+  async webSocketClose(ws) { await this.closedSeat(ws); }
+  async webSocketError(ws) { await this.closedSeat(ws); }
 
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
@@ -9810,8 +9880,7 @@ const KirmLogic = {
     if (res.roundOver) {
       if (r.round >= r.rounds) {
         r.phase = 'over';
-        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
-        r.turnEndsAt = 0;
+        r.turnEndsAt = 0;          // لا مهلة دور ⇒ يسقط المنبّه على TTL
         await this.finish();
       } else {
         this.startRound();
