@@ -4362,7 +4362,17 @@ export class MawwihRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
+    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن. النصّان مطابقان لما
+       يتبادله العميل المشترك اليوم: يرسل {"type":"hb"} ويستقبل
+       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon. */
+    try {
+      this.state.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
+      );
+    } catch {}
+    /* كان Map في الذاكرة: يُبنى فارغًا عند كل صحوة بينما المقابس تنجو
+       في getWebSockets()، فيبقى اللاعبون connected بلا أن يصلهم بايت. */
+    this.sockets = hibernatingSockets(state);
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -4407,7 +4417,9 @@ export class MawwihRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* السبات: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة. مسارات
+       الرفض تحته تُغلق فورًا، ومقبسٌ بلا مرفق لا تراه الواجهة أصلًا. */
+    this.state.acceptWebSocket(server);
 
     const token = url.searchParams.get('token');
 
@@ -4472,8 +4484,8 @@ export class MawwihRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
+    /* لا addEventListener مع السبات: المستمِع في الذاكرة يموت مع أول
+       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
 
     await this.persist();
     this.broadcastLobby();
@@ -4537,6 +4549,31 @@ export class MawwihRoom {
     if (msg.type === 'nextRound' && playerId === this.room.hostId && this.room.phase === 'reveal') await this.nextRound();
     if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
+
+  /* ══════════ مداخل السبات ══════════
+     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
+  async webSocketMessage(ws, raw) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    /* نمرّ على onMessage نفسها: مُغلِّف applyRoomCommon يلفّها بسقف
+       الحجم وبردّ hb الاحتياطي لو لم يطابق النصُّ الردَّ الآلي. */
+    return this.onMessage(id, { data: raw });
+  }
+
+  /* حارس onClose القديم منقولًا: close() قد يُخرج المقبس من
+     getWebSockets() قبل أن تنزع sockets.set معرّفه، فيصل إغلاقه حاملًا
+     معرّف اللاعب ويشطب مقعدًا رجع صاحبه للتوّ. */
+  async closedSeat(ws) {
+    const id = wsAttachId(ws);
+    if (!id) return;
+    const cur = this.sockets.get(id);
+    if (cur && cur !== ws) return;
+    try { ws.serializeAttachment({ id: null }); } catch {}
+    await this.onClose(id);
+  }
+
+  async webSocketClose(ws) { await this.closedSeat(ws); }
+  async webSocketError(ws) { await this.closedSeat(ws); }
 
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
