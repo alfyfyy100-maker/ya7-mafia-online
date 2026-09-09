@@ -1756,6 +1756,20 @@ export class MafiaRoom {
     const player = this.room.players.find(p => p.id === playerId);
     if (player) player.connected = false;
     this.sockets.delete(playerId);
+    /* ── في الردهة يُشطب مقعد المنقطع ──
+       كان يبقى connected:false فيُعرض «غير متصل» إلى أن تبدأ الجولة
+       (startGame وحدها تصفّيه). والمنشئ الذي يدخل غرفته وحده يتكرّر
+       اسمه مقعدين: reclaimSeat ترفض استعادة مقعد المضيف بالاسم حمايةً
+       من الانتحال، وmigrateHostIfNeeded — التي تنزع عنه صفة المضيف
+       فتُحلّ العقدة — لا تجد أحدًا تنقل إليه ما دام وحده. فيبقى مقعده
+       محميًّا ويأخذ مقعدًا جديدًا بجانبه.
+       الشطب في الردهة وحدها: بعد البدء المقعد يحمل دورًا وتاريخًا فلا
+       يُمسّ، وهو نفس عرف الكيرم. والعودة بالتوكن في الردهة تعطي مقعدًا
+       جديدًا بالاسم نفسه — لا هوية تضيع لأن الأدوار لم تُوزَّع بعد. */
+    if (player && this.room.phase === 'lobby') {
+      const gi = this.room.players.indexOf(player);
+      if (gi >= 0) this.room.players.splice(gi, 1);
+    }
     this.migrateHostIfNeeded();
     await this.persist();
     this.broadcastLobby();
