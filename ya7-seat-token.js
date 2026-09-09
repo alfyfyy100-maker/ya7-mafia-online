@@ -54,43 +54,44 @@
   // ══════════ ١) التقاط التوكن من رد الإنشاء ══════════
   var origFetch = window.fetch;
   if (typeof origFetch === 'function') {
-    window.fetch = function (input, init) {
+    /* ── التخزين يسبق عودة fetch، لا يلحقها ──
+       كان `res.clone().json().then(put)` سلسلةً معلّقةً لا ينتظرها أحد،
+       و`return res` يخرج قبل أن تكتمل. فتكمل الصفحة فورًا:
+       `await res.json()` ثم `connect()` — والتوكن لم يُخزَّن بعد. قيس
+       على الخادم الحيّ ثلاث مرات: التخزين يصل بعد فتح المقبس دائمًا
+       (٩١٦ثم٩١٧ · ٩٦٥ثم٩٦٥ · ٩٩٦ثم٩٩٧ مللي) — خسارةٌ دائمة لا سباقٌ
+       متذبذب، ولهذا يقع في كل إنشاء.
+
+       فيُفتح المقبس بلا token، ولا يجد الخادمُ مقعدَ المضيف الذي أنشأه
+       /room/create للتوّ، وreclaimSeat ترفض استعادته بالاسم (حماية
+       الانتحال) ⇒ مقعدٌ ثانٍ باسم اللاعب، والأول «غير متصل»، وتنتقل
+       إليه المضافة.
+
+       الدالة async و`await` صريح: لا تُعاد res إلا وقد خُزِّن التوكن.
+       والانتظار على مسار الإنشاء وحده — كل طلبٍ آخر يخرج من السطر
+       الأول بلا لمسة. */
+    window.fetch = async function (input, init) {
       var urlStr = (typeof input === 'string') ? input
                  : (input && input.url) ? input.url : String(input);
       var game = null;
       try { game = parseCreatePath(new URL(urlStr, location.href).pathname); } catch (e) {}
 
       var p = origFetch.apply(this, arguments);
-      if (!game) return p;
+      if (!game) return p;                  // غير الإنشاء: كما كان تمامًا
 
-      /* ── التخزين يسبق عودة fetch، لا يلحقها ──
-         كان `res.clone().json().then(put)` سلسلةً معلّقةً لا ينتظرها أحد،
-         و`return res` يخرج قبلها. فتكمل الصفحة فورًا: `await res.json()`
-         ثم `connect()` — والتوكن لم يُخزَّن بعد. قيس على الخادم الحيّ:
-         التخزين يصل بعد فتح المقبس في كل مرة (٩١٦ثم٩١٧، ٩٦٥ثم٩٦٥،
-         ٩٩٦ثم٩٩٧ مللي) — خسارةٌ دائمة لا سباقٌ متذبذب.
-         فيُفتح المقبس بلا token، ولا يجد الخادمُ مقعدَ المضيف الذي
-         أنشأه /room/create للتوّ، وreclaimSeat ترفض استعادته بالاسم
-         (حماية الانتحال) ⇒ مقعدٌ ثانٍ باسم اللاعب، والأول «غير متصل»،
-         وتنتقل إليه المضافة. الآن نُرجع res بعد التخزين، فما يبدأ
-         الاتصالُ إلا والتوكن في مكانه.
-         التأخير الزائد قراءةُ نسخةٍ من جسمٍ صغيرٍ وصل أصلًا، ولا يقع
-         إلا على مسار الإنشاء وحده (game غير فارغ). */
-      return p.then(function (res) {
-        var copy;
+      var res = await p;
+      try {
         // نقرأ نسخة عشان ما نستهلك الجسم الأصلي على اللعبة
-        try { copy = res.clone(); } catch (e) { return res; }
-        return copy.json().then(function (data) {
-          if (data && data.roomCode) {
-            if (data.seatToken)   put(keyFor(game, data.roomCode, 'seat'),   data.seatToken);
-            if (data.screenToken) put(keyFor(game, data.roomCode, 'screen'), data.screenToken);
-          }
-          return res;
-        }, function () {
-          /* ردٌّ ليس JSON (خطأ نصّي مثلًا): لا يُسقط fetch على اللعبة */
-          return res;
-        });
-      });
+        var data = await res.clone().json();
+        if (data && data.roomCode) {
+          if (data.seatToken)   put(keyFor(game, data.roomCode, 'seat'),   data.seatToken);
+          if (data.screenToken) put(keyFor(game, data.roomCode, 'screen'), data.screenToken);
+        }
+      } catch (e) {
+        /* ردٌّ ليس JSON (٤٠٣ نصّي مثلًا) أو نسخةٌ تعذّرت: لا نُسقط
+           fetch على اللعبة — الجسم الأصلي ما زال سليمًا لها. */
+      }
+      return res;                           // بعد التخزين، لا قبله
     };
   }
 
