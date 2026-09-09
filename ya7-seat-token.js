@@ -63,16 +63,33 @@
       var p = origFetch.apply(this, arguments);
       if (!game) return p;
 
+      /* ── التخزين يسبق عودة fetch، لا يلحقها ──
+         كان `res.clone().json().then(put)` سلسلةً معلّقةً لا ينتظرها أحد،
+         و`return res` يخرج قبلها. فتكمل الصفحة فورًا: `await res.json()`
+         ثم `connect()` — والتوكن لم يُخزَّن بعد. قيس على الخادم الحيّ:
+         التخزين يصل بعد فتح المقبس في كل مرة (٩١٦ثم٩١٧، ٩٦٥ثم٩٦٥،
+         ٩٩٦ثم٩٩٧ مللي) — خسارةٌ دائمة لا سباقٌ متذبذب.
+         فيُفتح المقبس بلا token، ولا يجد الخادمُ مقعدَ المضيف الذي
+         أنشأه /room/create للتوّ، وreclaimSeat ترفض استعادته بالاسم
+         (حماية الانتحال) ⇒ مقعدٌ ثانٍ باسم اللاعب، والأول «غير متصل»،
+         وتنتقل إليه المضافة. الآن نُرجع res بعد التخزين، فما يبدأ
+         الاتصالُ إلا والتوكن في مكانه.
+         التأخير الزائد قراءةُ نسخةٍ من جسمٍ صغيرٍ وصل أصلًا، ولا يقع
+         إلا على مسار الإنشاء وحده (game غير فارغ). */
       return p.then(function (res) {
+        var copy;
         // نقرأ نسخة عشان ما نستهلك الجسم الأصلي على اللعبة
-        try {
-          res.clone().json().then(function (data) {
-            if (!data || !data.roomCode) return;
+        try { copy = res.clone(); } catch (e) { return res; }
+        return copy.json().then(function (data) {
+          if (data && data.roomCode) {
             if (data.seatToken)   put(keyFor(game, data.roomCode, 'seat'),   data.seatToken);
             if (data.screenToken) put(keyFor(game, data.roomCode, 'screen'), data.screenToken);
-          }).catch(function () {});
-        } catch (e) {}
-        return res;
+          }
+          return res;
+        }, function () {
+          /* ردٌّ ليس JSON (خطأ نصّي مثلًا): لا يُسقط fetch على اللعبة */
+          return res;
+        });
       });
     };
   }
