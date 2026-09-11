@@ -774,7 +774,7 @@ async function sendPush(env, sub, title, body, url) {
 const TARI_MODE_KINDS = {
   mix: null,                       // بلا قصر — كل الأنماط
   sfx: ['sfx'],                    // أصوات خارجية
-  players: ['mimic', 'tone'],      // تقليد لاعبٍ آخر: موقفه ونبرته
+  players: ['mimic'],              // تقليد لاعبٍ آخر (نمط النبرة بلا مطالبات فسقط)
 };
 
 const MOD_WATCH_USERNAMES = ['ya7'];          // من يصله الإشعار — غيّرها متى شئت
@@ -1485,17 +1485,7 @@ export class MafiaRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن. النصّان مطابقان لما
-       يتبادله العميل المشترك اليوم: يرسل {"type":"hb"} ويستقبل
-       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon. */
-    try {
-      this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
-      );
-    } catch {}
-    /* كان Map في الذاكرة: يُبنى فارغًا عند كل صحوة بينما المقابس تنجو
-       في getWebSockets()، فيبقى اللاعبون connected بلا أن يصلهم بايت. */
-    this.sockets = hibernatingSockets(state);
+    this.sockets = new Map(); // playerId -> WebSocket
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null,
@@ -1559,9 +1549,7 @@ export class MafiaRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    /* السبات: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة. مسارات
-       الرفض تحته تُغلق فورًا، ومقبسٌ بلا مرفق لا تراه الواجهة أصلًا. */
-    this.state.acceptWebSocket(server);
+    server.accept();
 
     // ── الهوية بالتوكن السري فقط ──
     // كان: البحث بـ playerId القادم من الرابط. ومعرّفات كل اللاعبين تُبَث في
@@ -1631,8 +1619,8 @@ export class MafiaRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    /* لا addEventListener مع السبات: المستمِع في الذاكرة يموت مع أول
-       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
+    server.addEventListener('message', (evt) => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.broadcastLobby();
@@ -1721,31 +1709,6 @@ export class MafiaRoom {
     }
   }
 
-  /* ══════════ مداخل السبات ══════════
-     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
-  async webSocketMessage(ws, raw) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    /* نمرّ على onMessage نفسها: مُغلِّف applyRoomCommon يلفّها بسقف
-       الحجم وبردّ hb الاحتياطي لو لم يطابق النصُّ الردَّ الآلي. */
-    return this.onMessage(id, { data: raw });
-  }
-
-  /* حارس onClose القديم منقولًا: close() قد يُخرج المقبس من
-     getWebSockets() قبل أن تنزع sockets.set معرّفه، فيصل إغلاقه حاملًا
-     معرّف اللاعب ويشطب مقعدًا رجع صاحبه للتوّ. */
-  async closedSeat(ws) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    const cur = this.sockets.get(id);
-    if (cur && cur !== ws) return;
-    try { ws.serializeAttachment({ id: null }); } catch {}
-    await this.onClose(id);
-  }
-
-  async webSocketClose(ws) { await this.closedSeat(ws); }
-  async webSocketError(ws) { await this.closedSeat(ws); }
-
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
        العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
@@ -1789,6 +1752,23 @@ export class MafiaRoom {
     this.room.players = this.room.players.filter(p => p.id !== targetId);
     await this.persist();
     this.broadcastLobby();
+    /* الطرد هو المسار الوحيد الذي يُخرج لاعبًا **حيًّا** من اللعبة، فقد
+       يحسمها خروجه: آخر مافيا تُطرد ⇒ فاز الخير، وطرد مواطنين حتى
+       يتساوى الطرفان ⇒ فاز الشر. الانقطاع لا يفعل ذلك (المنقطع يبقى
+       حيًّا في القائمة) فما كان أحد يفحص هنا. بلا الفحص تستمر جولة
+       محسومة حتى أول حسم تالٍ — فيُعدَم بريءٌ في تصويتٍ لا معنى له
+       ثم تُعلَن النتيجة نفسها. */
+    if (this.room.phase === 'night' || this.room.phase === 'day' || this.room.phase === 'voting') {
+      const winner = this.checkWinCondition();
+      if (winner) { await this.endGame(winner); return; }
+    }
+    /* الطرد خروجٌ كالانقطاع تمامًا: لو كان المطرود آخر من ننتظر صوته
+       أو فعله الليلي، فالمرحلة اكتملت بخروجه ولا شيء يحرّكها. مسار
+       الرسائل يمنع الطرد خارج الردهة، لكن /kick في لوحة الغرفة لا
+       يمنعه — فالغرفة كانت تتجمّد حتى «تقديم قسري» من المضيف. نفس
+       النداء الموجود في onClose، وهو محروس بالطور فلا يقدّم شيئًا
+       في غير موضعه. */
+    await this.maybeAdvanceOnDisconnect();
   }
 
   async addBot(wanted, dialect) {
@@ -3228,24 +3208,9 @@ export class GotRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن. النصّان مطابقان لما
-       يتبادله العميل المشترك اليوم: يرسل {"type":"hb"} ويستقبل
-       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon. */
-    try {
-      this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
-      );
-    } catch {}
-    /* كان Map في الذاكرة: يُبنى فارغًا عند كل صحوة بينما المقابس تنجو
-       في getWebSockets()، فيبقى اللاعبون connected بلا أن يصلهم بايت. */
-    this.sockets = hibernatingSockets(state);
-    /* من أعلن دعمه لواجهة الغراب — ما ننتظر إلا هؤلاء، وإلا تجمّدت
-       الليلة على نسخة قديمة مخزّنة في المتصفح.
-       كان Set في الذاكرة: مع السبات يُفرَّغ عند أول إخلاء، فترجع
-       ravenPendingFrom فارغةً وتُحسم الليلة بلا انتظار صاحب الغراب —
-       يخسر دورَه صامتًا. صار في this.room فينجو الإخلاء، ويسقط عند
-       الانقطاع وحده (انظر onClose): الإخلاء ليس انقطاعًا، فالعقد
-       صار «هذا المقبس الحيّ يدعم الغراب» لا «أعلن مرةً فأبدًا». */
+    this.sockets = new Map();
+    // من أعلن دعمه لواجهة الغراب — ما ننتظر إلا هؤلاء، وإلا تجمّدت الليلة على نسخة قديمة مخزّنة في المتصفح
+    this.ravenClients = new Set();
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -3292,9 +3257,7 @@ export class GotRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    /* السبات: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة. مسارات
-       الرفض تحته تُغلق فورًا، ومقبسٌ بلا مرفق لا تراه الواجهة أصلًا. */
-    this.state.acceptWebSocket(server);
+    server.accept();
 
     // ── الهوية بالتوكن السري فقط (نفس علّة مافيا: المعرّف يُبَث للجميع) ──
     const token = url.searchParams.get('token');
@@ -3356,8 +3319,8 @@ export class GotRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    /* لا addEventListener مع السبات: المستمِع في الذاكرة يموت مع أول
-       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.broadcastLobby();
@@ -3415,38 +3378,13 @@ export class GotRoom {
     if (msg.type === 'baelishAlign') await this.handleBaelishAlign(playerId, msg.side);
     if (msg.type === 'ravenSend') await this.handleRavenSend(playerId, msg);
     if (msg.type === 'ravenSkip') await this.handleRavenSkip(playerId);
-    if (msg.type === 'ravenReady') await this.noteRavenClient(playerId);
+    if (msg.type === 'ravenReady') this.ravenClients.add(playerId);
     if (msg.type === 'startAccusation' && playerId === this.room.hostId && this.room.phase === 'day') await this.startAccusation();
     if (msg.type === 'accuseVote' && this.room.phase === 'accusing') await this.handleAccuseVote(playerId, msg.targetId);
     if (msg.type === 'startFinalVote' && playerId === this.room.hostId && this.room.phase === 'trial') await this.startFinalVote();
     if (msg.type === 'finalVote' && this.room.phase === 'finalVoting') await this.handleFinalVote(playerId, msg.guilty);
     if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
-
-  /* ══════════ مداخل السبات ══════════
-     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
-  async webSocketMessage(ws, raw) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    /* نمرّ على onMessage نفسها: مُغلِّف applyRoomCommon يلفّها بسقف
-       الحجم وبردّ hb الاحتياطي لو لم يطابق النصُّ الردَّ الآلي. */
-    return this.onMessage(id, { data: raw });
-  }
-
-  /* حارس onClose القديم منقولًا: close() قد يُخرج المقبس من
-     getWebSockets() قبل أن تنزع sockets.set معرّفه، فيصل إغلاقه حاملًا
-     معرّف اللاعب ويشطب مقعدًا رجع صاحبه للتوّ. */
-  async closedSeat(ws) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    const cur = this.sockets.get(id);
-    if (cur && cur !== ws) return;
-    try { ws.serializeAttachment({ id: null }); } catch {}
-    await this.onClose(id);
-  }
-
-  async webSocketClose(ws) { await this.closedSeat(ws); }
-  async webSocketError(ws) { await this.closedSeat(ws); }
 
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
@@ -3458,12 +3396,6 @@ export class GotRoom {
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
-    /* الإعلان يسقط مع الاتصال: معناه «هذا المقبس الحيّ يدعم الغراب»
-       لا «هذا اللاعب أعلن مرة». ya7-raven.js يعترض new WebSocket نفسه
-       فيُعيد الإرسال مع كل فتح مقبس — فلا يضيع دورٌ بإعادة اتصال.
-       وبلا هذا السطر يبقى العلم محفوظًا للأبد، فلو رجع اللاعب بصفحة
-       قديمة مخبَّأة بلا واجهة غراب انتظرته الليلةُ وهو لا يملك الزرّ. */
-    if (this.room.ravenClients) delete this.room.ravenClients[playerId];
     this.migrateHostIfNeeded();
     await this.persist();
     this.broadcastLobby();
@@ -3491,6 +3423,13 @@ export class GotRoom {
     this.room.players = this.room.players.filter(p => p.id !== targetId);
     await this.persist();
     this.broadcastLobby();
+    /* كمافيا: الطرد وحده يُخرج لاعبًا حيًّا، فقد يحسم اللعبة بخروجه. */
+    if (['night', 'day', 'accusing', 'trial', 'finalVoting'].includes(this.room.phase)) {
+      const winner = this.checkWin();
+      if (winner) { await this.endGame(winner); return; }
+    }
+    /* كالانقطاع: المطرود قد يكون آخر من ننتظر صوته أو فعله الليلي. */
+    await this.maybeAdvanceOnDisconnect();
   }
 
   alivePlayers(){ return this.room.players.filter(p=>p.alive); }
@@ -3720,20 +3659,10 @@ export class GotRoom {
     if (this.allNightActionsIn()) await this.resolveNight();
   }
 
-  /* إعلان دعم الغراب يُحفظ مرة واحدة لكل لاعب — لا كتابة على كل رسالة */
-  async noteRavenClient(playerId){
-    const k = safeKey(String(playerId || ''));
-    if (!k) return;
-    this.room.ravenClients = this.room.ravenClients || {};
-    if (this.room.ravenClients[k]) return;
-    this.room.ravenClients[k] = 1;
-    await this.persist();
-  }
-
   // الليلة ما تُحسم قبل ما صاحب الغراب يرسل أو يتخطّى — نفس أسلوب برون
   ravenPendingFrom(){
     return this.alivePlayers().filter(p =>
-      !p.isBot && p.connected && !!(this.room.ravenClients || {})[p.id] &&
+      !p.isBot && p.connected && this.ravenClients.has(p.id) &&
       (p.role === 'varys' || p.role === 'baelish') &&
       !(this.room.ravenUsed || {})[p.id] &&
       !(((this.room.nightActions || {}).ravenDone || {})[p.id]) &&
@@ -4457,17 +4386,7 @@ export class MawwihRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن. النصّان مطابقان لما
-       يتبادله العميل المشترك اليوم: يرسل {"type":"hb"} ويستقبل
-       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon. */
-    try {
-      this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
-      );
-    } catch {}
-    /* كان Map في الذاكرة: يُبنى فارغًا عند كل صحوة بينما المقابس تنجو
-       في getWebSockets()، فيبقى اللاعبون connected بلا أن يصلهم بايت. */
-    this.sockets = hibernatingSockets(state);
+    this.sockets = new Map();
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -4512,9 +4431,7 @@ export class MawwihRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    /* السبات: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة. مسارات
-       الرفض تحته تُغلق فورًا، ومقبسٌ بلا مرفق لا تراه الواجهة أصلًا. */
-    this.state.acceptWebSocket(server);
+    server.accept();
 
     const token = url.searchParams.get('token');
 
@@ -4579,8 +4496,8 @@ export class MawwihRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    /* لا addEventListener مع السبات: المستمِع في الذاكرة يموت مع أول
-       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.broadcastLobby();
@@ -4645,31 +4562,6 @@ export class MawwihRoom {
     if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
 
-  /* ══════════ مداخل السبات ══════════
-     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
-  async webSocketMessage(ws, raw) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    /* نمرّ على onMessage نفسها: مُغلِّف applyRoomCommon يلفّها بسقف
-       الحجم وبردّ hb الاحتياطي لو لم يطابق النصُّ الردَّ الآلي. */
-    return this.onMessage(id, { data: raw });
-  }
-
-  /* حارس onClose القديم منقولًا: close() قد يُخرج المقبس من
-     getWebSockets() قبل أن تنزع sockets.set معرّفه، فيصل إغلاقه حاملًا
-     معرّف اللاعب ويشطب مقعدًا رجع صاحبه للتوّ. */
-  async closedSeat(ws) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    const cur = this.sockets.get(id);
-    if (cur && cur !== ws) return;
-    try { ws.serializeAttachment({ id: null }); } catch {}
-    await this.onClose(id);
-  }
-
-  async webSocketClose(ws) { await this.closedSeat(ws); }
-  async webSocketError(ws) { await this.closedSeat(ws); }
-
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
        العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
@@ -4707,6 +4599,8 @@ export class MawwihRoom {
     this.room.players = this.room.players.filter(p => p.id !== targetId);
     await this.persist();
     this.broadcastLobby();
+    /* كالانقطاع: المطرود قد يكون آخر من ننتظر إجابته أو تصويته. */
+    await this.maybeAdvanceOnDisconnect();
   }
 
   findPlayer(id) { return this.room.players.find(p => p.id === id); }
@@ -5946,26 +5840,22 @@ const WL_DISPOSITIONS = [
 /* أسئلةُ استجوابٍ احتياطيّة: لو لم يُرجع المحقّقُ سؤالاً (أو تعطّل
    المزوّد) لا نُسقط الميزةَ بصمت — نختار أكثرَ المشكوكِ فيهم وسؤالاً
    من هنا. نسخةُ الجهازِ الواحد تفعل الشيءَ نفسَه ببنكِها OFF_ASKS. */
+/* الصياغةُ هنا تُقرأ على الشاشةِ في ثانيتين وسطَ لعبةٍ سريعة، فكلُّ
+   سؤالٍ يقول المطلوبَ صراحةً بلا بلاغةٍ مضغوطة: «من يشهد لك؟ سمِّ
+   واحداً ممّن على هذه المائدة» بدت للاعبين لغزاً لا سؤالاً. */
 const WL_ASKS = [
-  "أعِد عليّ أين كنتَ بالضبط — وبالتفصيل هذه المرّة.",
-  "لماذا تسارعتَ إلى اتّهام غيرِك قبل أن يُسألَ أحد؟",
-  "من يشهد لك؟ سَمِّ واحداً ممّن على هذه المائدة.",
-  "قلتَ شيئاً وفعلتَ غيرَه — أيُّهما أصدق؟",
-  "ما الذي كنتَ تحمله حين خرجتَ من الغرفة؟",
-  "لو كنتَ بريئاً، فمن تظنُّه الفاعل؟ ولماذا هو دون سواه؟",
+  "أين كنتَ بالضبط وقتَ الحادثة؟ أعِدها عليّ بالتفصيل.",
+  "لماذا استعجلتَ باتّهام غيرِك قبل أن أسألَ أحداً؟",
+  "مَن مِن الجالسين هنا يقدر يؤكّد كلامَك عن مكانك؟ اذكرِ اسمَه.",
+  "كلامُك الأوّلُ يخالف آخرَه — أيُّهما الصحيح؟",
+  "ماذا كان في يدِك حين خرجتَ من الغرفة؟",
+  "لو كنتَ بريئاً، فمن تتّهم أنت؟ ولماذا هو دونَ غيره؟",
 ];
 
 const WL_ROUNDS = 2;
 const WL_AI_ENDPOINT = 'https://ya7-ai-proxy.alfyfyy100.workers.dev/walima/chat';
 const WL_AI_MODEL = 'deepseek/deepseek-v4-flash';
 const WL_MAX_STATEMENT = 400;
-/* مهلة المزوّد، وحارس المرحلة بعدها بفجوة. الاثنان يعالجان مرحلة
-   `thinking` نفسها، فلو تقاربا لأيقظ المنبّهُ runHost بينما النداء
-   الأول ما زال يعمل ⇒ مضيفان يكتبان الحكم. الفجوة تضمن أن askAI
-   تُجهض وتُنظّف tick دائمًا قبل أن يستيقظ المنبّه، فلا يبقى له عمل
-   إلا الحالة التي وُضع لها: أن يكون الكائن مات أثناء النداء. */
-const WL_AI_TIMEOUT_MS = 25000;
-const WL_THINK_MS = 40000;
 
 function wlPick(a){ return a[randInt(a.length)]; }   // المشهد والميول والهدف — كلها سرّ
 function wlShuffle(a){ const c=a.slice(); for(let i=c.length-1;i>0;i--){ const j=randInt(i+1); [c[i],c[j]]=[c[j],c[i]]; } return c; }
@@ -5981,78 +5871,11 @@ function wlSafeJSON(t){
   return null;
 }
 
-/* ═══════════ مقابس السبات (وليمة) ═══════════
-   `this.sockets` كان `Map` في الذاكرة، والذاكرة تُمسح مع أول نومة بينما
-   المقابس نفسها تنجو في `getWebSockets()`. فبعد النومة يجد الكائن خريطة
-   فارغة ولاعبين كلهم `connected:true` في السجل: لا يصلهم بايت، ولا
-   يُطردون، ولا يُعاد وصلهم — صمتٌ كامل لا انقطاعٌ ظاهر يفسّر نفسه.
-
-   الواجهة تقرأ الحقيقة من الرَّنتايم عند كل نداء بدل أن تحفظها، فتبقى
-   المواضع الخمسة عشر التي تلمس `sockets` تعمل حرفيًا بلا تعديل: هنا،
-   وفي `RoomCommon` (sweepDeadSeats/alarm/kick)، وفي `reclaimSeat`.
-
-   المعرّف يعيش في `serializeAttachment` لا في الذاكرة، فينجو النومة. */
-function wsAttachId(ws) {
-  try { const a = ws.deserializeAttachment(); return (a && a.id) ? a.id : null; }
-  catch { return null; }
-}
-
-function hibernatingSockets(state) {
-  const all  = () => { try { return state.getWebSockets(); } catch { return []; } };
-  const live = () => all().filter(ws => wsAttachId(ws));
-  const find = id => {
-    if (!id) return null;
-    for (const ws of all()) if (wsAttachId(ws) === id) return ws;
-    return null;
-  };
-  return {
-    get: id => find(id),
-    has: id => !!find(id),
-    /* `set` مُلزِمة لا مُضيفة: أي مقبس أقدم يحمل نفس المعرّف يُنزع منه
-       أولًا. بلا هذا يبقى مقبسا استلامٍ بنفس المعرّف بعد إعادة الاتصال،
-       فيرجع البحث أوّلهما في ترتيب `getWebSockets()` — وهو الميت. */
-    set(id, ws) {
-      for (const w of all()) {
-        if (w !== ws && wsAttachId(w) === id) {
-          try { w.serializeAttachment({ id: null }); } catch {}
-        }
-      }
-      try { ws.serializeAttachment({ id }); } catch {}
-      return this;
-    },
-    /* الحذف ينزع المعرّف ولا يغلق: النداءات كلها تغلق بنفسها قبله.
-       ومقبسٌ بلا معرّف لا يُعنون ولا يُبَثّ إليه ولا يُحسب في `size`. */
-    delete(id) {
-      const ws = find(id);
-      if (ws) { try { ws.serializeAttachment({ id: null }); } catch {} }
-      return !!ws;
-    },
-    values: () => live(),
-    keys:   () => live().map(wsAttachId),
-    get size() { return live().length; },
-    [Symbol.iterator]() {
-      return live().map(ws => [wsAttachId(ws), ws])[Symbol.iterator]();
-    },
-  };
-}
-
 export class WalimaRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن أصلًا. النصّان مقصودان
-       حرفيًا: العميل يرسل {"type":"hb"} كل ٢٥ ثانية، وكان يستقبل
-       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon — فالردّ
-       هنا مطابق له بايتًا ببايت. المطابقة في الردّ الآلي حرفيّة تمامًا،
-       ولذلك أُبقيَ معالج hb في المُغلِّف شبكةَ أمان: لو لم يطابق النصُّ
-       يومًا، تنزل النبضة للكائن ويردّ pong كما اليوم — نخسر توفير
-       الفوترة ولا نخسر لاعبًا. */
-    try {
-      this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
-      );
-    } catch {}
-    this.sockets = hibernatingSockets(state);
+    this.sockets = new Map();
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -6060,6 +5883,13 @@ export class WalimaRoom {
         scene: null, clues: [], disposition: null,
         round: 1, rounds: WL_ROUNDS, transcript: [],
         hostSays: '', lastSus: {}, verdict: null, thinking: false,
+        /* reveal: متى يرى الضيوفُ كلامَ بعضهم.
+           'round' (الافتراضي) = لا يُكشف إلا بعد أن يتكلّم الجميع، فمن
+           يكتب أخيراً لا يفصّل عذرَه على مقاس ما قرأ. 'live' = يظهر فور
+           إرساله (السلوك القديم). المحقّقُ يرى الكلَّ في الحالتين لأنّ
+           نصَّه يُبنى في الخادم من `transcript` كاملاً.
+           نصُّه يُبنى في الخادم من `transcript` كاملاً. */
+        reveal: 'round',
       };
     });
   }
@@ -6095,9 +5925,7 @@ export class WalimaRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    /* المقعد الناجح وحده يمرّ على acceptWebSocket تحت. مسارات الرفض
-       الثلاثة تُغلق بعد سطرين، فتأخذ accept() العادي — لا معنى لتسجيل
-       مقبسٍ في السبات ليموت فورًا. */
+    server.accept();
 
     const token = url.searchParams.get('token');
     let player = this.seatByToken(token);
@@ -6119,7 +5947,6 @@ export class WalimaRoom {
     // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
     // بدون هذا يتجاوز المهاجم حدّ allowCreate بالكامل ويفرّخ غرفًا بلا سقف.
     if (!player && !this.room.code) {
-      server.accept();
       server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
       server.close();
       return new Response(null, { status: 101, webSocket: client });
@@ -6127,13 +5954,11 @@ export class WalimaRoom {
 
     if (!player) {
       if (this.room.phase !== 'lobby') {
-        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الوليمة بدأت، ما تقدر تنضم الآن' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.players.length >= 10) {
-        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'المائدة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -6150,10 +5975,6 @@ export class WalimaRoom {
     if (!player.seatToken) player.seatToken = newSeatToken();
 
     this.noteAccount(url, player);
-    /* السبات يبدأ هنا: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة،
-       فمراحل الكتابة والنقاش الصامتة لا تُحتسب مدةً. لا بدّ أن يسبق أي
-       serializeAttachment — والمقبس غير المقبول لا يملك مرفقًا أصلًا. */
-    this.state.acceptWebSocket(server);
     /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
@@ -6163,9 +5984,8 @@ export class WalimaRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    /* لا addEventListener مع السبات: الرسائل تصل webSocketMessage
-       والإغلاق يصل webSocketClose تحت — المستمِع في الذاكرة يموت مع
-       أول نومة، وهذا هو الفخّ كلّه. */
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code, seatToken: player.seatToken });
@@ -6181,63 +6001,7 @@ export class WalimaRoom {
     return (p && p.kicked) ? null : p;
   }
   findPlayer(id){ return this.room.players.find(p => p.id === id) || null; }
-  /* كانت persist تكتب ولا تسلّح شيئًا: وليمة وحدها بين الغرف لا تنادي
-     touchRoom، فما ضُبط لها منبّه قط ⇒ RoomCommon.alarm لا تُستدعى أبدًا
-     ⇒ تخزين غرف الوليمة لا يُكنس نهائيًا. */
-  async persist(){
-    this.room.lastSeen = Date.now();
-    await this.state.storage.put('room', this.room);
-    await this.arm();
-  }
-
-  /* منبّه واحد لكل كائن: نأخذ الأقرب بين حارس التفكير وتنظيف الغرفة.
-     لا نستعمل touchRoom المشتركة لأنها تضبط أفق الـTTL دائمًا فتدهس
-     حارس التفكير الأقرب منه بساعات. */
-  async arm(){
-    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
-    if (this.room.tick) next = Math.min(next, this.room.tick);
-    try { await this.state.storage.setAlarm(next); } catch {}
-  }
-
-  async alarm(){
-    const now = Date.now();
-    if (this.room.tick && now >= this.room.tick - 60) {
-      this.room.tick = 0;
-      try { await this.resumeThinking(); } catch {}
-      return;
-    }
-    const idle = now - (this.room.lastSeen || 0);
-    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
-      await this.state.storage.deleteAll();
-      return;
-    }
-    await this.arm();
-  }
-
-  /* ── فكّ مرحلة تفكيرٍ ماتت ──
-     runHost تكتب thinking:true على القرص ثم تنتظر المزوّد. لو مات
-     الكائن في تلك اللحظة (نشر، انهيار، إخلاء) بقيت الراية مرفوعة أبدًا،
-     وحارسُها `if (this.room.thinking) return` يردّ كل محاولة لاحقة —
-     فالجولة تتجمّد بلا شيء يوقظها. نفكّ الراية ونعيد النداء نفسه:
-     thinkFinal يحفظ أيّهما كان، فلا يصير حكمُ الختام تعليقَ جولة. */
-  async resumeThinking(){
-    if (!this.room || this.room.phase !== 'thinking') { await this.persist(); return; }
-    const final = !!this.room.thinkFinal;
-    this.room.thinking = false;
-    await this.persist();
-    await this.runHost(final);
-  }
-
-  /* غرفٌ قديمة في التخزين بلا tick تُفكّ فورًا — وهي بالضبط الغرف التي
-     تجمّدت قبل هذا الإصلاح. ومن مهلته لم تنتهِ لا يُمسّ. */
-  resumePhase(){
-    const r = this.room;
-    if (!r || r.phase !== 'thinking') return;
-    if (r.tick && Date.now() < r.tick) return;
-    r.tick = 0;
-    r.thinking = false;
-    this.runHost(!!r.thinkFinal).catch(() => {});
-  }
+  async persist(){ await this.state.storage.put('room', this.room); }
   sendPrivate(id, payload){
     const ws = this.sockets.get(id);
     if (ws) { try { ws.send(JSON.stringify(payload)); } catch {} }
@@ -6257,6 +6021,7 @@ export class WalimaRoom {
       clues: this.room.phase === 'lobby' ? [] : this.room.clues,
       players: this.room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected, sus: p.sus || 0, submitted: !!p.submitted })),
       transcript: this.room.transcript,
+      reveal: this.room.reveal || 'round',
       hostSays: this.room.hostSays, lastSus: this.room.lastSus, thinking: !!this.room.thinking,
       verdict: this.room.verdict,
       /* الاستجوابُ عامٌّ عمداً: نصفُ متعتِه أن يرى الباقون على من وقع.
@@ -6268,6 +6033,19 @@ export class WalimaRoom {
         ? this.room.players.filter(p => this.room.votes && this.room.votes[p.id]).map(p => p.id)
         : [],
     };
+    /* في وضع 'round' لا تُبَثُّ كلماتُ الجولةِ الجاريةِ للجميع: كلٌّ يرى
+       الجولاتِ المنتهيةَ وكلمتَه هو. بدون هذا كان آخرُ من يكتب يقرأ كلامَ
+       الجميعِ قبل أن يكتب — وهي أفضليّةٌ قاتلةٌ في لعبةٍ مدارُها التناقض،
+       والجاني أكثرُ المستفيدين منها. النصُّ الكاملُ يبقى في الخادم فيراه
+       المحقّقُ دائماً. */
+    if ((this.room.reveal || 'round') !== 'live' && this.room.phase === 'writing') {
+      const cur = this.room.round;
+      for (const p of this.room.players) {
+        const seen = this.room.transcript.filter(t => t.round < cur || t.name === p.name);
+        this.sendPrivate(p.id, Object.assign({}, pub, { transcript: seen }));
+      }
+      return;
+    }
     this.broadcastPublic(pub);
   }
 
@@ -6305,7 +6083,12 @@ export class WalimaRoom {
       }
       return;
     }
-    if (msg.type === 'startGame' && playerId === this.room.hostId) await this.startGame(msg.rounds);
+    if (msg.type === 'startGame' && playerId === this.room.hostId) {
+      /* الإعدادُ يُثبَّت من قائمةٍ مغلقة، فأيُّ قيمةٍ أخرى تسقط
+         للافتراضيّ بدل أن تُخزَّن كما جاءت من العميل. */
+      this.room.reveal = msg.reveal === 'live' ? 'live' : 'round';
+      await this.startGame(msg.rounds);
+    }
     if (msg.type === 'statement' && this.room.phase === 'writing') await this.handleStatement(playerId, msg.text);
     if (msg.type === 'nextRound' && playerId === this.room.hostId && this.room.phase === 'beat') await this.nextRound();
     if (msg.type === 'hostForce' && playerId === this.room.hostId && this.room.phase === 'writing') await this.forceRound();
@@ -6333,37 +6116,6 @@ export class WalimaRoom {
     // ما ننتظر منقطعًا: لو الباقون سلّموا، امضِ
     if (this.room.phase === 'writing' && this.allIn()) await this.runHost(false);
   }
-
-  /* ══════════ مداخل السبات ══════════
-     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
-  async webSocketMessage(ws, raw) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    /* نمرّ على onMessage نفسها لا على نسخةٍ ثانية: مُغلِّف
-       applyRoomCommon يلفّها بسقف الحجم وبردّ hb الاحتياطي. */
-    return this.onMessage(id, { data: raw });
-  }
-
-  /* ── إغلاقٌ لمقعدٍ سُلِب لا يُسقط صاحبه الجديد ──
-     هذا هو حارس onClose القديم بعينه (`sockets.get(playerId) !== ws`)
-     منقولًا إلى مدخل السبات. ولا يكفي أن نتّكل على نزع المرفق عند
-     الاستلام: `close()` يُخرج المقبس من `getWebSockets()` فورًا، فحين
-     تمرّ `sockets.set` لتنزع المعرّف من الأقدم لا تجده أصلًا — فيصل
-     إغلاقُه بعد لحظة حاملًا معرّف اللاعب، فيُشطب المقعد الذي رجع
-     صاحبه للتوّ. المقارنة بالهوية تقفل هذا الباب: من كان المسجَّل
-     الآن لهذا المعرّف مقبسًا آخر، فإغلاق القديم لا يخصّ أحدًا.
-     و`cur === null` تعني أنه هو نفسه وقد خرج بالإغلاق — فيمضي. */
-  async closedSeat(ws) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    const cur = this.sockets.get(id);
-    if (cur && cur !== ws) return;
-    try { ws.serializeAttachment({ id: null }); } catch {}
-    await this.onClose(id);
-  }
-
-  async webSocketClose(ws) { await this.closedSeat(ws); }
-  async webSocketError(ws) { await this.closedSeat(ws); }
 
   /* عددُ الجولات: كان مثبَّتًا على WL_ROUNDS بينما نسخةُ الجهاز الواحد
      تعطي ٢-٥ — وقاعدتُنا أنّ شاشةَ إعداداتِ الأونلاين تطابق نظيرتَها.
@@ -6580,10 +6332,6 @@ export class WalimaRoom {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: WL_AI_MODEL, max_tokens: 1000, messages: [{ role: 'user', content: prompt }] }),
-      /* بلا سقف: مزوّد معلَّق يُبقي المرحلة في thinking بلا نهاية. مع
-         السقف يرمي fetch فيلتقطه try/catch في runHost ويهبط على
-         fallbackHost — الجولة تكمل بمضيف احتياطي بدل أن تتجمّد. */
-      signal: AbortSignal.timeout(WL_AI_TIMEOUT_MS),
     });
     if (!resp.ok) throw new Error('ai-' + resp.status);
     const data = await resp.json();
@@ -6613,8 +6361,6 @@ export class WalimaRoom {
     if (this.room.thinking) return;
     this.room.thinking = true;
     this.room.phase = 'thinking';
-    this.room.thinkFinal = !!final;
-    this.room.tick = Date.now() + WL_THINK_MS;
     await this.persist();
     this.broadcastState();
 
@@ -6639,7 +6385,6 @@ export class WalimaRoom {
     }
 
     this.room.thinking = false;
-    this.room.tick = 0;
     if (!final) {
       const deltas = {};
       for (const p of this.room.players) {
@@ -7017,17 +6762,8 @@ export class DaqashRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    /* نفس نصَّي وليمة حرفيًا: العميل المشترك يرسل {"type":"hb"} ويستقبل
-       {"type":"pong"}. ولا نلمس 'ping' — داقش تفهمها «أرسل الحالة
-       كاملة»، فجعلُها ردًّا آليًا يقطع تحديث الحالة عن اللاعبين. */
-    try {
-      this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
-      );
-    } catch {}
-    this.sockets = hibernatingSockets(state);
-    /* لا مقبض مؤقّت بعد اليوم: الإيقاع كله على storage.setAlarm فوق
-       hand.endsAt المحفوظ أصلًا. المقبض كان يموت مع كل نومة ونشرة. */
+    this.sockets = new Map();
+    this.timer = null;
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -7048,52 +6784,9 @@ export class DaqashRoom {
     return new Response('غير موجود', { status: 404 });
   }
 
-  /* touchRoom المشتركة تضبط أفق الـTTL (ست ساعات) دائمًا، فتدهس مهلة
-     الدور (٢٥ث) وتُجمّد اليد. arm تأخذ الأقرب بين الاثنين. */
   async persist() {
-    this.room.lastSeen = Date.now();
+    await this.touchRoom();
     await this.state.storage.put('room', this.room);
-    await this.arm();
-  }
-
-  /* منبّه واحد لكل كائن: أقرب موعد بين مهلة الطور وتنظيف الغرفة */
-  async arm() {
-    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
-    const d = this.phaseDueAt();
-    if (d) next = Math.min(next, d);
-    try { await this.state.storage.setAlarm(next); } catch {}
-  }
-
-  /* موعد استحقاق الطور الجاري، أو null إن لم يكن ثمّة طور موقوت.
-     المصدر hand.endsAt المحفوظ في التخزين — وهو موجود قبل هذا
-     التعديل، فالترحيل استبدال مُشغِّل لا اختراع مصدر حقيقة. */
-  phaseDueAt() {
-    const r = this.room;
-    if (!r || r.phase === 'lobby' || r.phase === 'over') return null;
-    const h = r.hand;
-    if (!h || !h.endsAt) return null;
-    return h.endsAt + 400;
-  }
-
-  async alarm() {
-    const now = Date.now();
-    const due = this.phaseDueAt();
-    if (due) {
-      if (now >= due - 60) {
-        const h = this.room.hand;
-        /* حارس (no, seq) يبقى كما هو داخل onTimeout، وحارس endsAt معه.
-           نمرّر الحاليّين لأن المنبّه واحد لا يتعدّد كالمؤقّتات. */
-        try { await this.onTimeout(h.no, h.seq); } catch {}
-      }
-      await this.arm();
-      return;
-    }
-    const idle = now - (this.room.lastSeen || 0);
-    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
-      await this.state.storage.deleteAll();
-      return;
-    }
-    await this.arm();
   }
 
   findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
@@ -7160,8 +6853,7 @@ export class DaqashRoom {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    /* مسارات الرفض الثلاثة تحت تُغلق فورًا فتأخذ accept() العادي؛
-       المقعد الناجح وحده يُسجَّل في السبات. */
+    server.accept();
 
     const token = url.searchParams.get('token');
     const name = url.searchParams.get('name');
@@ -7184,19 +6876,16 @@ export class DaqashRoom {
     } else {
       // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket
       if (!this.room.code) {
-        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
-        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — انتظر الجولة الجاية' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.players.length >= DQ_MAX_PLAYERS) {
-        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -7211,8 +6900,6 @@ export class DaqashRoom {
     }
 
     this.noteAccount(url, player);
-    /* السبات يبدأ هنا: لا بدّ أن يسبق أي serializeAttachment. */
-    this.state.acceptWebSocket(server);
     /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
@@ -7222,8 +6909,8 @@ export class DaqashRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    /* لا addEventListener مع السبات — المستمِع في الذاكرة يموت مع أول
-       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.sendPrivate(player.id, {
@@ -7235,27 +6922,6 @@ export class DaqashRoom {
     this.broadcastState();
     return new Response(null, { status: 101, webSocket: client });
   }
-
-  /* ══════════ مداخل السبات ══════════
-     نسخة وليمة نفسها: المعرّف من المرفق لا من الإغلاق، وحارس الهوية
-     يمنع إغلاقَ مقبسٍ سُلِب مقعده من شطب صاحبه الجديد. */
-  async webSocketMessage(ws, raw) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    return this.onMessage(id, { data: raw });
-  }
-
-  async closedSeat(ws) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    const cur = this.sockets.get(id);
-    if (cur && cur !== ws) return;
-    try { ws.serializeAttachment({ id: null }); } catch {}
-    await this.onClose(id);
-  }
-
-  async webSocketClose(ws) { await this.closedSeat(ws); }
-  async webSocketError(ws) { await this.closedSeat(ws); }
 
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
@@ -7484,6 +7150,16 @@ export class DaqashRoom {
         h.turn++;
         this.bump();
         await this.advanceBetting();
+      } else if (h.phase === 'bet' && this.live(h).length <= 1) {
+        /* طرد لاعب لم يحن دوره بعد قد يُنزل الأحياء لواحد أو صفر بينما
+           الدور على غيره — بدون هذا الفحص تبقى اليد تنتظر ذلك الباقي
+           رغم أنه فاز فعلًا (أو أن لا أحد بقي)، وإن انسحب هو طوعًا
+           بعدها تصل اليد صفر أحياء فتُرَدّ كل الرهانات في startOffer —
+           حتى رهان هذا المطرود الذي نصّ التعليق أعلاه على بقائه في
+           القدر. إنهاء المزاد الآن فورًا (بنفس مسار advanceBetting)
+           يمنح الفائز قدره مباشرة قبل ما يصل لتلك الحالة أصلًا. */
+        h.turn = h.order.length;
+        await this.startOffer();
       } else if (h.phase === 'offer' && h.dealerIdx === i) {
         // الموزّع طُرد: يوزَّع بالتساوي بدل انتظار من لن يعود
         const L = this.live(h);
@@ -7637,7 +7313,7 @@ export class DaqashRoom {
     };
     this.log('الموزّع: ' + r.players[d].name);
     await this.persist();
-    await this.armTurn();
+    this.armTurn();
     this.broadcastState();
   }
 
@@ -7668,13 +7344,14 @@ export class DaqashRoom {
   // ═══════════ المؤقّت ═══════════
   /* الـ DO يبقى حيًّا ما دامت هناك اتصالات مفتوحة، فـ setTimeout كافٍ.
      ومع ذلك نتحقق من endsAt عند كل رسالة، حتى لو نام المؤقّت. */
-  /* لم تعد تُنشئ مؤقّتًا في الذاكرة: hand.endsAt هو الموعد، وarm يترجمه
-     إلى منبّه في التخزين. أُبقيت الأسماء لأن كل مواضع النداء تستعملها. */
-  clearPhaseTimer() {
-    const h = this.room && this.room.hand;
-    if (h) h.endsAt = 0;          // لا طور موقوت الآن ⇒ يسقط المنبّه على TTL
-    try { this.arm(); } catch {}
+  setPhaseTimer(ms, fn) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(async () => {
+      this.timer = null;
+      try { await fn(); } catch (e) {}
+    }, ms);
   }
+  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
 
   /* ── إحياء المرحلة بعد إعادة تشغيل الكائن ──
      `setTimeout` يعيش في ذاكرة الـ Durable Object وحدها. وكل نشرة
@@ -7685,21 +7362,12 @@ export class DaqashRoom {
      الآن: أي رسالة أو اتصال جديد يعيد تسليح المؤقّت من المهلة
      المحفوظة (أو يفجّره فورًا لو انقضت). التسليح لا الاستدعاء
      المباشر: فيمرّ من نفس المسار وتنطبق كل حراسه. */
-  /* المنبّه ينجو النومة والنشرة، فالإحياء صار شبكة أمان لا الآلية
-     الأساسية: يعالج الحالة القديمة بلا endsAt، ويفجّر طورًا فات موعده
-     بلا انتظار المنبّه. */
   resumePhase() {
+    if (this.timer) return;
     let due = null;
     try { due = this.pendingPhase(); } catch { return; }
-    if (!due) return;
-    if (Number(due.ms) <= 0) {
-      const h = this.room.hand;
-      if (h) this.onTimeout(h.no, h.seq).catch(() => {});
-      return;
-    }
-    /* persist لا arm: pendingPhase قد تكون منحت endsAt جديدًا لحالة
-       قديمة، ومنه يُشتقّ المنبّه — فلا ينفع في الذاكرة وحدها. */
-    this.persist().catch(() => {});
+    if (!due || typeof due.fn !== 'function') return;
+    this.setPhaseTimer(Math.max(0, Number(due.ms) || 0), due.fn);
   }
 
   pendingPhase() {
@@ -7723,12 +7391,12 @@ export class DaqashRoom {
     const ms = this.room.cfg.turnSec * 1000;
     h.endsAt = Date.now() + ms;
     const snapNo = h.no, snapSeq = h.seq;
+    this.setPhaseTimer(ms + 400, () => this.onTimeout(snapNo, snapSeq));
     /* المهلة كانت تُضبط بعد `persist()` دائمًا، فما تصل التخزين أبدًا:
        المحفوظ يبقى endsAt=0. فحتى لو نجت الحالة من إعادة التشغيل، لا
-       يبقى في التخزين ما يُعرف منه متى ينتهي الدور.
-       والحفظ صار منتظَرًا: كتابة غير منتظَرة قد يقطعها الإخلاء، ومنها
-       يُشتقّ المنبّه نفسه — فضياعها يعني ضياع الموعد لا تأخّره. */
-    return this.persist();
+       يبقى في التخزين ما يُعرف منه متى ينتهي الدور. الحفظ هنا بلا
+       انتظار — الكتابة الفعلية على كل حركة قائمة أصلًا. */
+    try { this.persist(); } catch {}
   }
 
   async onTimeout(handNo, seq) {
@@ -7891,7 +7559,7 @@ export class DaqashRoom {
        نتخطّى المطويين، وإن بقي حيٌّ واحد ننهي المزاد فورًا. */
     while (h.turn < h.order.length && h.folded[h.order[h.turn]]) h.turn++;
     if (this.live(h).length <= 1) h.turn = h.order.length;
-    if (h.turn < h.order.length) { await this.armTurn(); return; }
+    if (h.turn < h.order.length) { this.armTurn(); return; }
     await this.startOffer();
   }
 
@@ -7906,7 +7574,7 @@ export class DaqashRoom {
       L.length === 0 && h.order.forEach(i => { this.room.players[i].chips += h.bets[i]; });
       h.phase = 'reveal'; h.revealed = false;
       h.title = 'كلهم انسحبوا — رُدّت الرهانات';
-      this.bump(); await this.armRevealTimer();
+      this.bump(); this.armRevealTimer();
       return;
     }
     if (L.length === 1) {
@@ -7917,7 +7585,7 @@ export class DaqashRoom {
       h.prize = h.pot;
       h.phase = 'reveal'; h.revealed = true; h.shown = L.slice();
       h.title = this.room.players[w].name + ' بقي لحاله وأخذ القدر — ' + h.pot;
-      this.bump(); await this.armRevealTimer();
+      this.bump(); this.armRevealTimer();
       return;
     }
     // الموزّع انسحب: تنتقل المهمة لآخر لاعب حي، ويُعاد حساب others تلقائيًا
@@ -7927,7 +7595,7 @@ export class DaqashRoom {
     }
     h.phase = 'offer';
     this.bump();
-    await this.armTurn();
+    this.armTurn();
   }
 
   async actOffer(playerId, msg) {
@@ -7986,7 +7654,7 @@ export class DaqashRoom {
     h.votesOpen = false;
     this.log(this.room.players[h.dealerIdx].name + ' عرض التوزيع');
     this.bump();
-    await this.armTurn();
+    this.armTurn();
   }
 
   // ═══════════ التصويت ═══════════
@@ -8040,7 +7708,7 @@ export class DaqashRoom {
       h.title = 'رضوا كلهم — ' + this.room.players[h.dealerIdx].name
         + ' أخذ ' + h.offer[h.dealerIdx] + ' بلا كشف';
       this.bump();
-      await this.armRevealTimer();
+      this.armRevealTimer();
       await this.persist();
       this.broadcastState();
       return;
@@ -8073,7 +7741,7 @@ export class DaqashRoom {
     }
     h.phase = 'reveal';
     this.bump();
-    await this.armRevealTimer();
+    this.armRevealTimer();
     await this.persist();
     this.broadcastState();
   }
@@ -8157,7 +7825,8 @@ export class DaqashRoom {
   armRevealTimer() {
     const h = this.room.hand;
     h.endsAt = Date.now() + DQ_REVEAL_MS;
-    return this.persist();        // الموعد لا ينفع في الذاكرة وحدها
+    const snapNo = h.no, snapSeq = h.seq;
+    this.setPhaseTimer(DQ_REVEAL_MS + 400, () => this.onTimeout(snapNo, snapSeq));
   }
 
   async nextHand() {
@@ -8508,19 +8177,8 @@ export class DakhilRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن. النصّان مطابقان لما
-       يتبادله العميل المشترك اليوم: يرسل {"type":"hb"} ويستقبل
-       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon. */
-    try {
-      this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
-      );
-    } catch {}
-    /* كان Map في الذاكرة: يُبنى فارغًا عند كل صحوة بينما المقابس تنجو
-       في getWebSockets()، فيبقى اللاعبون connected بلا أن يصلهم بايت. */
-    this.sockets = hibernatingSockets(state);
-    /* لا مقبض مؤقّت: الإيقاع على storage.setAlarm فوق المهلة المحفوظة
-       في التخزين — المقبض كان يموت مع كل نومة ونشرة. */
+    this.sockets = new Map();
+    this.timer = null;
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -8541,56 +8199,23 @@ export class DakhilRoom {
     return new Response('غير موجود', { status: 404 });
   }
 
-  /* touchRoom تضبط أفق الـTTL (ست ساعات) دائمًا فتدهس مهلة المرحلة.
-     arm تأخذ الأقرب بين الاثنين. */
   async persist() {
-    this.room.lastSeen = Date.now();
+    await this.touchRoom();
     await this.state.storage.put('room', this.room);
-    await this.arm();
-  }
-
-  async arm() {
-    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
-    const d = this.phaseDueAt();
-    if (d) next = Math.min(next, d);
-    try { await this.state.storage.setAlarm(next); } catch {}
-  }
-
-  /* موعد استحقاق المرحلة، أو null — نفس شرط pendingPhase حرفًا بحرف */
-  phaseDueAt() {
-    const rd = this.room && this.room.round;
-    /* الموقوف بيد المضيف ليس ضائعًا — إحياؤه يسرق منه الإيقاف */
-    if (!rd || rd.paused || !rd.endsAt) return null;
-    if (this.room.phase !== 'discuss') return null;
-    return rd.endsAt;
-  }
-
-  async alarm() {
-    const now = Date.now();
-    const due = this.phaseDueAt();
-    if (due) {
-      if (now >= due - 60) { try { await this.startVote(); } catch {} }
-      await this.arm();
-      return;
-    }
-    const idle = now - (this.room.lastSeen || 0);
-    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
-      await this.state.storage.deleteAll();
-      return;
-    }
-    await this.arm();
   }
 
   findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
   idxOf(id) { return this.room.players.findIndex(p => p.id === id); }
   activePlayers() { return this.room.players.filter(p => p.connected); }
 
-  /* لم تعد تُنشئ مؤقّتًا في الذاكرة: المهلة المحفوظة هي الموعد، وarm
-     تترجمها إلى منبّه في التخزين. أُبقيت الأسماء لأن مواضع النداء
-     تستعملها، ويكفي أن تُعيد التسليح — النداءات كلها تضبط المهلة أو
-     تمسحها بنفسها قبلها. */
-  setPhaseTimer() { this.arm().catch(() => {}); }
-  clearPhaseTimer() { this.arm().catch(() => {}); }
+  setPhaseTimer(ms, fn) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(async () => {
+      this.timer = null;
+      try { await fn(); } catch (e) {}
+    }, ms);
+  }
+  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
 
   /* ── إحياء المرحلة بعد إعادة تشغيل الكائن ──
      `setTimeout` يعيش في ذاكرة الـ Durable Object وحدها. وكل نشرة
@@ -8601,14 +8226,12 @@ export class DakhilRoom {
      الآن: أي رسالة أو اتصال جديد يعيد تسليح المؤقّت من المهلة
      المحفوظة (أو يفجّره فورًا لو انقضت). التسليح لا الاستدعاء
      المباشر: فيمرّ من نفس المسار وتنطبق كل حراسه. */
-  /* المنبّه ينجو النومة والنشرة، فالإحياء صار شبكة أمان لا الآلية
-     الأساسية: يفجّر مرحلةً فات موعدها بلا انتظار المنبّه. */
   resumePhase() {
+    if (this.timer) return;
     let due = null;
     try { due = this.pendingPhase(); } catch { return; }
-    if (!due) return;
-    if (Number(due.ms) <= 0) { Promise.resolve(this.startVote()).catch(() => {}); return; }
-    this.arm().catch(() => {});
+    if (!due || typeof due.fn !== 'function') return;
+    this.setPhaseTimer(Math.max(0, Number(due.ms) || 0), due.fn);
   }
 
   pendingPhase() {
@@ -8660,9 +8283,7 @@ export class DakhilRoom {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    /* السبات: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة. مسارات
-       الرفض تحته تُغلق فورًا، ومقبسٌ بلا مرفق لا تراه الواجهة أصلًا. */
-    this.state.acceptWebSocket(server);
+    server.accept();
 
     const token = url.searchParams.get('token');
     const name = url.searchParams.get('name');
@@ -8709,8 +8330,8 @@ export class DakhilRoom {
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    /* لا addEventListener مع السبات: المستمِع في الذاكرة يموت مع أول
-       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.sendPrivate(player.id, {
@@ -8722,31 +8343,6 @@ export class DakhilRoom {
     this.broadcastState();
     return new Response(null, { status: 101, webSocket: client });
   }
-
-  /* ══════════ مداخل السبات ══════════
-     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
-  async webSocketMessage(ws, raw) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    /* نمرّ على onMessage نفسها: مُغلِّف applyRoomCommon يلفّها بسقف
-       الحجم وبردّ hb الاحتياطي لو لم يطابق النصُّ الردَّ الآلي. */
-    return this.onMessage(id, { data: raw });
-  }
-
-  /* حارس onClose القديم منقولًا: close() قد يُخرج المقبس من
-     getWebSockets() قبل أن تنزع sockets.set معرّفه، فيصل إغلاقه حاملًا
-     معرّف اللاعب ويشطب مقعدًا رجع صاحبه للتوّ. */
-  async closedSeat(ws) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    const cur = this.sockets.get(id);
-    if (cur && cur !== ws) return;
-    try { ws.serializeAttachment({ id: null }); } catch {}
-    await this.onClose(id);
-  }
-
-  async webSocketClose(ws) { await this.closedSeat(ws); }
-  async webSocketError(ws) { await this.closedSeat(ws); }
 
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
@@ -9498,19 +9094,8 @@ export class KirmRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    /* النبضة يردّها الرَّنتايم فلا توقظ الكائن. النصّان مطابقان لما
-       يتبادله العميل المشترك اليوم: يرسل {"type":"hb"} ويستقبل
-       {"type":"pong"} من مُغلِّف onMessage في applyRoomCommon. */
-    try {
-      this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
-      );
-    } catch {}
-    /* كان Map في الذاكرة: يُبنى فارغًا عند كل صحوة بينما المقابس تنجو
-       في getWebSockets()، فيبقى اللاعبون connected بلا أن يصلهم بايت. */
-    this.sockets = hibernatingSockets(state);
-    /* لا مقبض مؤقّت: الإيقاع على storage.setAlarm فوق turnEndsAt
-       المحفوظ — المقبض كان يموت مع كل نومة ونشرة. */
+    this.sockets = new Map();
+    this.timer = null;
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -9530,43 +9115,9 @@ export class KirmRoom {
     return new Response('غير موجود', { status: 404 });
   }
 
-  /* touchRoom تضبط أفق الـTTL (ست ساعات) دائمًا فتدهس مهلة الدور.
-     arm تأخذ الأقرب بين الاثنين. */
   async persist() {
-    this.room.lastSeen = Date.now();
+    await this.touchRoom();
     await this.state.storage.put('room', this.room);
-    await this.arm();
-  }
-
-  async arm() {
-    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
-    const d = this.phaseDueAt();
-    if (d) next = Math.min(next, d);
-    try { await this.state.storage.setAlarm(next); } catch {}
-  }
-
-  /* موعد استحقاق الدور — نفس شرط resumePhase القديم حرفًا بحرف */
-  phaseDueAt() {
-    const r = this.room;
-    if (!r) return null;
-    if ((r.phase !== 'aim' && r.phase !== 'placing') || !r.turnEndsAt) return null;
-    return r.turnEndsAt;
-  }
-
-  async alarm() {
-    const now = Date.now();
-    const due = this.phaseDueAt();
-    if (due) {
-      if (now >= due - 60) { try { await this.turnTimeout(); } catch {} }
-      await this.arm();
-      return;
-    }
-    const idle = now - (this.room.lastSeen || 0);
-    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
-      await this.state.storage.deleteAll();
-      return;
-    }
-    await this.arm();
   }
 
   findPlayer(id) { return this.room.players.find(p => p.id === id) || null; }
@@ -9578,16 +9129,18 @@ export class KirmRoom {
      بلا مهلة، لاعب ينسحب بلا قطع اتصال يجمّد الغرفة للأبد. والمؤقّت
      يعيش في ذاكرة الكائن وحده، فأي نشرة تمسحه — لذلك `resumePhase`
      يعيد تسليحه من `turnEndsAt` المحفوظ. */
-  /* لم تعد تُنشئ مؤقّتًا: turnEndsAt هو الموعد، وarm تترجمه إلى منبّه
-     في التخزين. أُبقي الاسم لأن armTurn تستعمله. */
-  setTurnTimer() { this.arm().catch(() => {}); }
-  /* المنبّه ينجو النومة والنشرة، فالإحياء صار شبكة أمان: يفجّر دورًا
-     فات موعده بلا انتظار المنبّه. */
+  setTurnTimer(ms) {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = setTimeout(async () => {
+      this.timer = null;
+      try { await this.turnTimeout(); } catch {}
+    }, Math.max(0, ms));
+  }
   resumePhase() {
-    const due = this.phaseDueAt();
-    if (!due) return;
-    if (Date.now() >= due) { this.turnTimeout().catch(() => {}); return; }
-    this.arm().catch(() => {});
+    if (this.timer) return;
+    const r = this.room;
+    if ((r.phase !== 'aim' && r.phase !== 'placing') || !r.turnEndsAt) return;
+    this.setTurnTimer(r.turnEndsAt - Date.now());
   }
   async turnTimeout() {
     const r = this.room;
@@ -9648,9 +9201,7 @@ export class KirmRoom {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    /* السبات: الرَّنتايم يمسك المقبس ويوقظ الكائن عند الرسالة. مسارات
-       الرفض تحته تُغلق فورًا، ومقبسٌ بلا مرفق لا تراه الواجهة أصلًا. */
-    this.state.acceptWebSocket(server);
+    server.accept();
 
     const token = url.searchParams.get('token');
     const name = url.searchParams.get('name');
@@ -9693,8 +9244,8 @@ export class KirmRoom {
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     this.resumePhase();
-    /* لا addEventListener مع السبات: المستمِع في الذاكرة يموت مع أول
-       نومة. الرسائل تصل webSocketMessage والإغلاق webSocketClose. */
+    server.addEventListener('message', evt => this.onMessage(player.id, evt));
+    server.addEventListener('close', () => this.onClose(player.id, server));
 
     /* ردهة بلا مضيف متصل: المضيف قفل التبويب وهو وحده فبقي hostId له،
        ومن يدخل بعده كان يجد «بانتظار المضيف يبدأ…» إلى الأبد. */
@@ -9717,31 +9268,6 @@ export class KirmRoom {
     this.broadcastState();
     return new Response(null, { status: 101, webSocket: client });
   }
-
-  /* ══════════ مداخل السبات ══════════
-     المعرّف من المرفق لا من الإغلاق (closure): المرفق ينجو النومة. */
-  async webSocketMessage(ws, raw) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    /* نمرّ على onMessage نفسها: مُغلِّف applyRoomCommon يلفّها بسقف
-       الحجم وبردّ hb الاحتياطي لو لم يطابق النصُّ الردَّ الآلي. */
-    return this.onMessage(id, { data: raw });
-  }
-
-  /* حارس onClose القديم منقولًا: close() قد يُخرج المقبس من
-     getWebSockets() قبل أن تنزع sockets.set معرّفه، فيصل إغلاقه حاملًا
-     معرّف اللاعب ويشطب مقعدًا رجع صاحبه للتوّ. */
-  async closedSeat(ws) {
-    const id = wsAttachId(ws);
-    if (!id) return;
-    const cur = this.sockets.get(id);
-    if (cur && cur !== ws) return;
-    try { ws.serializeAttachment({ id: null }); } catch {}
-    await this.onClose(id);
-  }
-
-  async webSocketClose(ws) { await this.closedSeat(ws); }
-  async webSocketError(ws) { await this.closedSeat(ws); }
 
   async onClose(playerId, ws) {
     /* حدث الإغلاق يصل بعد أن يكون اللاعب قد أعاد الاتصال بالفعل:
@@ -10039,7 +9565,8 @@ const KirmLogic = {
     if (res.roundOver) {
       if (r.round >= r.rounds) {
         r.phase = 'over';
-        r.turnEndsAt = 0;          // لا مهلة دور ⇒ يسقط المنبّه على TTL
+        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+        r.turnEndsAt = 0;
         await this.finish();
       } else {
         this.startRound();
@@ -10813,7 +10340,7 @@ async function routeRequest(request, env, ctx) {
           needsOpts: !!v.needsOpts, needsTones: !!v.needsTones,
         }])),
         bank: TARI_BANK.map((p, i) => ({
-          id: p.kind + ':' + i, kind: p.kind, text: p.text,
+          id: p.id || (p.kind + ':' + i), kind: p.kind, text: p.text,
           opts: p.opts || null, tones: p.tones || null,
         })),
         limits: { add: TARI_ADD_MAX, text: TARI_TEXT_MAX, opt: TARI_OPT_MAX, opts: TARI_OPTS_MAX },
@@ -10968,7 +10495,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v196';   // v180 = جولات الصوت · v181 = من بلّغ باليوزر · v182 = أوضاع الجولات الثلاثة · v194 = سبات الغرف التسع · v195 = شطب المقعد المنقطع من ردهة مافيا (تراجعنا عنه) · v196 = التراجع
+const WORKER_VERSION = 'v195';   // v180 = جولات الصوت · v181 = من بلّغ باليوزر · v182 = أوضاع الجولات الثلاثة
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -11049,14 +10576,9 @@ export class BilliardRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    /* الردّ pong لا hb-ok: طبقة Net في صفحات اللعب تبتلع pong باسمه
-       صراحةً (if (m.type === 'pong') return;) وتمرّر ما عداه إلى
-       App.onMsg — فكان hb-ok يصل اللعبة رسالةً مجهولة كل ٢٥ ثانية.
-       ولا خطر انقطاعٍ في الحالتين: مراقب الحياة يتصفّر بأي بايت وارد
-       قبل التحليل، فلا يعتمد على نصّ الردّ إطلاقًا. */
     try {
       this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"hb-ok"}')
       );
     } catch {}
     this.state.blockConcurrencyWhile(async () => {
@@ -14890,14 +14412,9 @@ export class BalootRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    /* الردّ pong لا hb-ok: طبقة Net في صفحات اللعب تبتلع pong باسمه
-       صراحةً (if (m.type === 'pong') return;) وتمرّر ما عداه إلى
-       App.onMsg — فكان hb-ok يصل اللعبة رسالةً مجهولة كل ٢٥ ثانية.
-       ولا خطر انقطاعٍ في الحالتين: مراقب الحياة يتصفّر بأي بايت وارد
-       قبل التحليل، فلا يعتمد على نصّ الردّ إطلاقًا. */
     try {
       this.state.setWebSocketAutoResponse(
-        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}')
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"hb-ok"}')
       );
     } catch {}
     this.state.blockConcurrencyWhile(async () => {
@@ -17077,14 +16594,14 @@ const TARI_KINDS = {
     name: 'تقليد',
     inputType: 'audio', recorders: 'others', vote: 'pickOne',
     scoring: { vote: 10, agree: 5, part: 2, top: 8 },
-    clipMs: 6000, collectMs: 34000, voteMs: 22000, revealMs: 8000, revealPerItemMs: 2500,
+    clipMs: 10000, collectMs: 34000, voteMs: 22000, revealMs: 8000, revealPerItemMs: 2500,
     anon: true, ask: 'أي تقليد أقرب لـ{نجم}؟',
   },
   tone: {
     name: 'نبرة',
     inputType: 'audio', recorders: 'all', vote: 'pickOne',
     scoring: { vote: 10, agree: 5, part: 2, top: 8 },
-    clipMs: 6000, collectMs: 32000, voteMs: 22000, revealMs: 8000, revealPerItemMs: 2500,
+    clipMs: 10000, collectMs: 32000, voteMs: 22000, revealMs: 8000, revealPerItemMs: 2500,
     /* النبرة تُعرَض مع المقطع وقت التصويت رغم إخفاء الاسم: بدونها ما فيه
        شيء يُحكَم عليه — «مين أصدق؟» بلا معرفة النبرة المطلوبة سؤال بلا معنى. */
     needsTones: true,                // ولا نبرة = لا جولة
@@ -17130,7 +16647,7 @@ const TARI_KINDS = {
     name: 'قلّد الصوت',
     inputType: 'audio', recorders: 'all', vote: 'pickOne',
     scoring: { vote: 10, agree: 5, part: 2, top: 8 },
-    clipMs: 6000,
+    clipMs: 10000,
     anon: true, ask: 'مين أقرب للصوت الأصلي؟',
   },
   chain: {
@@ -17140,7 +16657,7 @@ const TARI_KINDS = {
     finaleKind: true,
     inputType: 'audio', recorders: 'chain', vote: 'pickOne',
     scoring: { vote: 10, agree: 5, part: 8, top: 15 },
-    clipMs: 6000, turnMs: 26000, voteMs: 24000, revealMs: 9000, revealPerItemMs: 3000,
+    clipMs: 10000, turnMs: 26000, voteMs: 24000, revealMs: 9000, revealPerItemMs: 3000,
     anon: false, ask: 'أي حلقة ضحّكتكم أكثر؟',
   },
 };
@@ -17152,150 +16669,194 @@ const TARI_KINDS = {
 const TARI_FINALE = Object.keys(TARI_KINDS).find(k => TARI_KINDS[k].finaleKind) || null;
 
 const TARI_BANK = [
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يرد على مكالمة ما يبيها' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يطلب طلبه المعتاد من المطعم' },
-  { kind: 'mimic', text: 'قلّد {نجم} أول ما يصحى من النوم' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يحاول يقنعكم بفكرة سخيفة' },
-  { kind: 'mimic', text: 'قلّد ضحكة {نجم}' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يشرح شي ما يفهمه' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يعتذر عن تأخّره' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يفاصل على السعر' },
+  { id: 'mimic:0', kind: 'mimic', text: 'قلّد {نجم} وهو يرد على مكالمة ما يبيها' },
+  { id: 'mimic:1', kind: 'mimic', text: 'قلّد {نجم} وهو يطلب طلبه المعتاد من المطعم' },
+  { id: 'mimic:2', kind: 'mimic', text: 'قلّد {نجم} أول ما يصحى من النوم' },
+  { id: 'mimic:3', kind: 'mimic', text: 'قلّد {نجم} وهو يحاول يقنعكم بفكرة سخيفة' },
+  { id: 'mimic:4', kind: 'mimic', text: 'قلّد ضحكة {نجم}' },
+  { id: 'mimic:5', kind: 'mimic', text: 'قلّد {نجم} وهو يشرح شي ما يفهمه' },
+  { id: 'mimic:6', kind: 'mimic', text: 'قلّد {نجم} وهو يعتذر عن تأخّره' },
+  { id: 'mimic:7', kind: 'mimic', text: 'قلّد {نجم} وهو يفاصل على السعر' },
+  { id: 'mimic:8', kind: 'mimic', text: 'قلّد {نجم} وهو يفتح كيس شيبس بهدوء في مكان ساكت' },
+  { id: 'mimic:11', kind: 'mimic', text: 'قلّد {نجم} وهو يضحك على نكتة ما فهمها' },
+  { id: 'mimic:13', kind: 'mimic', text: 'قلّد {نجم} أول ما يشوف الفاتورة' },
 
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يفتح كيس شيبس بهدوء في مكان ساكت' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يسلّم على واحد ناسي اسمه' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يقول «توّني بصحى» وله ثلاث ساعات صاحي' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يضحك على نكتة ما فهمها' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يرجّع سيارته وكلكم واقفون تتفرّجون' },
-  { kind: 'mimic', text: 'قلّد {نجم} أول ما يشوف الفاتورة' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يقول «أنا ما آكل حلا» وصحنه قدّامه' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو ينادي قططًا ما تعرفه' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يبحث عن جواله وهو ماسكه' },
+  { id: 'free:20', kind: 'free', text: 'كمّل: لو فتحنا خزنة {نجم} السرّية بنلقى…' },
+  { id: 'free:21', kind: 'free', text: 'كمّل: أول جملة يقولها {نجم} لو اشتغل في خدمة العملاء…' },
+  { id: 'free:22', kind: 'free', text: 'كمّل: {نجم} يوصل المطار قبل الرحلة بأربع ساعات لأن…' },
+  { id: 'free:23', kind: 'free', text: 'اكتب اسم المجموعة اللي يفتحها {نجم} في الواتساب' },
 
-  { kind: 'tone', text: 'قول بنبرة {نبرة}: «لا والله؟ ما كنت أدري»', tones: ['مصدوم', 'ساخر', 'ملل قاتل', 'متحمّس زيادة', 'خايف'] },
-  { kind: 'tone', text: 'قول بنبرة {نبرة}: «أنا جاي، أنا جاي، خلاص طلعت»', tones: ['كاذب', 'نعسان', 'مستعجل', 'هادئ جدًا', 'يائس'] },
-  { kind: 'tone', text: 'قول بنبرة {نبرة}: «طيب من قال لك كذا؟»', tones: ['غاضب', 'فضولي', 'مستهزئ', 'خايف', 'مستمتع'] },
+  { id: 'sentence:24', kind: 'sentence', text: 'لو تأخّر {نجم} عن موعد، فالسبب غالبًا…' },
+  { id: 'sentence:25', kind: 'sentence', text: 'لو صار {نجم} طبيبًا، أول شي يقوله للمريض…' },
+  { id: 'sentence:26', kind: 'sentence', text: '{نجم} يشتري أشياء ما يحتاجها كل ما…' },
+  { id: 'sentence:27', kind: 'sentence', text: 'أخطر جملة ممكن يقولها {نجم} وهو ماسك مفتاح السيارة…' },
 
-  { kind: 'free', text: 'كمّل: لو فتحنا خزنة {نجم} السرّية بنلقى…' },
-  { kind: 'free', text: 'كمّل: أول جملة يقولها {نجم} لو اشتغل في خدمة العملاء…' },
-  { kind: 'free', text: 'كمّل: {نجم} يوصل المطار قبل الرحلة بأربع ساعات لأن…' },
-  { kind: 'free', text: 'اكتب اسم المجموعة اللي يفتحها {نجم} في الواتساب' },
+  { id: 'laqab:28', kind: 'laqab', text: 'وش لقب {نجم} في مجموعة الواتساب لو كنّا صرحاء؟' },
+  { id: 'laqab:29', kind: 'laqab', text: 'لو {نجم} صار وجبة في مطعم، وش اسمها؟' },
+  { id: 'laqab:30', kind: 'laqab', text: 'وش اسم عطر {نجم} لو طلّع عطرًا؟' },
+  { id: 'laqab:31', kind: 'laqab', text: 'لو {نجم} صار شخصية في فيلم رعب، وش دوره؟' },
 
-  { kind: 'sentence', text: 'لو تأخّر {نجم} عن موعد، فالسبب غالبًا…' },
-  { kind: 'sentence', text: 'لو صار {نجم} طبيبًا، أول شي يقوله للمريض…' },
-  { kind: 'sentence', text: '{نجم} يشتري أشياء ما يحتاجها كل ما…' },
-  { kind: 'sentence', text: 'أخطر جملة ممكن يقولها {نجم} وهو ماسك مفتاح السيارة…' },
+  { id: 'uthr:32', kind: 'uthr', text: 'وش عذر {نجم} لو نسي عيد ميلاد أقرب واحد له؟' },
+  { id: 'uthr:33', kind: 'uthr', text: 'وش يقول {نجم} لو ضبطناه يكلّم نفسه؟' },
+  { id: 'uthr:34', kind: 'uthr', text: 'وش يقول {نجم} لو انكشف إنه ما قرأ الرسالة أصلًا؟' },
+  { id: 'uthr:35', kind: 'uthr', text: 'وش عذر {نجم} لو دخل بيت غلط؟' },
 
-  { kind: 'laqab', text: 'وش لقب {نجم} في مجموعة الواتساب لو كنّا صرحاء؟' },
-  { kind: 'laqab', text: 'لو {نجم} صار وجبة في مطعم، وش اسمها؟' },
-  { kind: 'laqab', text: 'وش اسم عطر {نجم} لو طلّع عطرًا؟' },
-  { kind: 'laqab', text: 'لو {نجم} صار شخصية في فيلم رعب، وش دوره؟' },
+  { id: 'guess:42', kind: 'guess', text: 'وش يسوي {نجم} لو وصل المطعم ولقى الطلب غلط؟', opts: ['يأكله وما يقول شي', 'ينادي العامل بهدوء', 'يسوي مشكلة', 'يطلع ويطلب من مكان ثاني'] },
+  { id: 'guess:43', kind: 'guess', text: 'وش أول شي يسويه {نجم} أول ما يوصل البيت؟', opts: ['يرمي نفسه على السرير', 'يفتح الثلاجة', 'يفتح جواله ساعة', 'يبدأ يرتّب'] },
+  { id: 'guess:44', kind: 'guess', text: 'لو ضاع جوال {نجم}، وش أول رد فعل؟', opts: ['يدور بهدوء', 'يتّهم أقرب واحد له', 'ينهار تمامًا', 'يقول «معليه» ويكمل'] },
+  { id: 'guess:45', kind: 'guess', text: 'لو صار {نجم} مسؤولًا عن الرحلة، وش يصير؟', opts: ['جدول دقيقة بدقيقة', 'يضيّعنا وينكر', 'ينسى الحجز', 'ينجح ويذكّرنا كل يوم'] },
+  { id: 'guess:46', kind: 'guess', text: 'وش يطلب {نجم} لو عزمناه على عشاء؟', opts: ['أغلى شي في القائمة', 'نفس طلب اللي جنبه', 'شي ما أحد سمع فيه', 'يقول «أنا شبعان» ثم يأكل من الكل'] },
+  { id: 'guess:47', kind: 'guess', text: 'لو تأخّرنا على {نجم} ساعة، وش يسوي؟', opts: ['يتصل كل خمس دقائق', 'يطلع ويرجع البيت', 'ما ينتبه أصلًا', 'يجي بعدنا بساعتين'] },
+  { id: 'guess:48', kind: 'guess', text: 'أي وصف يناسب {نجم} أكثر؟', opts: ['أهدأ واحد فينا', 'أعلى واحد صوت', 'اللي دايم متأخّر', 'اللي دايم يخطّط'] },
+  { id: 'guess:49', kind: 'guess', text: 'وش يسوي {نجم} في اجتماع ممل؟', opts: ['يتظاهر بالانتباه', 'ينام صح', 'يسأل سؤالًا يطوّل الاجتماع', 'يطلع بحجّة'] },
 
-  { kind: 'uthr', text: 'وش عذر {نجم} لو نسي عيد ميلاد أقرب واحد له؟' },
-  { kind: 'uthr', text: 'وش يقول {نجم} لو ضبطناه يكلّم نفسه؟' },
-  { kind: 'uthr', text: 'وش يقول {نجم} لو انكشف إنه ما قرأ الرسالة أصلًا؟' },
-  { kind: 'uthr', text: 'وش عذر {نجم} لو دخل بيت غلط؟' },
+  { id: 'free:50', kind: 'free', text: 'كمّل: أكثر جملة يقولها {نجم} كل يوم هي…' },
+  { id: 'free:51', kind: 'free', text: 'كمّل: لو صار {نجم} رئيسًا، أول قرار له…' },
+  { id: 'free:52', kind: 'free', text: 'كمّل: أغرب شي ممكن تلقاه في سيارة {نجم}…' },
+  { id: 'free:53', kind: 'free', text: 'اكتب عذر {نجم} المفضّل للتأخير' },
+  { id: 'free:54', kind: 'free', text: 'كمّل: {نجم} ما يقدر يعيش بدون…' },
+  { id: 'free:55', kind: 'free', text: 'اكتب عنوان فيلم عن حياة {نجم}' },
+  { id: 'free:56', kind: 'free', text: 'كمّل: أسوأ نصيحة ممكن يعطيك إياها {نجم}…' },
+  { id: 'free:57', kind: 'free', text: 'كمّل: لو دخل {نجم} مسابقة، بيفوز بجائزة…' },
 
-  { kind: 'tone', text: 'قول بنبرة {نبرة}: «ما توقعت هذا منك أبدًا»', tones: ['غاضب', 'خايف', 'متحمّس', 'زعلان', 'مستهزئ'] },
-  { kind: 'tone', text: 'قول بنبرة {نبرة}: «طيب… وش الخطة الحين؟»', tones: ['غاضب', 'خايف', 'متحمّس', 'ملل قاتل', 'واثق زيادة'] },
-  { kind: 'tone', text: 'قول بنبرة {نبرة}: «أنا قلت لكم من البداية»', tones: ['متشمّت', 'زعلان', 'متحمّس', 'خايف', 'هادئ جدًا'] },
-  { kind: 'tone', text: 'كمّل بنبرة {نبرة}: «لو تدرون وش صار اليوم…»', tones: ['متحمّس', 'خايف', 'غاضب', 'نعسان', 'غامض'] },
-  { kind: 'tone', text: 'قول بنبرة {نبرة}: «لا لا لا، ارجع اشرح لي من الأول»', tones: ['غاضب', 'مستمتع', 'خايف', 'مصدوم', 'ساخر'] },
-  { kind: 'tone', text: 'قول بنبرة {نبرة}: «خلاص، أنا موافق»', tones: ['متردّد', 'متحمّس', 'يائس', 'غاضب', 'مشكوك فيه'] },
+  { id: 'mimic:60', kind: 'mimic', text: 'قلّد {نجم} وهو يشجّع فريقه وهو خسران' },
+  { id: 'mimic:62', kind: 'mimic', text: 'قلّد {نجم} وهو يسولف عن أكلة عجبته' },
+  { id: 'mimic:65', kind: 'mimic', text: 'قلّد {نجم} وهو يمدح نفسه بلا ما يقول إنه يمدح نفسه' },
 
-  { kind: 'guess', text: 'وش يسوي {نجم} لو وصل المطعم ولقى الطلب غلط؟', opts: ['يأكله وما يقول شي', 'ينادي العامل بهدوء', 'يسوي مشكلة', 'يطلع ويطلب من مكان ثاني'] },
-  { kind: 'guess', text: 'وش أول شي يسويه {نجم} أول ما يوصل البيت؟', opts: ['يرمي نفسه على السرير', 'يفتح الثلاجة', 'يفتح جواله ساعة', 'يبدأ يرتّب'] },
-  { kind: 'guess', text: 'لو ضاع جوال {نجم}، وش أول رد فعل؟', opts: ['يدور بهدوء', 'يتّهم أقرب واحد له', 'ينهار تمامًا', 'يقول «معليه» ويكمل'] },
-  { kind: 'guess', text: 'لو صار {نجم} مسؤولًا عن الرحلة، وش يصير؟', opts: ['جدول دقيقة بدقيقة', 'يضيّعنا وينكر', 'ينسى الحجز', 'ينجح ويذكّرنا كل يوم'] },
-  { kind: 'guess', text: 'وش يطلب {نجم} لو عزمناه على عشاء؟', opts: ['أغلى شي في القائمة', 'نفس طلب اللي جنبه', 'شي ما أحد سمع فيه', 'يقول «أنا شبعان» ثم يأكل من الكل'] },
-  { kind: 'guess', text: 'لو تأخّرنا على {نجم} ساعة، وش يسوي؟', opts: ['يتصل كل خمس دقائق', 'يطلع ويرجع البيت', 'ما ينتبه أصلًا', 'يجي بعدنا بساعتين'] },
-  { kind: 'guess', text: 'أي وصف يناسب {نجم} أكثر؟', opts: ['أهدأ واحد فينا', 'أعلى واحد صوت', 'اللي دايم متأخّر', 'اللي دايم يخطّط'] },
-  { kind: 'guess', text: 'وش يسوي {نجم} في اجتماع ممل؟', opts: ['يتظاهر بالانتباه', 'ينام صح', 'يسأل سؤالًا يطوّل الاجتماع', 'يطلع بحجّة'] },
+  { id: 'sentence:68', kind: 'sentence', text: '{نجم} يفتح الثلاجة عشر مرات في الساعة عشان…' },
+  { id: 'sentence:69', kind: 'sentence', text: '{نجم} يضيّع نصف ساعة كل يوم وهو…' },
+  { id: 'sentence:70', kind: 'sentence', text: 'لو انقطع النت عن {نجم} أسبوعًا، بيصير…' },
+  { id: 'sentence:71', kind: 'sentence', text: 'أكثر شي يعصّب {نجم} هو…' },
+  { id: 'sentence:72', kind: 'sentence', text: 'لو فتحنا جوال {نجم} بنلقى…' },
+  { id: 'sentence:73', kind: 'sentence', text: 'الشي الوحيد اللي يخلّي {نجم} يصحى بدري…' },
+  { id: 'sentence:74', kind: 'sentence', text: 'لو {نجم} صار مدرّسًا، أول قانون في صفّه…' },
+  { id: 'sentence:75', kind: 'sentence', text: 'آخر شي يتوقّعه أحد من {نجم} إنه…' },
 
-  { kind: 'free', text: 'كمّل: أكثر جملة يقولها {نجم} كل يوم هي…' },
-  { kind: 'free', text: 'كمّل: لو صار {نجم} رئيسًا، أول قرار له…' },
-  { kind: 'free', text: 'كمّل: أغرب شي ممكن تلقاه في سيارة {نجم}…' },
-  { kind: 'free', text: 'اكتب عذر {نجم} المفضّل للتأخير' },
-  { kind: 'free', text: 'كمّل: {نجم} ما يقدر يعيش بدون…' },
-  { kind: 'free', text: 'اكتب عنوان فيلم عن حياة {نجم}' },
-  { kind: 'free', text: 'كمّل: أسوأ نصيحة ممكن يعطيك إياها {نجم}…' },
-  { kind: 'free', text: 'كمّل: لو دخل {نجم} مسابقة، بيفوز بجائزة…' },
+  { id: 'laqab:76', kind: 'laqab', text: 'اكتب لقبًا يليق بـ{نجم} في المجموعة' },
+  { id: 'laqab:77', kind: 'laqab', text: 'وش اسم {نجم} لو كان بطل مسلسل؟' },
+  { id: 'laqab:78', kind: 'laqab', text: 'لو كان لـ{نجم} اسم في فريق أبطال، وش يكون؟' },
+  { id: 'laqab:79', kind: 'laqab', text: 'اكتب لقبًا لـ{نجم} من موقفٍ صار له' },
+  { id: 'laqab:80', kind: 'laqab', text: 'وش عنوان كتاب سيرة {نجم}؟' },
+  { id: 'laqab:81', kind: 'laqab', text: 'لو {نجم} صار مطعمًا، وش اسمه؟' },
+  { id: 'laqab:82', kind: 'laqab', text: 'اكتب لقبًا يزعّل {نجم} ويضحّك الباقين' },
+  { id: 'laqab:83', kind: 'laqab', text: 'وش اسم قناة {نجم} لو صار يوتيوبر؟' },
 
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يتصنّع الاهتمام بكلام ممل' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يقرأ رسالة طويلة بصوت عالٍ' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يشجّع فريقه وهو خسران' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يعتذر عن غلطة ما يشوفها غلطة' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يسولف عن أكلة عجبته' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يوقّظ أحدًا نايمًا' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يرد على رسالة تأخّر عليها أسبوعًا' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يمدح نفسه بلا ما يقول إنه يمدح نفسه' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يعطي إرشادات الطريق' },
-  { kind: 'mimic', text: 'قلّد {نجم} وهو يفاصل ويقول «آخر كلام»' },
+  { id: 'uthr:84', kind: 'uthr', text: 'وش عذر {نجم} لو وصل العزيمة والأكل خلص؟' },
+  { id: 'uthr:85', kind: 'uthr', text: 'وش عذر {نجم} لو ما رد على رسائلكم ثلاثة أيام؟' },
+  { id: 'uthr:86', kind: 'uthr', text: 'وش عذر {نجم} لو نسي موعدًا مهمًّا؟' },
+  { id: 'uthr:87', kind: 'uthr', text: 'وش يقول {نجم} لو انكسر شي عنده وسألوه؟' },
+  { id: 'uthr:88', kind: 'uthr', text: 'وش عذر {نجم} لو طلع من العزيمة بدري؟' },
+  { id: 'uthr:89', kind: 'uthr', text: 'وش عذر {نجم} لو ما جاب الشي اللي طلبتوه؟' },
+  { id: 'uthr:90', kind: 'uthr', text: 'وش يقول {نجم} لو ضبطتوه يأكل بالليل؟' },
+  { id: 'uthr:91', kind: 'uthr', text: 'وش عذر {نجم} لو خسر ولا يبي يعترف؟' },
 
-  { kind: 'sentence', text: '{نجم} يفتح الثلاجة عشر مرات في الساعة عشان…' },
-  { kind: 'sentence', text: '{نجم} يضيّع نصف ساعة كل يوم وهو…' },
-  { kind: 'sentence', text: 'لو انقطع النت عن {نجم} أسبوعًا، بيصير…' },
-  { kind: 'sentence', text: 'أكثر شي يعصّب {نجم} هو…' },
-  { kind: 'sentence', text: 'لو فتحنا جوال {نجم} بنلقى…' },
-  { kind: 'sentence', text: 'الشي الوحيد اللي يخلّي {نجم} يصحى بدري…' },
-  { kind: 'sentence', text: 'لو {نجم} صار مدرّسًا، أول قانون في صفّه…' },
-  { kind: 'sentence', text: 'آخر شي يتوقّعه أحد من {نجم} إنه…' },
+  { id: 'sfx:92', kind: 'sfx', text: 'ضحكة رضيع ٢', sound: 'baby-laugh-2', flat: true },
+  { id: 'sfx:93', kind: 'sfx', text: 'ضحكة رضيع', sound: 'baby-laugh' },
+  { id: 'sfx:94', kind: 'sfx', text: 'بالون يفشّ', sound: 'balloon' },
+  { id: 'sfx:95', kind: 'sfx', text: 'نطّة', sound: 'boing' },
+  { id: 'sfx:96', kind: 'sfx', text: 'زامور مزدوج', sound: 'car-horn-2' },
+  { id: 'sfx:97', kind: 'sfx', text: 'زامور', sound: 'car-horn' },
+  { id: 'sfx:98', kind: 'sfx', text: 'قطة', sound: 'cat' },
+  { id: 'sfx:99', kind: 'sfx', text: 'منشار يشتغل', sound: 'chainsaw' },
+  { id: 'sfx:100', kind: 'sfx', text: 'بقرة', sound: 'cow', flat: true },
+  { id: 'sfx:101', kind: 'sfx', text: 'باب يصرّ', sound: 'door-creak' },
+  { id: 'sfx:102', kind: 'sfx', text: 'جرس الباب', sound: 'doorbell' },
+  { id: 'sfx:103', kind: 'sfx', text: 'ضحكة شريرة ٢', sound: 'evil-laugh-2' },
+  { id: 'sfx:104', kind: 'sfx', text: 'ضحكة شريرة ٣', sound: 'evil-laugh-3' },
+  { id: 'sfx:105', kind: 'sfx', text: 'ضحكة شريرة', sound: 'evil-laugh' },
+  { id: 'sfx:106', kind: 'sfx', text: 'ترومبون الفشل', sound: 'fail-trombone' },
+  { id: 'sfx:107', kind: 'sfx', text: 'ضفدع', sound: 'frog', flat: true },
+  { id: 'sfx:108', kind: 'sfx', text: 'هاتف قديم', sound: 'phone' },
+  { id: 'sfx:109', kind: 'sfx', text: 'ديك', sound: 'rooster' },
+  { id: 'sfx:110', kind: 'sfx', text: 'ترومبون حزين', sound: 'sad-trombone', flat: true },
+  { id: 'sfx:111', kind: 'sfx', text: 'ترومبيت حزين', sound: 'sad-trumpet', flat: true },
+  { id: 'sfx:112', kind: 'sfx', text: 'صرخة بنت', sound: 'scream-2' },
+  { id: 'sfx:113', kind: 'sfx', text: 'صرخة رعب', sound: 'scream-3' },
+  { id: 'sfx:114', kind: 'sfx', text: 'صرخة', sound: 'scream' },
+  { id: 'sfx:115', kind: 'sfx', text: 'إسعاف', sound: 'siren', flat: true },
+  { id: 'sfx:116', kind: 'sfx', text: 'صفارة منزلقة', sound: 'slide-whistle' },
+  { id: 'sfx:117', kind: 'sfx', text: 'عطسة ٣', sound: 'sneeze-3' },
+  { id: 'sfx:118', kind: 'sfx', text: 'عطسة', sound: 'sneeze' },
+  { id: 'sfx:119', kind: 'sfx', text: 'شخير', sound: 'snoring' },
+  { id: 'sfx:120', kind: 'sfx', text: 'قطار', sound: 'train', flat: true },
+  { id: 'sfx:121', kind: 'sfx', text: 'صفير نداء', sound: 'whistle' },
+  { id: 'sfx:122', kind: 'sfx', text: 'ضحكة ساحرة', sound: 'witch-laugh' },
+  { id: 'sfx:123', kind: 'sfx', text: 'صفير إعجاب', sound: 'wolf-whistle', flat: true },
 
-  { kind: 'laqab', text: 'اكتب لقبًا يليق بـ{نجم} في المجموعة' },
-  { kind: 'laqab', text: 'وش اسم {نجم} لو كان بطل مسلسل؟' },
-  { kind: 'laqab', text: 'لو كان لـ{نجم} اسم في فريق أبطال، وش يكون؟' },
-  { kind: 'laqab', text: 'اكتب لقبًا لـ{نجم} من موقفٍ صار له' },
-  { kind: 'laqab', text: 'وش عنوان كتاب سيرة {نجم}؟' },
-  { kind: 'laqab', text: 'لو {نجم} صار مطعمًا، وش اسمه؟' },
-  { kind: 'laqab', text: 'اكتب لقبًا يزعّل {نجم} ويضحّك الباقين' },
-  { kind: 'laqab', text: 'وش اسم قناة {نجم} لو صار يوتيوبر؟' },
+  { id: 'chain:124', kind: 'chain', text: 'القهوة بردت والسالفة ما خلصت والباب مفتوح' },
+  { id: 'chain:125', kind: 'chain', text: 'سبع سيارات وقفت عند البقالة ولا واحد نزل' },
+  { id: 'chain:126', kind: 'chain', text: 'خالتي تقول إن القط يفهم عربي أفصح مني' },
+  { id: 'chain:127', kind: 'chain', text: 'الرحلة تأخّرت ساعتين وأنا نسيت الشنطة في البيت' },
+  { id: 'chain:128', kind: 'chain', text: 'ثلاث ثواني وانطفت الكهرباء والكيكة نص مستوية' },
 
-  { kind: 'uthr', text: 'وش عذر {نجم} لو وصل العزيمة والأكل خلص؟' },
-  { kind: 'uthr', text: 'وش عذر {نجم} لو ما رد على رسائلكم ثلاثة أيام؟' },
-  { kind: 'uthr', text: 'وش عذر {نجم} لو نسي موعدًا مهمًّا؟' },
-  { kind: 'uthr', text: 'وش يقول {نجم} لو انكسر شي عنده وسألوه؟' },
-  { kind: 'uthr', text: 'وش عذر {نجم} لو طلع من العزيمة بدري؟' },
-  { kind: 'uthr', text: 'وش عذر {نجم} لو ما جاب الشي اللي طلبتوه؟' },
-  { kind: 'uthr', text: 'وش يقول {نجم} لو ضبطتوه يأكل بالليل؟' },
-  { kind: 'uthr', text: 'وش عذر {نجم} لو خسر ولا يبي يعترف؟' },
+  /* ── إضافات ٢٠٢٦ ── معرّفاتها n* لا kind:index، فلا تتزحزح أبدًا. */
+  { id: 'mimic:200', kind: 'mimic', text: 'قلّد {نجم} وهو يغنّي أغنية ما يحفظ منها إلا كلمتين' },
+  { id: 'mimic:201', kind: 'mimic', text: 'قلّد {نجم} وهو يتكلّم إنجليزي قدّام الناس' },
+  { id: 'mimic:202', kind: 'mimic', text: 'قلّد {نجم} وهو يقول «خلاص آخر وحدة» وهو ياخذ الرابعة' },
+  { id: 'mimic:203', kind: 'mimic', text: 'قلّد {نجم} وهو يرد على السلام وهو نايم' },
+  { id: 'mimic:204', kind: 'mimic', text: 'قلّد {نجم} وهو يشرب شي حار ويقول «عادي عادي»' },
+  { id: 'mimic:205', kind: 'mimic', text: 'قلّد {نجم} وهو يضحك ضحكة مجاملة ما ضحك منها قلبه' },
+  { id: 'mimic:206', kind: 'mimic', text: 'قلّد {نجم} وهو يقول رقم جواله لواحد ما يسمع زين' },
+  { id: 'mimic:207', kind: 'mimic', text: 'قلّد {نجم} وهو يعدّ فلوسًا بصوت عالٍ ويضيع العدّ ويبدأ من جديد' },
+  { id: 'mimic:208', kind: 'mimic', text: 'قلّد {نجم} وهو يفاوض طفلًا عمره ثلاث سنين' },
+  { id: 'mimic:209', kind: 'mimic', text: 'قلّد {نجم} وهو يحاول يفتح جرّة مقفولة والكل يتفرّج' },
+  { id: 'mimic:210', kind: 'mimic', text: 'قلّد {نجم} وهو يكلّم خدمة العملاء الآلية ويقول «موظف… مـوظـف»' },
+  { id: 'mimic:211', kind: 'mimic', text: 'قلّد {نجم} وهو يشمّ أكلًا محروقًا ويقول «لا ما احترق»' },
+  { id: 'mimic:212', kind: 'mimic', text: 'قلّد {نجم} وهو يتنحنح قبل ما يقول شيئًا مهمًّا' },
+  { id: 'mimic:213', kind: 'mimic', text: 'قلّد {نجم} وهو ينادي أحدًا من آخر البيت' },
+  { id: 'mimic:214', kind: 'mimic', text: 'قلّد {نجم} وهو يقرأ اسمًا أجنبيًا صعبًا بصوت واثق' },
+  { id: 'mimic:215', kind: 'mimic', text: 'قلّد {نجم} وهو يمثّل إنه ما سمع السؤال عشان ما يجاوب' },
 
-  { kind: 'sfx', text: 'ضحكة رضيع ٢', sound: 'baby-laugh-2', flat: true },
-  { kind: 'sfx', text: 'ضحكة رضيع', sound: 'baby-laugh' },
-  { kind: 'sfx', text: 'بالون يفشّ', sound: 'balloon' },
-  { kind: 'sfx', text: 'نطّة', sound: 'boing' },
-  { kind: 'sfx', text: 'زامور مزدوج', sound: 'car-horn-2' },
-  { kind: 'sfx', text: 'زامور', sound: 'car-horn' },
-  { kind: 'sfx', text: 'قطة', sound: 'cat' },
-  { kind: 'sfx', text: 'منشار يشتغل', sound: 'chainsaw' },
-  { kind: 'sfx', text: 'بقرة', sound: 'cow', flat: true },
-  { kind: 'sfx', text: 'باب يصرّ', sound: 'door-creak' },
-  { kind: 'sfx', text: 'جرس الباب', sound: 'doorbell' },
-  { kind: 'sfx', text: 'ضحكة شريرة ٢', sound: 'evil-laugh-2' },
-  { kind: 'sfx', text: 'ضحكة شريرة ٣', sound: 'evil-laugh-3' },
-  { kind: 'sfx', text: 'ضحكة شريرة', sound: 'evil-laugh' },
-  { kind: 'sfx', text: 'ترومبون الفشل', sound: 'fail-trombone' },
-  { kind: 'sfx', text: 'ضفدع', sound: 'frog', flat: true },
-  { kind: 'sfx', text: 'هاتف قديم', sound: 'phone' },
-  { kind: 'sfx', text: 'ديك', sound: 'rooster' },
-  { kind: 'sfx', text: 'ترومبون حزين', sound: 'sad-trombone', flat: true },
-  { kind: 'sfx', text: 'ترومبيت حزين', sound: 'sad-trumpet', flat: true },
-  { kind: 'sfx', text: 'صرخة بنت', sound: 'scream-2' },
-  { kind: 'sfx', text: 'صرخة رعب', sound: 'scream-3' },
-  { kind: 'sfx', text: 'صرخة', sound: 'scream' },
-  { kind: 'sfx', text: 'إسعاف', sound: 'siren', flat: true },
-  { kind: 'sfx', text: 'صفارة منزلقة', sound: 'slide-whistle' },
-  { kind: 'sfx', text: 'عطسة ٣', sound: 'sneeze-3' },
-  { kind: 'sfx', text: 'عطسة', sound: 'sneeze' },
-  { kind: 'sfx', text: 'شخير', sound: 'snoring' },
-  { kind: 'sfx', text: 'قطار', sound: 'train', flat: true },
-  { kind: 'sfx', text: 'صفير نداء', sound: 'whistle' },
-  { kind: 'sfx', text: 'ضحكة ساحرة', sound: 'witch-laugh' },
-  { kind: 'sfx', text: 'صفير إعجاب', sound: 'wolf-whistle', flat: true },
+  { id: 'chain:200', kind: 'chain', text: 'جدّتي حلفت إن الغسّالة تكلّمها بالليل' },
+  { id: 'chain:201', kind: 'chain', text: 'سبع دجاجات هربن من السطح ولا وحدة رجعت' },
+  { id: 'chain:202', kind: 'chain', text: 'صاحبي اشترى ثلاجة ونسي إن الباب أصغر منها' },
+  { id: 'chain:203', kind: 'chain', text: 'القط أكل الكيكة وقعد يتفرّج علينا وإحنا ندوّرها' },
+  { id: 'chain:204', kind: 'chain', text: 'جاري يشغّل المكنسة الساعة ثنتين بالليل' },
+  { id: 'chain:205', kind: 'chain', text: 'عمّي يقول إن الجمل يعرف الطريق أحسن من الخريطة' },
+  { id: 'chain:206', kind: 'chain', text: 'الرز نضج والضيوف ما جوا والجيران جوا' },
 
-  { kind: 'chain', text: 'القهوة بردت والسالفة ما خلصت والباب مفتوح' },
-  { kind: 'chain', text: 'سبع سيارات وقفت عند البقالة ولا واحد نزل' },
-  { kind: 'chain', text: 'خالتي تقول إن القط يفهم عربي أفصح مني' },
-  { kind: 'chain', text: 'الرحلة تأخّرت ساعتين وأنا نسيت الشنطة في البيت' },
-  { kind: 'chain', text: 'ثلاث ثواني وانطفت الكهرباء والكيكة نص مستوية' },
+  { id: 'free:200', kind: 'free', text: 'كمّل: لو صار {نجم} إمام مسجد، أول شي يغيّره…' },
+  { id: 'free:201', kind: 'free', text: 'كمّل: {نجم} يشتري نفس الشي كل مرة لأنه…' },
+  { id: 'free:202', kind: 'free', text: 'اكتب كلمة السر اللي يستخدمها {نجم} في كل شي' },
+  { id: 'free:203', kind: 'free', text: 'كمّل: لو طلع {نجم} في مقابلة تلفزيونية، أول جملة…' },
+  { id: 'free:204', kind: 'free', text: 'كمّل: أكثر شي يخلّي {نجم} يقول «أنا قلت لكم»…' },
+  { id: 'free:205', kind: 'free', text: 'اكتب اسم المشروع اللي بدأه {نجم} وما كمّله' },
+  { id: 'free:206', kind: 'free', text: 'كمّل: لو {نجم} صار معلّم قيادة، أول نصيحة…' },
+  { id: 'free:207', kind: 'free', text: 'اكتب آخر شي بحث عنه {نجم} في جواله الساعة ثلاث الفجر' },
+
+  { id: 'sentence:200', kind: 'sentence', text: '{نجم} يتأخّر في الحمّام لأنه…' },
+  { id: 'sentence:201', kind: 'sentence', text: 'لو {نجم} صار قاضيًا، أول حكم يطلع منه…' },
+  { id: 'sentence:202', kind: 'sentence', text: '{نجم} يوقف السيارة بطريقة تخلّينا…' },
+  { id: 'sentence:203', kind: 'sentence', text: '{نجم} يحفظ أرقام الناس في جواله بأسماء مثل…' },
+  { id: 'sentence:204', kind: 'sentence', text: 'لو ضاعت محفظة {نجم}، أول واحد يشكّ فيه…' },
+  { id: 'sentence:205', kind: 'sentence', text: '{نجم} ما يرد على الجوال إلا إذا…' },
+  { id: 'sentence:206', kind: 'sentence', text: 'لو {نجم} صار مدير مطعم، أول شي يشيله من القائمة…' },
+  { id: 'sentence:207', kind: 'sentence', text: '{نجم} ما يسكت إلا لمّا…' },
+
+  { id: 'laqab:200', kind: 'laqab', text: 'لو {نجم} صار طقس، وش اسم النشرة الجوية عنه؟' },
+  { id: 'laqab:201', kind: 'laqab', text: 'وش اسم {نجم} لو صار مصارعًا؟' },
+  { id: 'laqab:202', kind: 'laqab', text: 'لو {نجم} صار تطبيقًا في جوالك، وش اسمه ووش يسوي؟' },
+  { id: 'laqab:203', kind: 'laqab', text: 'وش اسم الحلوى اللي تشبه {نجم}؟' },
+  { id: 'laqab:204', kind: 'laqab', text: 'لو {نجم} صار إشارة مرور، وش لونه دايم؟' },
+  { id: 'laqab:205', kind: 'laqab', text: 'وش عنوان الحلقة لو صار عن {نجم} برنامج وثائقي؟' },
+  { id: 'laqab:206', kind: 'laqab', text: 'لو {نجم} صار سيارة، وش نوعها ووش صوتها؟' },
+  { id: 'laqab:207', kind: 'laqab', text: 'وش اسم {نجم} لو صار شخصية في لعبة أطفال؟' },
+
+  { id: 'uthr:200', kind: 'uthr', text: 'وش عذر {نجم} لو رنّ جواله في مكان ساكت؟' },
+  { id: 'uthr:201', kind: 'uthr', text: 'وش يقول {نجم} لو ضبطناه يسمع سالفتنا من بعيد؟' },
+  { id: 'uthr:202', kind: 'uthr', text: 'وش عذر {نجم} لو ضاع في مكان يعرفه من زمان؟' },
+  { id: 'uthr:203', kind: 'uthr', text: 'وش يقول {نجم} لو نادى واحدًا باسم غلط قدّام الكل؟' },
+  { id: 'uthr:204', kind: 'uthr', text: 'وش عذر {نجم} لو أكل نصيب غيره وهو يدري؟' },
+  { id: 'uthr:205', kind: 'uthr', text: 'وش يقول {نجم} لو صحّى الكل بالغلط الساعة خمسة؟' },
+  { id: 'uthr:206', kind: 'uthr', text: 'وش عذر {نجم} لو وعدكم وما جاء ولا اعتذر؟' },
+  { id: 'uthr:207', kind: 'uthr', text: 'وش يقول {نجم} لو انكشف إنه ما شاف الفيلم اللي يتكلّم عنه؟' },
+
+  { id: 'guess:200', kind: 'guess', text: 'لو انكسر شي في البيت، وش يسوي {نجم}؟', opts: ['يركّبه بالغراء ويسكت', 'يتّهم أصغر واحد', 'يعترف من أول ثانية', 'يحطّه مكانه ويطنّش'] },
+  { id: 'guess:201', kind: 'guess', text: '{نجم} في المطعم — وش يطلب؟', opts: ['نفس طلبه من عشر سنين', 'أغرب شي في القائمة', '«سوّوا لي مثلكم»', 'يطلب ثلاثة وياكل واحد'] },
+  { id: 'guess:202', kind: 'guess', text: 'لو صار {نجم} سائق التوصيلة، وش يصير؟', opts: ['يوصّل قبل الوقت', 'يضيع ويقول «مختصر»', 'يشغّل أغانيه بأعلى صوت', 'يوقف يشتري قهوة قبل'] },
+  { id: 'guess:203', kind: 'guess', text: 'وش يسوي {نجم} لو شاف صرصورًا؟', opts: ['يقتله ببرود', 'يصرخ وينط', 'يطلع من البيت', 'يصوّره ويرسله للقروب'] },
+  { id: 'guess:204', kind: 'guess', text: 'لو أعطيناه المايك في العرس، وش يسوي {نجم}؟', opts: ['خطبة عشر دقايق', 'كلمتين ويهرب', 'يغنّي', 'يعطيه لغيره فورًا'] },
+  { id: 'guess:205', kind: 'guess', text: 'لو {نجم} طبخ لكم، وش تتوقّعون؟', opts: ['أطيب أكلة', 'مالح زيادة', 'يطلب مطعم بالسر', 'يحرق المطبخ'] },
 ];
 
 /* المطالبة تُسلّم للمحرّك «مُسوّاة»: ما ينقصها يُكمَّل من نمطها.
@@ -17350,7 +16911,10 @@ function tariBuildBank(add, off) {
   }
   const bank = [];
   TARI_BANK.forEach((p, i) => {
-    const id = p.kind + ':' + i;
+    /* المعرّف الصريح يفوز على الفهرس. الفهرس كان يزحف مع كل حذفٍ من
+       البنك، فما أطفأه اللاعب في شاشة «الأسئلة» يصير مطفَّأً على سؤالٍ
+       آخر بعد أول تعديل. المعرّفات المكتوبة تثبت مهما أضفنا أو حذفنا. */
+    const id = p.id || (p.kind + ':' + i);
     if (dead.has(id)) return;
     const n = tariNormPrompt(p, id);
     if (n) bank.push(n);
@@ -17539,7 +17103,10 @@ export class TariRoom {
 
     if (!player) {
       if (!this.room.code) {
-        server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
+        /* fatal: رفضٌ نهائي لا عطلُ شبكة. بلا الراية يعيد العميل المحاولة
+           إلى الأبد على رمزٍ لا وجود له، فيرى اللاعب تنبيهًا يتكرّر بلا
+           مخرج بدل أن يُرجَع للبداية ليكتب رمزًا صحيحًا. */
+        server.send(JSON.stringify({ type: 'error', fatal: true, code: 'nosuchroom', message: 'ما فيه غرفة بهذا الرمز' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
@@ -17550,7 +17117,7 @@ export class TariRoom {
       if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
         const mine = this.reclaimByName(name);
         if (!mine) {
-          server.send(JSON.stringify({ type: 'error', fatal: true, message: 'الجولة شغّالة — انتظر نهايتها وادخل' }));
+          server.send(JSON.stringify({ type: 'error', fatal: true, code: 'busy', message: 'الجولة شغّالة — انتظر نهايتها وادخل' }));
           server.close();
           return new Response(null, { status: 101, webSocket: client });
         }
@@ -17573,7 +17140,7 @@ export class TariRoom {
         if (!this.findPlayer(this.room.hostId)) this.room.hostId = null;
       }
       if (this.room.players.length >= cap) {
-        server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة (٩ لاعبين)' }));
+        server.send(JSON.stringify({ type: 'error', fatal: true, code: 'full', message: 'الغرفة ممتلئة (٩ لاعبين)' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
@@ -17608,9 +17175,12 @@ export class TariRoom {
     await this.persist();
     this.sendPrivate(pid, {
       type: 'welcome', playerId: pid, roomCode: this.room.code, seatToken: player.seatToken,
-      kinds: this.kindsBrief(), bank: TARI_BANK.map((p, i) => ({ id: p.kind + ':' + i, kind: p.kind, text: p.text })),
+      kinds: this.kindsBrief(), bank: TARI_BANK.map((p, i) => ({ id: p.id || (p.kind + ':' + i), kind: p.kind, text: p.text })),
     });
     this.broadcastState();
+    /* غرفةٌ سكنت وهي فارغة تُستأنف بأوّل عائد: كل الأطوار تنتظر اللاعبين
+       لا مؤقّتًا، فبلا هذي الدفعة يبقى الطور واقفًا رغم اكتمال شرطه. */
+    await this.maybeAdvanceOnDisconnect();
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -17929,16 +17499,23 @@ export class TariRoom {
     const k = this.kind();
 
     /* ترتيب العرض: من أدخل فعلًا، والنجم المُستثنى (starAside) خارجه —
-       مُدخَله يُكشف في العرض ولا يُصوَّت عليه ولا يُحسب في الإجماع. */
+       مُدخَله يُكشف في العرض ولا يُصوَّت عليه ولا يُحسب في الإجماع.
+       ⚠️ المصدر هنا كل المقاعد لا expected(): تلك تُرجع المتصلين وحدهم،
+       فكان من يجاوب ثم يقفل جواله يُشطب مُدخَله من العرض والتصويت
+       والنقاط — وهذا أشيع ما يحصل: تجاوب، تحطّ الجوال، تنتظر الباقين.
+       من أدخل فقد أدخل؛ الاتصال شرطُ *الانتظار* لا شرطُ الاحتساب.
+       والسلسلة أسوأ: حلقةٌ مسجَّلة تختفي فيسمع الناسُ سلسلةً مقطوعة —
+       فلانٌ قلّد من ليس في العرض. ولذلك نمشي على r.order فيها حرفيًا. */
     const items = [];
-    for (const id of this.expected()) {
+    const pool = this.isChain() ? (r.order || []) : r.players.map(p => p.id);
+    for (const id of pool) {
       const s = r.subs[id];
       if (!s || !s.has) continue;
       if (k.starAside && id === r.starId) continue;
       if (k.inputType === 'audio' && !this.clips.has(id)) continue;   // مقطع ضاع = خارج العرض
       items.push(id);
     }
-    r.order = k.recorders === 'chain' ? r.order.filter(id => items.includes(id)) : tariShuffle(items);
+    r.order = k.recorders === 'chain' ? items : tariShuffle(items);
 
     /* التصويت يحتاج خيارين على الأقل، أما القياس فلا: مسجّلٌ واحد
        يستحق درجته حتى لو ما فيه من يُقارَن به. بلا هذا الشرط كانت
@@ -18237,8 +17814,13 @@ export class TariRoom {
 
         case 'hostForceAdvance':
           /* المضيف — وكذلك نجمُ الجولة على شاشة جمعه: صاحب الجولة أولى
-             الناس بأن يقول «كفى، اعرضوا». وبها تختفي آخر شاشة انتظار. */
-          if (!isHost && !(r.phase === 'collect' && playerId === r.starId)) return;
+             الناس بأن يقول «كفى، اعرضوا». وبها تختفي آخر شاشة انتظار.
+             وفي السلسلة صاحبُ الدور مثلهما: هي الطور الوحيد المتسلسل،
+             فصمتُ واحدٍ يوقف الغرفة كلها ولا أحد غير المضيف يحرّكها —
+             ومن لا يريد أن يسجّل أولى الناس بتخطّي نفسه. */
+          if (!isHost
+              && !(r.phase === 'collect' && playerId === r.starId)
+              && !(r.phase === 'collect' && this.isChain() && r.order[r.turn] === playerId)) return;
           await this.forceAdvance();
           return;
 
@@ -18247,12 +17829,51 @@ export class TariRoom {
           await this.kickPlayer(String(msg.targetId || ''));
           return;
 
+        /* ── خروجٌ صريح ──
+           «اخرج من الغرفة» كان يقفل المقبس فقط، فيبقى المقعد معلَّمًا
+           «منقطع» في الردهة: شبحٌ يظهر في القائمة ويزحم سقف التسعة ولا
+           يخرج أبدًا. في الردهة نشطبه فعلًا كخروجٍ حقيقي، وفي منتصف
+           اللعب نكتفي بالانقطاع — شطبُ لاعبٍ له نقاطٌ في جولةٍ جارية
+           يفسد نتيجتها، وعودتُه بعد دقيقة أولى من مسحه. */
+        case 'leave': {
+          const ws = this.sockets.get(playerId);
+          this.sockets.delete(playerId);
+          me.connected = false;
+          /* نغلق نحن ولا ننتظر العميل: لو تأخّر إغلاقه بقي مقبسٌ حيٌّ
+             خارج الخريطة، والغرفة تُحاسَب على مدّته. */
+          if (ws) { try { ws.close(1000, 'leave'); } catch {} }
+          if (r.phase === 'lobby' || r.phase === 'over') {
+            r.players = r.players.filter(p => p.id !== playerId);
+            delete r.subs[playerId];
+            delete r.votes[playerId];
+            if (r.readys) delete r.readys[playerId];
+            r.order = (r.order || []).filter(id => id !== playerId);
+            r.starQueue = (r.starQueue || []).filter(id => id !== playerId);
+            this.clips.delete(playerId);
+            if (r.starId === playerId) r.starId = null;
+          }
+          this.migrateHostIfNeeded();
+          await this.persist();
+          this.broadcastState();
+          await this.maybeAdvanceOnDisconnect();
+          return;
+        }
+
         case 'playAgain':
           if (!isHost || r.phase !== 'over') return;
           this.clearPhaseTimer(); this.purgeClips();
           r.phase = 'lobby'; r.round = 0; r.result = null; r.prompt = null;
           r.kind = ''; r.starId = null; r.subs = {}; r.votes = {}; r.order = [];
+          /* المقاعد المنقطعة تُشطب هنا لا قبله: في شاشة النتيجة نحتفظ بها
+             لأن شطب لاعبٍ منها يغيّر الفائز أمام الباقين. أما الردهة
+             الجديدة فمن حضر لا من انصرف — وإلا تراكم الأشباح جولةً بعد
+             جولة حتى يزحموا سقف التسعة. */
+          r.players = r.players.filter(p => p.connected);
+          r.readys = {}; r.reported = {}; r.marks = {}; r.tones = null;
+          r.starQueue = []; r.kindBag = [];
           for (const p of r.players) p.score = 0;
+          this.migrateHostIfNeeded();
+          if (!this.findPlayer(r.hostId)) r.hostId = (r.players[0] && r.players[0].id) || null;
           await this.persist(); this.broadcastState();
           return;
       }
@@ -18304,7 +17925,7 @@ export class TariRoom {
     if (!/^[A-Za-z0-9+/=]+$/.test(b64)) return;
     const rawMime = String(msg.mime || 'audio/webm').split(';')[0].trim().toLowerCase();
     const mime = TARI_CLIP_MIME.includes(rawMime) ? rawMime : 'audio/webm';
-    const ms = Math.min(Number(msg.ms) || 0, (k.clipMs || 6000) + 1500);
+    const ms = Math.min(Number(msg.ms) || 0, (k.clipMs || 10000) + 1500);
 
     this.clips.set(playerId, { mime, b64, ms });
     r.subs[playerId] = { has: true, ms, tag: (r.tones && r.tones[playerId]) || null };
@@ -18475,9 +18096,16 @@ export class TariRoom {
     await this.maybeAdvanceOnDisconnect();
   }
 
-  /* المنقطع لا يعلّق الجولة أبدًا: كل انقطاع يُعيد سؤال «هل اكتمل؟» */
+  /* المنقطع لا يعلّق الجولة أبدًا: كل انقطاع يُعيد سؤال «هل اكتمل؟».
+     ويُنادى عند الاتصال كذلك، لا عند الانقطاع وحده: من رجع قد يكون آخر
+     من ننتظره، وقد تكون الغرفة سكنت وهي فارغة فتحتاج من يوقظها. */
   async maybeAdvanceOnDisconnect() {
     const r = this.room;
+    /* غرفةٌ بلا متصل واحد لا تُقدَّم خطوة: كل الدوال أدناه ترجع «اكتمل»
+       على قائمةٍ فارغة، فكان انقطاع الجميع لحظةً واحدة (قفل شاشة جماعي،
+       تبديل شبكة) يحرق الجولة كاملة — يجمع بلا إجابات ويصوّت بلا أصوات
+       ويعرض نتيجةً على ناسٍ ما لعبوها. تُستأنف حين يرجع أوّلهم. */
+    if (!this.activePlayers().length) return;
     if (r.phase === 'collect') {
       if (this.isChain()) {
         const cur = r.order[r.turn];
@@ -18485,6 +18113,9 @@ export class TariRoom {
         if (!p || !p.connected) { if (cur && !r.subs[cur]) r.subs[cur] = { has: false, skipped: true }; await this.chainAdvance(); }
       } else if (this.allSubmitted()) await this.endCollect();
     } else if (r.phase === 'vote' && this.allVotedOrMarked()) await this.endVote();
+    /* الكشف كان ناقصًا هنا: من ينقطع أو يُطرد وهو آخر من لم يضغط «تم»
+       يترك الشاشة واقفة على البقيّة حتى ينتبه المضيف لزر التخطّي. */
+    else if (r.phase === 'reveal' && this.allReady()) await this.afterReveal();
   }
 
   /* ─────────────── البث ─────────────── */
@@ -18513,8 +18144,10 @@ export class TariRoom {
     /* ⚠️ السلسلة: الجملة سرّ. حقل chain.text تحته حسابٌ دقيق يمنحها
        لأوّل السلسلة وحده ثم يحجبها حتى العرض — وكان الحقل العام prompt
        يرسلها للجميع فيلغي ذلك الحساب كلّه، فيقرأها كلُّ لاعبٍ من شاشته
-       بدل أن يسمع من قبله. اللعبة كلها تقوم على ألّا تُرى. */
-    if (this.isChain() && r.phase !== 'reveal') text = '';
+       بدل أن يسمع من قبله. اللعبة كلها تقوم على ألّا تُرى.
+       وفي العرض تبقى فارغة كذلك: chain.text هو من يعرضها هناك تحت
+       عنوان «الجملة الأصلية كانت»، فإرسالها في الحقلين يطبعها مرّتين. */
+    if (this.isChain()) text = '';
 
     const exp = this.expected();
     const iInput = exp.includes(playerId) && !mine;
