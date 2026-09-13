@@ -1,6 +1,6 @@
 /**
  * مافيا أونلاين — المرحلة ١+٢: الغرفة + اللوبي + توزيع الأدوار الخاص
- * Ya7 STUDIO
+ * ألعاب ياح
  *
  * يشتغل كـ Cloudflare Worker + Durable Object واحد باسم MafiaRoom.
  * كل غرفة = instance مستقل من MafiaRoom، معرّف بكود الغرفة (6 أحرف).
@@ -606,10 +606,35 @@ const RoomCommon = {
     return changed;
   },
 
-  reclaimByName(rawName) {
+  /* ── استعادة مقعدٍ بالاسم وسط جولةٍ جارية ──
+     الاسم ليس سرًّا: رمز الغرفة واسم المضيف منشوران في /lobby/list،
+     وبقية الأسماء تُبَث لكل من في الغرفة. فهذي الدالة تفتح مقعدًا
+     «بلا هوية ثابتة» وحده — نفس قاعدة reclaimSeat (v127) حرفًا:
+
+       • مقعد المضيف: لا.
+       • مقعد مربوط بحساب (did): لا، إلا بإثبات.
+       • مقعد يحمل jid لتبويبٍ معروف: لا، إلا بنفس الـjid.
+
+     والإثبات المقبول سرٌّ يتحقّق منه الخادم لا اسمٌ يُكتب: did يأتي
+     من الراوتر بعد التحقق من توكن الحساب (وأي did من العميل يُحذف)،
+     وjid عشوائي بقوة seatToken. فصاحب الحساب يرجّع مقعده وهو هو،
+     والمنتحل يُردّ — بلا أن نكسر حالة «ضاع التوكن في منتصف اللعب»
+     للاعبٍ مجهولٍ لا حساب له ولا تبويب معروف. */
+  reclaimByName(rawName, opts) {
     const want = cleanName(rawName);
     if (!want) return null;
-    const pick = () => this.room.players.filter(p => !p.connected && !p.kicked && p.name === want);
+    const did = (opts && typeof opts.did === 'string' && opts.did) || '';
+    const jid = (opts && typeof opts.jid === 'string' && opts.jid) || '';
+    const hostId = this.room.hostId;
+    const openToName = (p) => {
+      if (p.jid && jid && p.jid === jid) return true;          // نفس التبويب: هو هو
+      if (p.did) return !!did && p.did === did;                // الحساب يثبت نفسه
+      if (hostId && p.id === hostId) return false;             // مقعد المضيف لا يُفتح باسم
+      if (p.jid && jid && p.jid !== jid) return false;         // تبويبان مختلفان بنفس الاسم
+      return true;                                             // مقعد بلا هوية ثابتة
+    };
+    const pick = () => this.room.players.filter(
+      p => !p.connected && !p.kicked && p.name === want && openToName(p));
     let hit = pick();
     if (!hit.length) { this.sweepDeadSeats(); hit = pick(); }   // السباق أعلاه
     return hit.length === 1 ? hit[0] : null;   // اسمان متطابقان منقطعان: لا نخمّن
@@ -10481,7 +10506,7 @@ async function routeRequest(request, env, ctx) {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، فَطِن، داقش، وليمة، لودو، الشفرة، المطاردة، سباق المربعات، طاريك، والحلبة أونلاين — استوديو يا٧ · /health للفحص',
+      'مافيا، لمن العرش، موّه، داقش، وليمة، لودو، الشفرة، المطاردة، سباق المربعات، طاريك، والحلبة أونلاين — ألعاب ياح · /health للفحص',
       { status: 200 }), origin);
 }
 
@@ -10495,7 +10520,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v195';   // v180 = جولات الصوت · v181 = من بلّغ باليوزر · v182 = أوضاع الجولات الثلاثة
+const WORKER_VERSION = 'v203';   // v195 = أوضاع الجولات والسلسلة · v203 = حارس استعادة المقعد بالاسم في طاريك
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -17115,7 +17140,10 @@ export class TariRoom {
          فيها. الآن: إن كان في الغرفة مقعدٌ منقطعٌ بنفس الاسم فهو صاحبه
          ويسترده. وإلا فالردّ كما كان — الغريب لا يدخل جولةً جارية. */
       if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
-        const mine = this.reclaimByName(name);
+        const mine = this.reclaimByName(name, {
+          did: url.searchParams.get('did'),      // من الراوتر بعد تحقّق التوكن
+          jid: url.searchParams.get('jid'),
+        });
         if (!mine) {
           server.send(JSON.stringify({ type: 'error', fatal: true, code: 'busy', message: 'الجولة شغّالة — انتظر نهايتها وادخل' }));
           server.close();
@@ -17964,7 +17992,12 @@ export class TariRoom {
   async onReportClip(playerId, msg) {
     const r = this.room;
     if (r.phase !== 'vote' && r.phase !== 'reveal') return;   // خارجهما المقطع غير معروض
-    if (!this.env || !this.env.DB) return;
+    /* بلا ربط قاعدة البيانات لا مكان يُحفظ فيه البلاغ. الصمت هنا يعني
+       أن اللاعب يقرأ «وصل بلاغك» وما وصل شيء — فنقولها. */
+    if (!this.env || !this.env.DB) {
+      this.sendPrivate(playerId, { type: 'reportFail', id: String((msg && msg.id) || '') });
+      return;
+    }
     const me = this.findPlayer(playerId);
     if (!me) return;
 
@@ -17982,20 +18015,35 @@ export class TariRoom {
     if (!r.reported) r.reported = {};
     const mine = r.reported[playerId] || (r.reported[playerId] = []);
     if (mine.includes(target)) return;
-    mine.push(target);
+
+    /* ── لا يُحرق البلاغ إلا بعد أن يصل فعلًا ──
+       كان التعليم يسبق الكتابة، فأي سقفٍ ممتلئ أو عطلِ D1 يبتلعه
+       `catch` يعني: لا صفّ، ولا إشعار، ولا إمكانية إعادة — والصفحة
+       قالت للمُبلِّغ «وصل بلاغك». الآن يُعلَّم بعد نجاح الإدراج وحده،
+       ويُخبَر المُبلِّغ حين لا يصل ليعيد أو يراسلنا. والمنع الفوري
+       للضغطة المكرّرة يتكفّل به قفلٌ في الذاكرة لا علامةٌ دائمة. */
+    if (!this._reporting) this._reporting = new Set();
+    const lock = playerId + '|' + target;
+    if (this._reporting.has(lock)) return;
+    this._reporting.add(lock);
+    const fail = () => {
+      if (!this._reporting.has(lock)) return;   // نجح ثم تعثّر تنظيفٌ بعده
+      this._reporting.delete(lock);
+      this.sendPrivate(playerId, { type: 'reportFail', id: target });
+    };
 
     const tp = this.findPlayer(target);
     const now = Date.now();
     try {
-      if (!await modEnsureReports(this.env)) return;
+      if (!await modEnsureReports(this.env)) return fail();
       const cnt = await this.env.DB.prepare(
         'SELECT COUNT(*) AS n FROM mod_clip_reports WHERE code = ?1'
       ).bind(r.code).first();
-      if (cnt && (cnt.n | 0) >= MOD_REPORTS_PER_ROOM) return; // سقف الغرفة
+      if (cnt && (cnt.n | 0) >= MOD_REPORTS_PER_ROOM) return fail(); // سقف الغرفة
       const hour = await this.env.DB.prepare(
         'SELECT COUNT(*) AS n FROM mod_clip_reports WHERE created_at > ?1'
       ).bind(now - 60 * 60 * 1000).first();
-      if (hour && (hour.n | 0) >= MOD_REPORTS_PER_HOUR) return;  // السقف العام
+      if (hour && (hour.n | 0) >= MOD_REPORTS_PER_HOUR) return fail();  // السقف العام
 
       /* الفهرس الفريد يمنع تكرار المُبلِّغ نفسه على المقطع نفسه، فتكرار
          الضغط لا يضاعف الصفوف ولا يضاعف الإشعارات. */
@@ -18012,11 +18060,16 @@ export class TariRoom {
         clip.mime || 'audio/webm', clip.ms | 0, clip.b64, now
       ).run();
       const added = !res || res.changes == null ? true : res.changes > 0;
+      /* وصل فعلًا: الآن يُعلَّم فلا يتكرّر، ولو كان مكرّرًا أصلًا فقد وصل
+         سابقًا — نُعلّمه كذلك ولا نرسل إشعارًا ثانيًا. */
+      mine.push(target);
+      this._reporting.delete(lock);
+      await this.persist();
       if (!added) return;                                     // مكرر: لا إشعار ثانٍ
 
       await this.env.DB.prepare('DELETE FROM mod_clip_reports WHERE created_at < ?1')
         .bind(now - MOD_REPORT_TTL_MS).run();
-    } catch { return; }
+    } catch { return fail(); }
 
     try {
       const dids = await modWatcherDids(this.env);
