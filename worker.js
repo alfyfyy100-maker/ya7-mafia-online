@@ -15,7 +15,23 @@ const ALLOWED_ORIGINS = [
   'https://dozplay.com',
   'https://www.dozplay.com',
   'https://games.playsmart2030.com',
+  // نسخة التطبيق على نطاق منفصل. بدونها ترفض المتصفحات كل نداء
+  // للغرف والحساب من app.dozplay.com بخطأ CORS صامت.
+  'https://app.dozplay.com',
+  // رابط النشر المباشر على Netlify — للتجربة قبل ربط النطاق.
+  'https://dainty-druid-63fd91.netlify.app',
 ];
+
+/* نسخة التطبيق خالية من محتوى صراع العروش عمدًا، والووركر واحد
+   للموقعين. فلو عُرضت غرف «لمن العرش؟» في لوبي التطبيق ظهر للاعب
+   اسمُ لعبة ومسارٌ لا وجود لهما عنده (404)، ورجع المحتوى الذي أُزيل
+   من باب خلفي. الإخفاء بحسب المصدر لا بحذف اللعبة: الموقع الأصلي
+   يبقى كما هو تمامًا. */
+const APP_ORIGINS = new Set([
+  'https://app.dozplay.com',
+  'https://dainty-druid-63fd91.netlify.app',
+]);
+const APP_HIDDEN_GAMES = new Set(['khawana', 'got']);
 
 function isAllowedOrigin(origin) {
   return !!origin && ALLOWED_ORIGINS.includes(origin);
@@ -10275,6 +10291,27 @@ async function routeRequest(request, env, ctx) {
         headers: { 'Content-Type': 'application/json', 'X-Ya7-Internal': '1' },
         body: payload,
       }));
+
+      /* نسخة التطبيق لا تعرض ألعابًا غير موجودة عندها. الكائن يبقى
+         مصدرًا واحدًا للحقيقة، والتصفية عند المخرج فقط — فلا يتغيّر
+         شيء لزوّار الموقع الأصلي. أي فشل في القراءة يمرّ بالرد كما هو
+         بدل أن يكسر اللوبي. */
+      if (op === 'list' && APP_ORIGINS.has(origin) && resp.ok) {
+        try {
+          const data = await resp.clone().json();
+          if (data && Array.isArray(data.rooms)) {
+            data.rooms = data.rooms.filter(r => !APP_HIDDEN_GAMES.has(String(r.game || '')));
+            if (data.games && typeof data.games === 'object') {
+              const g = {};
+              for (const k of Object.keys(data.games)) {
+                if (!APP_HIDDEN_GAMES.has(k)) g[k] = data.games[k];
+              }
+              data.games = g;
+            }
+            return withCors(Response.json(data), origin);
+          }
+        } catch (e) { /* نمرّر الرد الأصلي */ }
+      }
       return withCors(resp, origin);
     }
 
@@ -10520,7 +10557,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v203';   // v195 = أوضاع الجولات والسلسلة · v203 = حارس استعادة المقعد بالاسم في طاريك
+const WORKER_VERSION = 'v204';   // v203 = حارس استعادة المقعد في طاريك · v204 = أصول نسخة التطبيق + إخفاء غرف GoT عن لوبي التطبيق
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
