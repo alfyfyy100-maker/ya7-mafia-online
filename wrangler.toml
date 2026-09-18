@@ -5,13 +5,14 @@
 ##  الجديد في v171: ربط SQUARES_ROOM + وسم الترحيل v17 (سباق المربعات أونلاين)
 ##  الجديد في v172: ربط TARI_ROOM + وسم الترحيل v18 (طاريك — لعبة الحفلات)
 ##  الجديد في v174: ربط RVB_ROOM + وسم الترحيل v19 (أحمر ضد أزرق أونلاين)
+##  الجديد في v205: ربط SALALEM_ROOM + وسم الترحيل v20 (سلالم وثعابين أونلاين)
 ## ════════════════════════════════════════════════════════════════
 
 name = "ya7-mafia-online"
 main = "worker.js"
 compatibility_date = "2025-05-01"
 
-## ── Durable Objects: تسع عشرة ربطة ──
+## ── Durable Objects: عشرون ربطة ──
 [[durable_objects.bindings]]
 name = "MAFIA_ROOM"
 class_name = "MafiaRoom"
@@ -98,6 +99,11 @@ class_name = "TariRoom"
 name = "RVB_ROOM"
 class_name = "RedVsBlueRoom"
 
+# ── جديد في v205: غرفة سلالم وثعابين ──
+[[durable_objects.bindings]]
+name = "SALALEM_ROOM"
+class_name = "SalalemRoom"
+
 ## ── قاعدة D1 ──
 [[d1_databases]]
 binding = "DB"
@@ -175,6 +181,13 @@ new_sqlite_classes = ["RedVsBlueRoom"]
 [[migrations]]
 tag = "v19"
 new_sqlite_classes = ["TariRoom"]
+
+# ── v20: سلالم وثعابين (v205) ──
+# v19 محجوز لطاريك. الوسوم تُضاف فقط ولا تُعدَّل — تعديل وسم قديم أو
+# تكراره يفشل النشر كله (خطأ 10074).
+[[migrations]]
+tag = "v20"
+new_sqlite_classes = ["SalalemRoom"]
 
 ## ════════════════════════════════════════════════════════════════
 ##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:

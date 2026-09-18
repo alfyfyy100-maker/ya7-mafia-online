@@ -15,23 +15,7 @@ const ALLOWED_ORIGINS = [
   'https://dozplay.com',
   'https://www.dozplay.com',
   'https://games.playsmart2030.com',
-  // نسخة التطبيق على نطاق منفصل. بدونها ترفض المتصفحات كل نداء
-  // للغرف والحساب من app.dozplay.com بخطأ CORS صامت.
-  'https://app.dozplay.com',
-  // رابط النشر المباشر على Netlify — للتجربة قبل ربط النطاق.
-  'https://dainty-druid-63fd91.netlify.app',
 ];
-
-/* نسخة التطبيق خالية من محتوى صراع العروش عمدًا، والووركر واحد
-   للموقعين. فلو عُرضت غرف «لمن العرش؟» في لوبي التطبيق ظهر للاعب
-   اسمُ لعبة ومسارٌ لا وجود لهما عنده (404)، ورجع المحتوى الذي أُزيل
-   من باب خلفي. الإخفاء بحسب المصدر لا بحذف اللعبة: الموقع الأصلي
-   يبقى كما هو تمامًا. */
-const APP_ORIGINS = new Set([
-  'https://app.dozplay.com',
-  'https://dainty-druid-63fd91.netlify.app',
-]);
-const APP_HIDDEN_GAMES = new Set(['khawana', 'got']);
 
 function isAllowedOrigin(origin) {
   return !!origin && ALLOWED_ORIGINS.includes(origin);
@@ -816,6 +800,7 @@ const TARI_MODE_KINDS = {
   mix: null,                       // بلا قصر — كل الأنماط
   sfx: ['sfx'],                    // أصوات خارجية
   players: ['mimic'],              // تقليد لاعبٍ آخر (نمط النبرة بلا مطالبات فسقط)
+  zakira: ['zakira'],              // من ذاكرتك — جملة تُلمَح ثم تُقال من الحفظ
 };
 
 const MOD_WATCH_USERNAMES = ['ya7'];          // من يصله الإشعار — غيّرها متى شئت
@@ -939,6 +924,7 @@ function roomNS(env, g) {
     case 'squares':  return env.SQUARES_ROOM;
     case 'tari':     return env.TARI_ROOM;
     case 'redvsblue': return env.RVB_ROOM;
+    case 'salalem':   return env.SALALEM_ROOM;
     default:         return env.MAFIA_ROOM;
   }
 }
@@ -1121,6 +1107,7 @@ function gameNS(env, key) {
        الغرفة عن أصحاب المقاعد أنفسهم — تفشل بصمت لا برسالة. */
     case 'tari':     return env.TARI_ROOM;
     case 'redvsblue': return env.RVB_ROOM;
+    case 'salalem':   return env.SALALEM_ROOM;
     default:         return null;
   }
 }
@@ -10058,7 +10045,7 @@ async function routeRequest(request, env, ctx) {
           BILLIARD_ROOM: !!env.BILLIARD_ROOM, HUNT_ROOM: !!env.HUNT_ROOM,
           BALOOT_ROOM: !!env.BALOOT_ROOM, SHIFRA_ROOM: !!env.SHIFRA_ROOM,
           SQUARES_ROOM: !!env.SQUARES_ROOM, TARI_ROOM: !!env.TARI_ROOM,
-          RVB_ROOM: !!env.RVB_ROOM,
+          RVB_ROOM: !!env.RVB_ROOM, SALALEM_ROOM: !!env.SALALEM_ROOM,
           PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
           CHAT_ROOM: !!env.CHAT_ROOM,
           DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
@@ -10291,27 +10278,6 @@ async function routeRequest(request, env, ctx) {
         headers: { 'Content-Type': 'application/json', 'X-Ya7-Internal': '1' },
         body: payload,
       }));
-
-      /* نسخة التطبيق لا تعرض ألعابًا غير موجودة عندها. الكائن يبقى
-         مصدرًا واحدًا للحقيقة، والتصفية عند المخرج فقط — فلا يتغيّر
-         شيء لزوّار الموقع الأصلي. أي فشل في القراءة يمرّ بالرد كما هو
-         بدل أن يكسر اللوبي. */
-      if (op === 'list' && APP_ORIGINS.has(origin) && resp.ok) {
-        try {
-          const data = await resp.clone().json();
-          if (data && Array.isArray(data.rooms)) {
-            data.rooms = data.rooms.filter(r => !APP_HIDDEN_GAMES.has(String(r.game || '')));
-            if (data.games && typeof data.games === 'object') {
-              const g = {};
-              for (const k of Object.keys(data.games)) {
-                if (!APP_HIDDEN_GAMES.has(k)) g[k] = data.games[k];
-              }
-              data.games = g;
-            }
-            return withCors(Response.json(data), origin);
-          }
-        } catch (e) { /* نمرّر الرد الأصلي */ }
-      }
       return withCors(resp, origin);
     }
 
@@ -10399,11 +10365,11 @@ async function routeRequest(request, env, ctx) {
         kinds: Object.fromEntries(Object.entries(TARI_KINDS).map(([k, v]) => [k, {
           name: v.name, inputType: v.inputType, recorders: v.recorders,
           clipMs: v.clipMs || 0, textMax: v.textMax || TARI_ANS_MAX,
-          needsOpts: !!v.needsOpts, needsTones: !!v.needsTones,
+          needsOpts: !!v.needsOpts, needsTones: !!v.needsTones, needsAlts: !!v.needsAlts,
         }])),
         bank: TARI_BANK.map((p, i) => ({
           id: p.id || (p.kind + ':' + i), kind: p.kind, text: p.text,
-          opts: p.opts || null, tones: p.tones || null,
+          opts: p.opts || null, tones: p.tones || null, alts: p.alts || null,
         })),
         limits: { add: TARI_ADD_MAX, text: TARI_TEXT_MAX, opt: TARI_OPT_MAX, opts: TARI_OPTS_MAX },
       }), {
@@ -10411,8 +10377,9 @@ async function routeRequest(request, env, ctx) {
       }), origin);
     }
 
-    if (url.pathname === '/tari/room/create' || url.pathname === '/baloot/room/create' || url.pathname === '/bilyardo/room/create' || url.pathname === '/kirm/room/create' || url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
-      const gameNS = url.pathname.startsWith('/tari/') ? env.TARI_ROOM
+    if (url.pathname === '/salalem/room/create' || url.pathname === '/tari/room/create' || url.pathname === '/baloot/room/create' || url.pathname === '/bilyardo/room/create' || url.pathname === '/kirm/room/create' || url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
+      const gameNS = url.pathname.startsWith('/salalem/') ? env.SALALEM_ROOM
+                    : url.pathname.startsWith('/tari/') ? env.TARI_ROOM
                     : url.pathname.startsWith('/baloot/') ? env.BALOOT_ROOM
                     : url.pathname.startsWith('/bilyardo/') ? env.BILLIARD_ROOM
                     : url.pathname.startsWith('/kirm/') ? env.KIRM_ROOM
@@ -10455,7 +10422,8 @@ async function routeRequest(request, env, ctx) {
           }
           // الإدراج في اللوبي اختياري وصريح: بلا public:true تبقى الغرفة خاصة
           if (resp.ok && body && body.public === true && env.PUBLIC_LOBBY) {
-            const g = url.pathname.startsWith('/tari/') ? 'tari'
+            const g = url.pathname.startsWith('/salalem/') ? 'salalem'
+                    : url.pathname.startsWith('/tari/') ? 'tari'
                     : url.pathname.startsWith('/baloot/') ? 'baloot'
                     : url.pathname.startsWith('/bilyardo/') ? 'bilyardo'
                     : url.pathname.startsWith('/kirm/') ? 'kirm'
@@ -10487,7 +10455,7 @@ async function routeRequest(request, env, ctx) {
     /* ── لوحة الغرفة المشتركة: قائمة اللاعبين والطرد ──
        نفس نطاقات الغرف، لكن بمسارَي /roster و/kick. الغرفة نفسها
        تتحقق من التوكن وأن الطالب هو المضيف — الراوتر ينقل فقط.     */
-    const rk = url.pathname.match(/^\/(baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/(roster|kick)$/i);
+    const rk = url.pathname.match(/^\/(salalem|baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/(roster|kick)$/i);
     if (rk) {
       const g = (rk[1] || '').toLowerCase();
       const ns = roomNS(env, g);
@@ -10516,10 +10484,10 @@ async function routeRequest(request, env, ctx) {
       }), origin);
     }
 
-    const match = url.pathname.match(/^\/(baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra|mutarada|squares|tari|redvsblue)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(salalem|baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra|mutarada|squares|tari|redvsblue)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='baloot' ? env.BALOOT_ROOM : g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : g==='shifra' ? env.SHIFRA_ROOM : g==='mutarada' ? env.HUNT_ROOM : g==='squares' ? env.SQUARES_ROOM : g==='tari' ? env.TARI_ROOM : g==='redvsblue' ? env.RVB_ROOM : env.MAFIA_ROOM;
+      const gameNS = g==='salalem' ? env.SALALEM_ROOM : g==='baloot' ? env.BALOOT_ROOM : g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : g==='shifra' ? env.SHIFRA_ROOM : g==='mutarada' ? env.HUNT_ROOM : g==='squares' ? env.SQUARES_ROOM : g==='tari' ? env.TARI_ROOM : g==='redvsblue' ? env.RVB_ROOM : env.MAFIA_ROOM;
       if (!gameNS) {
         return withCors(new Response(
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
@@ -10543,7 +10511,7 @@ async function routeRequest(request, env, ctx) {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، داقش، وليمة، لودو، الشفرة، المطاردة، سباق المربعات، طاريك، والحلبة أونلاين — ألعاب ياح · /health للفحص',
+      'مافيا، لمن العرش، موّه، داقش، وليمة، لودو، الشفرة، المطاردة، سباق المربعات، طاريك، الحلبة، وسلالم وثعابين أونلاين — ألعاب ياح · /health للفحص',
       { status: 200 }), origin);
 }
 
@@ -10557,7 +10525,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v204';   // v203 = حارس استعادة المقعد في طاريك · v204 = أصول نسخة التطبيق + إخفاء غرف GoT عن لوبي التطبيق
+const WORKER_VERSION = 'v207';   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10575,6 +10543,7 @@ const LOBBY_GAMES = {
   squares: { name: 'سباق المربعات', path: '/squares/' },
   tari:    { name: 'طاريك',         path: '/tari/' },
   redvsblue: { name: 'الحلبة', path: '/redvsblue/' },
+  salalem: { name: 'سلالم وثعابين', path: '/salalem/' },
 };
 
 /* أسماء كل الألعاب للعرض، لا الأونلاين وحدها: سجل اللاعب يشمل ما لعبه
@@ -10614,6 +10583,7 @@ const GAME_NAMES = {
   bilyardo: 'بلياردو',
   squares: 'سباق المربعات', tari: 'طاريك',
   redvsblue: 'الحلبة',
+  salalem: 'سلالم وثعابين',
 };
 
 /* ═══════════════════════ البلياردو (BilliardRoom) ═══════════════════════
@@ -11726,7 +11696,7 @@ const RESERVED_USERNAMES = [
   'mafia', 'khawana', 'dakhil', 'walima', 'ludo', 'daqash', 'mawwih',
   'fatin', 'fateel', 'kalimat', 'sukoon', 'snake', 'ramad', 'murawagha',
   'liar', 'juraa', 'island', 'throne', 'westeros', 'darbah', 'guest13',
-  'ghazw', 'redvsblue',
+  'ghazw', 'redvsblue', 'salalem',
 ];
 
 /* ── محجوزة للمالك: تُمنح يدويًا عبر D1 ──
@@ -13817,6 +13787,7 @@ async function adminPanelInner(request, env, url, body) {
         KIRM_ROOM: !!env.KIRM_ROOM, BILLIARD_ROOM: !!env.BILLIARD_ROOM,
         HUNT_ROOM: !!env.HUNT_ROOM, SQUARES_ROOM: !!env.SQUARES_ROOM,
         TARI_ROOM: !!env.TARI_ROOM, RVB_ROOM: !!env.RVB_ROOM,
+        SALALEM_ROOM: !!env.SALALEM_ROOM,
         CHAT_ROOM: !!env.CHAT_ROOM, DB: !!env.DB,
         ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
         ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
@@ -14931,6 +14902,628 @@ export class BalootRoom {
 applyRoomCommon(BalootRoom, 'baloot');
 
 /* ==== BALOOT-END ==== */
+
+/* ==== SALALEM-BEGIN — سلالم وثعابين أونلاين ====
+   الخادم حَكَم كامل: هو من يرمي النرد (crypto) ويحرّك البيدق ويقرّر
+   الفائز. العميل يرسل «ارمِ» فقط ويعرض الحركة التي تصله. فلا يقدر
+   عميلٌ معدَّل يختار رقمه أو يقفز فوق ثعبان — والفوز يُسجَّل بثقة.
+
+   على نمط غرفة البلوت: سبات (acceptWebSocket) + منبّه واحد (setAlarm)
+   يجمع إيقاع اللعب وتنظيف الغرفة، والنبضة يردّها الرَّنتايم بلا إيقاظ.
+   قواعد «الألعاب الأونلاين» الثابتة مطبّقة من البداية:
+     • الطرد والخروج يُخرجان اللاعب من الدور، ويُعاد بعدهما فحص الدور
+       والنهاية — طرد صاحب الدور لا يجمّد الطاولة.
+     • بقي لاعب واحد في اللعبة ⇒ تنتهي بلا فائز ولا تُسجَّل نتيجة
+       (وإلا صار الطرد طريقة مضمونة لكسب «فوز» مجاني).
+     • الغائب لا يجمّد أحدًا: بعد مهلة قصيرة يُرمى عنه، وصاحب الدور
+       الحاضر له مهلة أطول. ولو غاب الجميع يقف المنبّه ولا يلعب وحده.
+
+   المحرك (Ya7Salalem) مستخرج آليًا من salalem/index.html بين
+   ENGINE-BEGIN و ENGINE-END — لا تعدّله هنا. */
+const Ya7Salalem = (function () {
+/* ===== ENGINE-BEGIN — قواعد سلالم وثعابين. هذا هو المصدر الوحيد.
+   نسخة الخادم في _cloudflare/worker.js مستخرجة آليًا من هنا بين
+   ENGINE-BEGIN و ENGINE-END، واختبار salalem_test يطابق النسختين
+   حرفًا بحرف. لا تُكتب نسخة ثانية بيدك أبدًا — لو اختلفت خريطة سلّم
+   بين الخادم والصفحة صار اللاعب يُرسم فوق سلّم والخادم يحسبه واقفًا.
+   ملاحظة قاعدة: البداية ٠ (خارج اللوح) لا ١ — بها يصير سلّم الخانة ١
+   قابلًا للوصول برمية ١، كما في اللوح الأصلي. على ١ كان سلّمًا ميتًا. ===== */
+var SL = (function () {
+  var LADDERS = { 1: 38, 4: 14, 9: 31, 21: 42, 28: 84, 36: 44, 51: 67, 71: 91, 80: 100 };
+  var SNAKES = { 16: 6, 47: 26, 49: 11, 56: 53, 62: 19, 64: 60, 87: 24, 93: 73, 95: 75, 98: 78 };
+  var START = 0, END = 100;
+  /* مدد الحركة بالإطارات (٦٠ إطارًا في الثانية) — الخادم يحسب منها
+     متى تنتهي الحركة عند اللاعبين قبل ما يرمي عن الغائب. */
+  var DUR = { roll: 26, stepPerCell: 9, ladder: 38, swallow: 20, digest: 58, spit: 18, pause: 12 };
+  var FRAME_MS = 1000 / 60;
+
+  function has(o, k) { return Object.prototype.hasOwnProperty.call(o, k); }
+
+  /* رمية واحدة: من أين، بكم، أين وقع، وأين استقرّ. null = حركة غير مشروعة */
+  function move(pos, die) {
+    if (typeof pos !== 'number' || typeof die !== 'number') return null;
+    if (pos !== Math.floor(pos) || die !== Math.floor(die)) return null;
+    if (die < 1 || die > 6 || pos < START || pos >= END) return null;
+    var land = pos + die;
+    if (land > END) return { from: pos, die: die, land: pos, to: pos, kind: 'over' };
+    if (has(LADDERS, land)) return { from: pos, die: die, land: land, to: LADDERS[land], kind: 'ladder' };
+    if (has(SNAKES, land)) return { from: pos, die: die, land: land, to: SNAKES[land], kind: 'snake' };
+    return { from: pos, die: die, land: land, to: land, kind: 'step' };
+  }
+
+  function frames(mv) {
+    if (!mv) return 0;
+    var f = DUR.roll + DUR.pause;
+    if (mv.kind === 'over') return f;
+    f += (mv.land - mv.from) * DUR.stepPerCell;
+    if (mv.kind === 'ladder') f += DUR.ladder;
+    if (mv.kind === 'snake') f += DUR.swallow + DUR.digest + DUR.spit;
+    return f;
+  }
+  function animMs(mv) { return Math.ceil(frames(mv) * FRAME_MS); }
+
+  /* المقعد التالي الذي ما زال في اللعبة. out[i] = خرج أو طُرد */
+  function nextSeat(n, from, out) {
+    for (var k = 1; k <= n; k++) {
+      var s = (from + k) % n;
+      if (!out || !out[s]) return s;
+    }
+    return -1;
+  }
+
+  return {
+    LADDERS: LADDERS, SNAKES: SNAKES, START: START, END: END, DUR: DUR, FRAME_MS: FRAME_MS,
+    move: move, frames: frames, animMs: animMs, nextSeat: nextSeat
+  };
+})();
+/* ===== ENGINE-END ===== */
+return SL;
+})();
+
+const SAL_MAX = 4;
+const SAL_MIN = 2;
+const SAL_TURN_MS = 40000;     // صاحب الدور الحاضر
+const SAL_GONE_MS = 9000;      // صاحب الدور المنقطع
+const SAL_START_MS = 1500;     // مهلة قبل أول رمية تلقائية ممكنة
+/* المنقطع في الردهة يُحفظ مقعده (ومضيفيّته) دقيقة. المضيف ينشئ الغرفة ثم
+   يطلع لواتساب يرسل الرابط — والجوال يقطع المقبس في الخلفية. كان يُشطب
+   فورًا: صاحبه يدخل فيصير هو المضيف، والمضيف يرجع لاعبًا عاديًا ما يقدر
+   يبدأ، وصاحبه ما يدري إنه صار المضيف. */
+const SAL_LOBBY_GRACE_MS = 60000;
+
+/* نرد عادل: رفض ما فوق ٢٥١ يمنع انحياز باقي القسمة على ٦ */
+function salDie() {
+  const b = new Uint8Array(1);
+  for (let i = 0; i < 32; i++) {
+    crypto.getRandomValues(b);
+    if (b[0] < 252) return 1 + (b[0] % 6);
+  }
+  return 1 + (b[0] % 6);
+}
+
+export class SalalemRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    try {
+      this.state.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"hb-ok"}')
+      );
+    } catch {}
+    this.state.blockConcurrencyWhile(async () => {
+      this.room = (await this.state.storage.get('room')) || null;
+    });
+  }
+
+  /* ── التخزين والمنبّه ── */
+  async persist() {
+    if (!this.room) return;
+    this.room.lastSeen = Date.now();
+    try { await this.state.storage.put('room', this.room); } catch {}
+    await this.arm();
+  }
+  async arm() {
+    if (!this.room) return;
+    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
+    if (this.room.tick) next = Math.min(next, this.room.tick);
+    try { await this.state.storage.setAlarm(next); } catch {}
+  }
+  async alarm() {
+    if (!this.room) return;
+    const now = Date.now();
+    if (this.room.tick && now >= this.room.tick - 60) {
+      this.room.tick = 0;
+      try {
+        if (this.room.phase === 'lobby') await this.pruneLobby();
+        else await this.step();
+      } catch {}
+      /* أي مسار رجع بلا حفظ كان يترك الغرفة بلا منبّه — فلا تُنظَّف أبدًا */
+      if (this.room) await this.arm();
+      return;
+    }
+    const idle = now - (this.room.lastSeen || 0);
+    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
+      await this.state.storage.deleteAll();
+      this.room = null;
+      return;
+    }
+    await this.arm();
+  }
+
+  wsOf(id) {
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() || {};
+      if (a.id === id) return ws;
+    }
+    return null;
+  }
+  send(ws, o) { try { ws.send(JSON.stringify(o)); } catch {} }
+
+  uniqueName(raw) {
+    const n = cleanName(raw) || 'لاعب';
+    const taken = new Set((this.room.players || []).map(p => p.name));
+    if (!taken.has(n)) return n;
+    for (let i = 2; i < 40; i++) if (!taken.has(n + ' ' + i)) return n + ' ' + i;
+    return n + ' ' + (100 + salDie() * 100 + salDie());
+  }
+  newPlayer(name, url) {
+    const p = {
+      id: crypto.randomUUID().replace(/-/g, '').slice(0, 12),
+      name: this.uniqueName(name),
+      seatToken: crypto.randomUUID().replace(/-/g, ''),
+      connected: true,
+    };
+    this.noteAccount(url, p);
+    return p;
+  }
+  /* من له مكان في الغرفة الآن (يُحسب للسعة): لا المطرود ولا من خرج.
+     وبعد نهاية المباراة لا يُحسب المنقطع أيضًا: جولة جديدة لا تنتظره،
+     فلو حُسب لصار ثلاثة أشباح يقفلون الغرفة في وجه صاحبٍ جاي. */
+  present() {
+    const over = this.room.phase === 'over';
+    return (this.room.players || []).filter(p => !p.kicked && !p.left && !(over && p.connected === false));
+  }
+
+  /* ── الإنشاء والاتصال ── */
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/create' && request.method === 'POST') {
+      let body = {};
+      try { body = await request.json(); } catch {}
+      if (this.room && (this.room.players || []).some(p => p.connected !== false && !p.kicked && !p.left)) {
+        return new Response('room-exists', { status: 409 });
+      }
+      const code = String(body.roomCode || '').toUpperCase();
+      this.room = {
+        code, phase: 'lobby', players: [], hostId: '',
+        G: null, gameNo: 0, tick: 0, deadline: 0, lastSeen: Date.now(),
+      };
+      const host = this.newPlayer(body.name, url);
+      this.room.players.push(host);
+      this.room.hostId = host.id;
+      await this.persist();
+      return Response.json({ roomCode: code, seatToken: host.seatToken, id: host.id });
+    }
+
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('expected-websocket', { status: 426 });
+    }
+    /* رمز غلط أو غرفة انتهت: 404 قبل الترقية يصل المتصفح كانقطاع مبهم
+       (1006) فتظل الصفحة تعيد المحاولة وتقول «انقطع الاتصال». نرقّي
+       ونقول السبب ونغلق بسبب تعرفه الصفحة — بلا أي تخزين. */
+    if (!this.room || !this.room.code) {
+      return this.refuse('ما فيه غرفة بهذا الرمز — تأكد منه أو أنشئ غرفة جديدة', 'notfound');
+    }
+
+    const token = url.searchParams.get('token') || '';
+    const name = url.searchParams.get('name') || 'لاعب';
+    let me = token ? this.seatByToken(token) : null;
+    if (me && me.left) me = null;
+
+    /* الرفض يُقرَّر قبل قبول أي مقبس في السبات — السبب في refuse() */
+    if (!me) {
+      if (this.room.phase === 'play') {
+        return this.refuse('المباراة بدأت — انتظر الجولة القادمة', 'started');
+      }
+      if (this.present().length >= SAL_MAX && this.room.phase === 'lobby') {
+        /* مقعد محفوظ لمنقطع (غير المضيف) لا يقفل الغرفة في وجه داخلٍ حاضر */
+        const ghost = this.room.players.filter(p => p.connected === false && p.id !== this.room.hostId)
+          .sort((a, b) => (a.goneAt || 0) - (b.goneAt || 0))[0];
+        if (ghost) this.room.players.splice(this.room.players.indexOf(ghost), 1);
+      }
+      if (this.present().length >= SAL_MAX) {
+        return this.refuse('الغرفة ممتلئة', 'full');
+      }
+    }
+
+    const pair = new WebSocketPair();
+    const client = pair[0], server = pair[1];
+    this.state.acceptWebSocket(server);
+
+    if (me) {
+      me.connected = true;
+      delete me.goneAt;
+      this.noteAccount(url, me);
+    } else {
+      me = this.newPlayer(name, url);
+      this.room.players.push(me);
+      if (!this.room.hostId) this.room.hostId = me.id;
+    }
+
+    /* استلام المقعد بجيل (sid): حدث إغلاق المقبس القديم يصل متأخرًا،
+       فلا يطفئ الاتصال الجديد (درس v112). */
+    me.sid = ((me.sid || 0) + 1) >>> 0;
+    for (const old of this.state.getWebSockets()) {
+      if (old === server) continue;
+      const oa = old.deserializeAttachment() || {};
+      if (oa.id === me.id) { try { old.close(1000, 'takeover'); } catch {} }
+    }
+    server.serializeAttachment({ id: me.id, sid: me.sid });
+    this.migrateHost();
+    if (this.room.phase === 'lobby') this.scheduleLobby();
+    /* عودة لاعب لغرفة واقفة (غاب الجميع) تعيد تشغيل الإيقاع */
+    if (this.room.phase === 'play' && this.room.G && !this.room.tick) this.schedule();
+    await this.persist();
+
+    this.send(server, {
+      type: 'welcome',
+      roomCode: this.room.code,
+      seatToken: me.seatToken,
+      id: me.id,
+      seat: this.room.players.indexOf(me),
+      hostId: this.room.hostId,
+    });
+    this.pushAll();
+    if (this.room.tick && Date.now() >= this.room.tick) { try { await this.step(); } catch {} }
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /* رفضٌ برسالة ثم إغلاق.
+     مقاس على workerd نفسه (Miniflare): مقبسٌ قُبل بـ acceptWebSocket ثم
+     أُغلق قبل رجوع 101 تصل رسالته ولا يصل إغلاقه أبدًا — فيبقى مفتوحًا
+     عند اللاعب بلا سبب. بـ accept() العادي يصل الإغلاق بسببه. مقبسٌ لن
+     يعيش ثانية لا يحتاج السبات أصلًا. */
+  refuse(message, reason) {
+    const p = new WebSocketPair();
+    const client = p[0], server = p[1];
+    server.accept();
+    try { server.send(JSON.stringify({ type: 'error', message })); } catch {}
+    try { server.close(1000, reason); } catch {}
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /* ── العرض ── */
+  viewFor(seat) {
+    const R = this.room, G = R.G;
+    const v = {
+      type: 'state',
+      phase: R.phase,
+      seat,
+      code: R.code,
+      hostId: R.hostId,
+      players: (R.players || []).map((p, i) => ({
+        id: p.id, seat: i, name: p.name,
+        connected: p.connected !== false,
+        out: !!(p.kicked || p.left),
+      })),
+      g: null,
+      left: 0,
+    };
+    if (G) {
+      v.g = {
+        no: R.gameNo, n: G.n, pos: G.pos.slice(), out: G.out.slice(),
+        turn: G.turn, moveNo: G.moveNo, last: G.last, winner: G.winner,
+        ended: G.ended || '', rolls: G.rolls,
+      };
+      if (R.phase === 'play' && R.deadline) v.left = Math.max(0, R.deadline - Date.now());
+    }
+    return v;
+  }
+  pushAll() {
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() || {};
+      const seat = (this.room.players || []).findIndex(p => p.id === a.id);
+      if (seat < 0) continue;
+      this.send(ws, this.viewFor(seat));
+    }
+  }
+
+  /* ── الردهة: مقاعد المنقطعين المحفوظة ── */
+  scheduleLobby() {
+    const R = this.room;
+    R.deadline = 0;
+    let t = 0;
+    for (const p of R.players || []) {
+      if (p.connected !== false || !p.goneAt) continue;
+      const e = p.goneAt + SAL_LOBBY_GRACE_MS;
+      if (!t || e < t) t = e;
+    }
+    R.tick = t;
+  }
+  async pruneLobby() {
+    const R = this.room, now = Date.now();
+    if (R.phase !== 'lobby') return;
+    const before = R.players.length;
+    R.players = R.players.filter(p =>
+      !(p.connected === false && (!p.goneAt || now - p.goneAt >= SAL_LOBBY_GRACE_MS - 60)));
+    this.migrateHost();
+    this.scheduleLobby();
+    await this.persist();
+    if (R.players.length !== before) this.pushAll();
+  }
+
+  /* ── الإيقاع ── */
+  anyoneHere() {
+    const G = this.room.G;
+    return (this.room.players || []).some((p, i) =>
+      G && i < G.n && !G.out[i] && p.connected !== false);
+  }
+  /* المهلة تُحسب من بداية الدور (G.turnAt) لا من لحظة النداء: schedule
+     تُنادى مع كل انقطاع ورجوع لأي لاعب، فلو حُسبت من «الآن» لصار
+     لاعبٌ يعيد الاتصال كل ثوانٍ يمدّ مهلة غيره إلى ما لا نهاية ويجمّد
+     الطاولة على صاحب دورٍ غائب عن الجهاز. */
+  schedule() {
+    const R = this.room, G = R.G;
+    R.tick = 0; R.deadline = 0;
+    if (R.phase !== 'play' || !G || G.winner >= 0 || G.ended) return;
+    /* الكل غائب: لا نلعب لغرفة فاضية — تقف حتى يرجع أحد، ودوره يبدأ من رجوعه */
+    if (!this.anyoneHere()) { G.paused = true; return; }
+    const p = R.players[G.turn];
+    if (!p) return;
+    const now = Date.now();
+    if (G.paused || !G.turnAt) { G.turnAt = now; G.paused = false; }
+    /* الرمية السابقة ما زالت تتحرك على شاشات الجميع — المهلة تبدأ بعدها */
+    const anim = G.last ? Ya7Salalem.animMs(G.last) : SAL_START_MS;
+    const ready = G.turnAt + anim;
+    let dl = ready + SAL_TURN_MS;
+    /* صاحب الدور غائب: مهلة قصيرة من لحظة غيابه، لكن لا تتجاوز مهلته الكاملة */
+    if (p.connected === false) dl = Math.min(dl, Math.max(now, ready) + SAL_GONE_MS);
+    R.deadline = dl;
+    R.tick = dl;
+  }
+
+  async step() {
+    const R = this.room, G = R && R.G;
+    if (!G || R.phase !== 'play' || G.winner >= 0 || G.ended) return;
+    const late = !R.deadline || Date.now() >= R.deadline - 60;
+    if (!late) { this.schedule(); await this.persist(); return; }
+    if (!this.anyoneHere()) { this.schedule(); await this.persist(); return; }
+    await this.roll(G.turn, true);
+  }
+
+  async roll(seat, auto) {
+    const R = this.room, G = R.G;
+    const mv = Ya7Salalem.move(G.pos[seat], salDie());
+    if (!mv) return;
+    mv.seat = seat;
+    mv.n = G.moveNo + 1;
+    if (auto) mv.auto = true;
+    G.moveNo = mv.n;
+    G.turnAt = Date.now();
+    G.pos[seat] = mv.to;
+    G.rolls++;
+    G.last = mv;
+    let won = false;
+    if (mv.to === Ya7Salalem.END) {
+      G.winner = seat;
+      R.phase = 'over';
+      won = true;
+    } else {
+      G.turn = Ya7Salalem.nextSeat(G.n, seat, G.out);
+    }
+    this.schedule();
+    await this.persist();
+    this.pushAll();
+    if (won) await this.recordMatch(seat);
+  }
+
+  /* ── تسجيل النتيجة ──
+     المطرود لا تُسجَّل عليه خسارة: الطرد قرار المضيف لا نتيجة لعب، ولولا
+     هذا صار الطرد قبل النهاية طريقة لتخريب إحصائيات أي أحد. من خرج بنفسه
+     تبقى عليه — انسحب من مباراة.
+     الصفوف تُلتقط لقطةً متزامنة قبل أول انتظار: نداءات D1 تسمح برسائل
+     أخرى بينها (جولة جديدة، طرد)، فأي قراءة لـ room.players بعد الانتظار
+     قد تقرأ غرفةً تغيّرت — وأي تبديل مؤقت لها قد يمحو ما تغيّر. */
+  resultRows(winSeat) {
+    const R = this.room, G = R.G, rows = new Map();
+    (R.players || []).forEach((p, i) => {
+      if (!p || !p.did || p.isBot || p.kicked) return;
+      if (G && i >= G.n) return;
+      rows.set(p.did, rows.get(p.did) === true || i === winSeat);
+    });
+    return [...rows].map(([did, won]) => ({ did, won }));
+  }
+  async recordMatch(winSeat) {
+    if (!this.env || !this.env.DB) return;
+    const rows = this.resultRows(winSeat);
+    for (const x of rows) {
+      try { await recordResult(this.env, x.did, x.won, this.GAME || ''); } catch {}
+    }
+  }
+
+  begin() {
+    const R = this.room;
+    /* المقاعد = من هو حاضر ومتصل الآن. المنقطع في الردهة ما ينتظره أحد */
+    R.players = R.players.filter(p => p.connected !== false && !p.kicked && !p.left);
+    if (R.players.length < SAL_MIN) return false;
+    /* ألوان ومقاعد اللوح أربعة. زيادةٌ نادرة (رجع منقطعون بعد ما دخل
+       غيرهم بين الجولتين) تُبلَّغ وتُغلق بدل مقعدٍ خامس بلا لون */
+    if (R.players.length > SAL_MAX) {
+      for (const extra of R.players.slice(SAL_MAX)) {
+        const ws = this.wsOf(extra.id);
+        if (ws) {
+          this.send(ws, { type: 'error', message: 'الغرفة ممتلئة' });
+          try { ws.close(1000, 'full'); } catch {}
+        }
+      }
+      R.players = R.players.slice(0, SAL_MAX);
+    }
+    if (!R.players.some(p => p.id === R.hostId)) this.migrateHost();
+    const n = R.players.length;
+    R.gameNo = (R.gameNo || 0) + 1;
+    R.G = {
+      n, pos: new Array(n).fill(Ya7Salalem.START), out: new Array(n).fill(false),
+      turn: 0, moveNo: 0, last: null, winner: -1, ended: '', rolls: 0,
+      turnAt: Date.now(), paused: false,
+    };
+    R.phase = 'play';
+    this.schedule();
+    return true;
+  }
+
+  /* خروجٌ من اللعبة (طرد أو انسحاب): المقعد يبقى للعرض ويخرج من الدور */
+  dropFromGame(p) {
+    const R = this.room, G = R.G;
+    const i = R.players.indexOf(p);
+    if (R.phase === 'lobby') {
+      if (i >= 0) R.players.splice(i, 1);
+      this.scheduleLobby();
+      return;
+    }
+    if (!G || i < 0 || i >= G.n) return;
+    G.out[i] = true;
+    if (R.phase !== 'play') return;
+    const alive = G.out.filter(o => !o).length;
+    if (alive < SAL_MIN) {
+      /* لاعب واحد بقي: لا فائز. الفوز بالطرد ليس فوزًا */
+      G.ended = 'alone';
+      R.phase = 'over';
+      R.tick = 0; R.deadline = 0;
+      return;
+    }
+    /* دورٌ جديد يبدأ الآن: مهلته كاملة لا ما تبقّى من مهلة المُخرَج */
+    if (G.turn === i) { G.turn = Ya7Salalem.nextSeat(G.n, i, G.out); G.turnAt = Date.now(); }
+    this.schedule();
+  }
+
+  async kickPlayer(targetId) {
+    const v = (this.room.players || []).filter(p => p.id === targetId)[0];
+    if (!v) return;
+    v.kicked = true; v.connected = false;
+    v.seatToken = 'kicked-' + crypto.randomUUID().replace(/-/g, '');
+    const ws = this.wsOf(targetId);
+    if (ws) {
+      this.send(ws, { type: 'error', message: 'طردك المضيف من الغرفة' });
+      try { ws.close(1000, 'kicked'); } catch {}
+    }
+    this.dropFromGame(v);
+    this.migrateHost();
+    await this.persist();
+    this.pushAll();
+  }
+
+  /* ── الرسائل ── */
+  async webSocketMessage(ws, raw) {
+    if (!this.room) return;
+    let m; try { m = JSON.parse(raw); } catch { return; }
+    if (!m || typeof m !== 'object' || m.type === 'hb') return;
+
+    const a = ws.deserializeAttachment() || {};
+    const me = (this.room.players || []).filter(p => p.id === a.id)[0];
+    if (!me || me.kicked || me.left) return;
+    if (a.sid && me.sid && a.sid !== me.sid) return;       // مقبس قديم لنفس المقعد
+    if (!this.allowMsg(me.id)) return;
+
+    const R = this.room;
+    const seat = R.players.indexOf(me);
+    const isHost = R.hostId === me.id;
+
+    if (m.type === 'sync') return this.send(ws, this.viewFor(seat));
+
+    if (m.type === 'start') {
+      if (!isHost) return this.send(ws, { type: 'error', message: 'المضيف وحده يبدأ' });
+      if (R.phase !== 'lobby') return;
+      if (!this.begin()) {
+        return this.send(ws, { type: 'error', message: 'تحتاج لاعبًا ثانيًا على الأقل' });
+      }
+      await this.persist();
+      this.pushAll();
+      return;
+    }
+
+    if (m.type === 'again') {
+      if (!isHost) return this.send(ws, { type: 'error', message: 'المضيف وحده يبدأ جولة جديدة' });
+      if (R.phase !== 'over') return;
+      if (!this.begin()) {
+        /* ما بقي عدد يكفي: نرجع للردهة فيقدر غيرهم يدخل */
+        R.phase = 'lobby'; R.G = null; R.tick = 0; R.deadline = 0;
+        this.send(ws, { type: 'error', message: 'تحتاج لاعبًا ثانيًا — رجعنا للردهة' });
+      }
+      await this.persist();
+      this.pushAll();
+      return;
+    }
+
+    if (m.type === 'lobby') {
+      if (!isHost || R.phase !== 'over') return;
+      R.players = R.players.filter(p => p.connected !== false && !p.kicked && !p.left);
+      this.migrateHost();
+      R.phase = 'lobby'; R.G = null; R.tick = 0; R.deadline = 0;
+      await this.persist();
+      this.pushAll();
+      return;
+    }
+
+    if (m.type === 'leave') {
+      me.left = true; me.connected = false;
+      me.seatToken = 'left-' + crypto.randomUUID().replace(/-/g, '');
+      this.dropFromGame(me);
+      this.migrateHost();
+      try { ws.close(1000, 'left'); } catch {}
+      await this.persist();
+      this.pushAll();
+      return;
+    }
+
+    if (m.type === 'roll') {
+      const G = R.G;
+      if (R.phase !== 'play' || !G || G.winner >= 0 || G.ended) return;
+      if (seat < 0 || seat >= G.n || G.out[seat]) return;
+      /* رقم الحركة يمنع رمية متأخرة من حالة قديمة: ضغطة وصلت بعد ما
+         رمى الخادم عن اللاعب تلقائيًا كانت ستُحسب رميةً ثانية */
+      if (G.turn !== seat || m.n !== G.moveNo) return this.send(ws, this.viewFor(seat));
+      await this.roll(seat, false);
+      return;
+    }
+  }
+
+  /* المضيف ينتقل لأقدم حاضر متصل */
+  migrateHost() {
+    const R = this.room, list = R.players || [], now = Date.now();
+    const here = p => p && p.connected !== false && !p.kicked && !p.left && !p.isBot;
+    const waiting = p => p && R.phase === 'lobby' && p.connected === false && !p.kicked && !p.left
+      && p.goneAt && now - p.goneAt < SAL_LOBBY_GRACE_MS;
+    const host = list.filter(p => p.id === R.hostId)[0];
+    if (here(host) || waiting(host)) return false;
+    const next = list.filter(here)[0];
+    if (!next || next.id === this.room.hostId) return false;
+    this.room.hostId = next.id;
+    return true;
+  }
+
+  async webSocketClose(ws) {
+    if (!this.room) return;
+    const a = ws.deserializeAttachment() || {};
+    const p = (this.room.players || []).filter(q => q.id === a.id)[0];
+    if (!p) return;
+    if (a.sid && p.sid && a.sid !== p.sid) return;
+    p.connected = false;
+    if (this.room.phase === 'lobby') {
+      p.goneAt = Date.now();
+      this.scheduleLobby();
+    }
+    this.migrateHost();
+    /* غياب صاحب الدور يقصّر مهلته، وغياب الجميع يوقف المنبّه */
+    if (this.room.phase === 'play') this.schedule();
+    await this.persist();
+    this.pushAll();
+  }
+  async webSocketError(ws) { return this.webSocketClose(ws); }
+}
+applyRoomCommon(SalalemRoom, 'salalem');
+
+/* ==== SALALEM-END ==== */
 
 /* ============================ Durable Object ============================ */
 export class ShifraRoom {
@@ -16712,6 +17305,26 @@ const TARI_KINDS = {
     clipMs: 10000,
     anon: true, ask: 'مين أقرب للصوت الأصلي؟',
   },
+  /* ── من ذاكرتك ──
+     الفرق عن بقية الأنماط أن المُدخِل واحد (النجم) والباقون يحكمون على
+     شيء له جوابٌ صحيح، فالنقاط هنا على الصح لا على الإجماع. ولذلك
+     ثلاثة حقول جديدة لا شرطَ واحدًا على الاسم في المحرّك:
+       recorders:'star'  ← النجم وحده يسجّل
+       vote:'quiz'       ← بعد الجمع اختيارٌ من ثلاث جمل، وحدة صحيحة
+       scoring.right/starPer/starAll
+     والنجم يكسب عن كل من أصاب — فمصلحته أن يقولها صح، وهذا وحده ما
+     يمنع التخريب المتعمّد بلا حارسٍ يمنعه. */
+  zakira: {
+    name: 'من ذاكرتك',
+    inputType: 'audio', recorders: 'star', vote: 'quiz',
+    needsAlts: true,                 // مطالبةٌ بلا جملتين مغلوطتين ناقصة
+    scoring: { right: 100, starPer: 50, starAll: 50 },
+    /* عشر ثوانٍ كبقية الأنماط لا أكثر: سقف المقطع (٢٤٠ ك.بايت) محسوبٌ
+       على عشرٍ بضعف المعدّل، واثنتا عشرة تتجاوزه على سفاري فيُردّ تسجيل
+       اللاعب. وجملةٌ من أربع عشرة كلمة تُقال في ستٍّ على مهل. */
+    clipMs: 10000, peekMs: 2600,
+    anon: false, ask: 'وش الجملة اللي قالها {نجم}؟',
+  },
   chain: {
     name: 'السلسلة',
     /* finaleKind: أي نمط يحمل هذي الراية هو ختام اللعبة. راية لا اسم،
@@ -16919,6 +17532,60 @@ const TARI_BANK = [
   { id: 'guess:203', kind: 'guess', text: 'وش يسوي {نجم} لو شاف صرصورًا؟', opts: ['يقتله ببرود', 'يصرخ وينط', 'يطلع من البيت', 'يصوّره ويرسله للقروب'] },
   { id: 'guess:204', kind: 'guess', text: 'لو أعطيناه المايك في العرس، وش يسوي {نجم}؟', opts: ['خطبة عشر دقايق', 'كلمتين ويهرب', 'يغنّي', 'يعطيه لغيره فورًا'] },
   { id: 'guess:205', kind: 'guess', text: 'لو {نجم} طبخ لكم، وش تتوقّعون؟', opts: ['أطيب أكلة', 'مالح زيادة', 'يطلب مطعم بالسر', 'يحرق المطبخ'] },
+
+  /* ── من ذاكرتك ── الجملة تُلمَح ثوانيَ ثم تُقال حفظًا، والبديلان
+     يختلفان عنها بتفصيلةٍ واحدة: رقم أو اسم أو يوم أو لون. لو اختلفا
+     بأكثر صار الجواب سهلًا، ولو ما اختلفا صار ظلمًا. */
+  { id: 'zakira:300', kind: 'zakira', text: 'أبو خالد اشترى ثلاث كراتين تمر خلاص من سوق الجنوب يوم الثلاثاء',
+    alts: ['أبو خالد اشترى خمس كراتين تمر خلاص من سوق الجنوب يوم الثلاثاء', 'أبو خالد اشترى ثلاث كراتين تمر سكري من سوق الجنوب يوم الثلاثاء'] },
+  { id: 'zakira:301', kind: 'zakira', text: 'جارنا ركّب أربع كاميرات على السطح عشان قطة تجي كل ليلة الساعة ثنتين',
+    alts: ['جارنا ركّب ست كاميرات على السطح عشان قطة تجي كل ليلة الساعة ثنتين', 'جارنا ركّب أربع كاميرات على السطح عشان قطة تجي كل ليلة الساعة ثلاث'] },
+  { id: 'zakira:302', kind: 'zakira', text: 'أم سعد طبخت كبسة لسبعة ضيوف وجاها اثنا عشر والقدر خلص بنص ساعة',
+    alts: ['أم سعد طبخت كبسة لتسعة ضيوف وجاها اثنا عشر والقدر خلص بنص ساعة', 'أم سعد طبخت كبسة لسبعة ضيوف وجاها أربعة عشر والقدر خلص بنص ساعة'] },
+  { id: 'zakira:303', kind: 'zakira', text: 'المندوب وصل الباب الساعة تسع ورجّع الطلب لأن ما أحد رد عليه',
+    alts: ['المندوب وصل الباب الساعة عشر ورجّع الطلب لأن ما أحد رد عليه', 'المندوب وصل الباب الساعة تسع ورجّع الطلب لأن الجرس ما اشتغل'] },
+  { id: 'zakira:304', kind: 'zakira', text: 'صاحبي باع سيارته الحمراء بعشرين ألف واشترى دبابًا أزرق بالنص',
+    alts: ['صاحبي باع سيارته الحمراء بثلاثين ألف واشترى دبابًا أزرق بالنص', 'صاحبي باع سيارته الحمراء بعشرين ألف واشترى دبابًا أخضر بالنص'] },
+  { id: 'zakira:305', kind: 'zakira', text: 'الكهرباء انقطعت الساعة سبع والكيكة باقي لها عشر دقايق بالفرن',
+    alts: ['الكهرباء انقطعت الساعة تسع والكيكة باقي لها عشر دقايق بالفرن', 'الكهرباء انقطعت الساعة سبع والكيكة باقي لها عشرين دقيقة بالفرن'] },
+  { id: 'zakira:306', kind: 'zakira', text: 'خالتي تقول إن قطّها يفهم ثلاث لغات وما يرد إلا على الإنجليزي',
+    alts: ['خالتي تقول إن قطّها يفهم أربع لغات وما يرد إلا على الإنجليزي', 'خالتي تقول إن قطّها يفهم ثلاث لغات وما يرد إلا على الفرنسي'] },
+  { id: 'zakira:307', kind: 'zakira', text: 'المعلّم وزّع عشرين ورقة ورجعت له ثمانية عشر وما عرف مين أخذ الباقي',
+    alts: ['المعلّم وزّع ثلاثين ورقة ورجعت له ثمانية عشر وما عرف مين أخذ الباقي', 'المعلّم وزّع عشرين ورقة ورجعت له خمسة عشر وما عرف مين أخذ الباقي'] },
+  { id: 'zakira:308', kind: 'zakira', text: 'عمّي حفر بئرًا في مزرعته وطلع منها ماء مالح وسمكة وحدة',
+    alts: ['عمّي حفر بئرًا في مزرعته وطلع منها ماء عذب وسمكة وحدة', 'عمّي حفر بئرًا في مزرعته وطلع منها ماء مالح وسمكتين'] },
+  { id: 'zakira:309', kind: 'zakira', text: 'السايق وقف عند البقالة وقال دقيقتين ورجع بعد نص ساعة بكيس برتقال',
+    alts: ['السايق وقف عند البقالة وقال خمس دقايق ورجع بعد نص ساعة بكيس برتقال', 'السايق وقف عند البقالة وقال دقيقتين ورجع بعد نص ساعة بكيس تفاح'] },
+  { id: 'zakira:310', kind: 'zakira', text: 'جدّتي خبّت الذهب في علبة شاي وحطتها فوق الثلاجة ونستها ثلاث سنين',
+    alts: ['جدّتي خبّت الذهب في علبة شاي وحطتها فوق الثلاجة ونستها خمس سنين', 'جدّتي خبّت الذهب في علبة بهار وحطتها فوق الثلاجة ونستها ثلاث سنين'] },
+  { id: 'zakira:311', kind: 'zakira', text: 'الفريق خسر ثلاثة صفر والحكم طرد لاعبين والجمهور طلع بالدقيقة سبعين',
+    alts: ['الفريق خسر أربعة صفر والحكم طرد لاعبين والجمهور طلع بالدقيقة سبعين', 'الفريق خسر ثلاثة صفر والحكم طرد ثلاثة والجمهور طلع بالدقيقة سبعين'] },
+  { id: 'zakira:312', kind: 'zakira', text: 'أخوي الصغير كسر زجاج السيارة بالكورة وقال إن الهوا هو اللي دفّها',
+    alts: ['أخوي الكبير كسر زجاج السيارة بالكورة وقال إن الهوا هو اللي دفّها', 'أخوي الصغير كسر زجاج الشباك بالكورة وقال إن الهوا هو اللي دفّها'] },
+  { id: 'zakira:313', kind: 'zakira', text: 'المطعم الجديد فتح الساعة عشر والطابور وصل لنهاية الشارع قبلها بساعة',
+    alts: ['المطعم الجديد فتح الساعة اثنا عشر والطابور وصل لنهاية الشارع قبلها بساعة', 'المطعم الجديد فتح الساعة عشر والطابور وصل لنهاية الشارع قبلها بساعتين'] },
+  { id: 'zakira:314', kind: 'zakira', text: 'أبو فهد يقول إنه شاف ثمان دجاجات على سطح المدرسة يوم الجمعة',
+    alts: ['أبو فهد يقول إنه شاف ست دجاجات على سطح المدرسة يوم الجمعة', 'أبو فهد يقول إنه شاف ثمان دجاجات على سطح المدرسة يوم الخميس'] },
+  { id: 'zakira:315', kind: 'zakira', text: 'الطيّارة قامت من جدة الساعة ست الصبح ونزلت الرياض متأخّرة أربعين دقيقة',
+    alts: ['الطيّارة قامت من جدة الساعة خمس الصبح ونزلت الرياض متأخّرة أربعين دقيقة', 'الطيّارة قامت من جدة الساعة ست الصبح ونزلت الدمام متأخّرة أربعين دقيقة'] },
+  { id: 'zakira:316', kind: 'zakira', text: 'صاحبتي نسيت مفاتيحها داخل السيارة وهي شغّالة قدّام باب المستشفى',
+    alts: ['صاحبتي نسيت مفاتيحها داخل السيارة وهي شغّالة قدّام باب المطار', 'صاحبتي نسيت جوالها داخل السيارة وهي شغّالة قدّام باب المستشفى'] },
+  { id: 'zakira:317', kind: 'zakira', text: 'البقالة رفعت سعر الماء ريالين والناس قاطعتها ثلاثة أيام بس',
+    alts: ['البقالة رفعت سعر الماء ثلاثة ريال والناس قاطعتها ثلاثة أيام بس', 'البقالة رفعت سعر الماء ريالين والناس قاطعتها خمسة أيام بس'] },
+  { id: 'zakira:318', kind: 'zakira', text: 'ولد الجيران دقّ الباب أربع مرات وركض قبل ما نفتح ونشوفه',
+    alts: ['ولد الجيران دقّ الباب ست مرات وركض قبل ما نفتح ونشوفه', 'بنت الجيران دقّت الباب أربع مرات وركضت قبل ما نفتح ونشوفها'] },
+  { id: 'zakira:319', kind: 'zakira', text: 'العامل ركّب المكيّف بالمقلوب والغرفة صارت أبرد من الثلاجة بخمس دقايق',
+    alts: ['العامل ركّب المكيّف بالمقلوب والغرفة صارت أحر من الفرن بخمس دقايق', 'العامل ركّب المكيّف بالمقلوب والغرفة صارت أبرد من الثلاجة بعشر دقايق'] },
+  { id: 'zakira:320', kind: 'zakira', text: 'خالي اشترى خروفين للعيد ورجّع واحدًا لأن السطح ما يتحمّل أكثر',
+    alts: ['خالي اشترى ثلاثة خرفان للعيد ورجّع واحدًا لأن السطح ما يتحمّل أكثر', 'خالي اشترى خروفين للعيد ورجّع واحدًا لأن الحوش ما يتحمّل أكثر'] },
+  { id: 'zakira:321', kind: 'zakira', text: 'المطر نزل ساعتين بس والشارع طاح فيه ثلاث سيارات ما قدرت تطلع',
+    alts: ['المطر نزل ثلاث ساعات بس والشارع طاح فيه ثلاث سيارات ما قدرت تطلع', 'المطر نزل ساعتين بس والشارع طاح فيه خمس سيارات ما قدرت تطلع'] },
+  { id: 'zakira:322', kind: 'zakira', text: 'الشيخ قال الدرس بعد المغرب وجا الناس بعد العشا وما لقوا أحدًا',
+    alts: ['الشيخ قال الدرس بعد العصر وجا الناس بعد العشا وما لقوا أحدًا', 'الشيخ قال الدرس بعد المغرب وجا الناس بعد الفجر وما لقوا أحدًا'] },
+  { id: 'zakira:323', kind: 'zakira', text: 'صاحبي طلب برجر بلا بصل وجاه بصل زيادة وقال خلاص عادي ما أبي أتكلّم',
+    alts: ['صاحبي طلب برجر بلا مخلل وجاه مخلل زيادة وقال خلاص عادي ما أبي أتكلّم', 'صاحبي طلب برجرين بلا بصل وجاه بصل زيادة وقال خلاص عادي ما أبي أتكلّم'] },
+  { id: 'zakira:324', kind: 'zakira', text: 'الساعة كانت ثلاث ونص لمّا رن جواله وقام يدوّره تحت السرير',
+    alts: ['الساعة كانت أربع ونص لمّا رن جواله وقام يدوّره تحت السرير', 'الساعة كانت ثلاث ونص لمّا رن جواله وقام يدوّره تحت الكنب'] },
 ];
 
 /* المطالبة تُسلّم للمحرّك «مُسوّاة»: ما ينقصها يُكمَّل من نمطها.
@@ -16942,6 +17609,17 @@ function tariNormPrompt(p, id) {
     }
     if (opts.length >= 2) out.opts = opts;
   }
+  /* البدائل: جملتان تختلفان عن الأصل بتفصيلةٍ واحدة. المطابقة للأصل
+     تُسقط — خياران متطابقان يجعلان الجواب الصحيح اثنين. */
+  if (Array.isArray(p.alts)) {
+    const alts = [];
+    for (const a of p.alts) {
+      const t = cleanText(a, TARI_TEXT_MAX);
+      if (t && t !== out.text && !alts.includes(t)) alts.push(t);
+      if (alts.length >= 2) break;
+    }
+    if (alts.length >= 2) out.alts = alts;
+  }
   if (Array.isArray(p.tones)) {
     const tones = [];
     for (const t of p.tones) {
@@ -16957,6 +17635,7 @@ function tariNormPrompt(p, id) {
   const k = TARI_KINDS[kind];
   if (k.needsOpts && !out.opts) return null;
   if (k.needsTones && !out.tones) return null;
+  if (k.needsAlts && !out.alts) return null;
   return out;
 }
 
@@ -17035,6 +17714,9 @@ export class TariRoom {
       tones: null,     // pid -> نبرة الجولة (نمط النبرة وحده)
       subs: {},        // pid -> { has, text?, choice?, tag?, skipped? }   ← لا صوت هنا أبدًا
       votes: {},       // pid -> subId
+      picks: {},       // pid -> رقم الجملة المختارة (نمط «من ذاكرتك» وحده)
+      quiz: null,      // { opts:[٣ جمل مخلوطة], correct } — correct لا يُبَث قبل الكشف
+      peeked: false,   // النجم شاف الجملة؟ مرة واحدة لا تتكرّر بالتحديث
       readys: {},      // pid -> true  (شاشة الكشف: من ضغط «تم»)
       reported: {},    // pid -> [targetPid]  (من بلّغ على من هذي الجولة)
       order: [],       // ترتيب العرض/السلسلة
@@ -17132,7 +17814,7 @@ export class TariRoom {
       const newId = (validPlayerId(askedId) && !this.room.players.some(p => p.id === askedId)) ? askedId : oldId;
       if (newId !== oldId) {
         player.id = newId;
-        for (const bag of ['subs', 'votes', 'marks', 'readys', 'reported']) {
+        for (const bag of ['subs', 'votes', 'picks', 'marks', 'readys', 'reported']) {
           if (this.room[bag] && oldId in this.room[bag]) {
             this.room[bag][newId] = this.room[bag][oldId];
             delete this.room[bag][oldId];
@@ -17257,6 +17939,7 @@ export class TariRoom {
       out[k] = {
         name: v.name, inputType: v.inputType, recorders: v.recorders,
         clipMs: v.clipMs || 0, textMax: v.textMax || TARI_ANS_MAX,
+        needsOpts: !!v.needsOpts, needsTones: !!v.needsTones, needsAlts: !!v.needsAlts,
       };
     }
     return out;
@@ -17331,6 +18014,8 @@ export class TariRoom {
     const live = this.activePlayers();
     if (k.recorders === 'chain') return r.order.filter(id => { const p = this.findPlayer(id); return p && p.connected; });
     if (k.recorders === 'others') return live.filter(p => p.id !== r.starId).map(p => p.id);
+    /* النجم وحده يسجّل. منقطعٌ = لا أحد متوقَّع، فتمشي الجولة بلا انتظار. */
+    if (k.recorders === 'star') return live.filter(p => p.id === r.starId).map(p => p.id);
     return live.map(p => p.id);
   }
 
@@ -17348,7 +18033,24 @@ export class TariRoom {
       .filter(p => (r.order || []).some(id => id !== p.id))
       .map(p => p.id);
   }
-  allVotedOrMarked() { return this.isScored() ? this.allMarked() : this.allVoted(); }
+  allVotedOrMarked() {
+    const k = this.kind();
+    if (k && k.vote === 'quiz') return this.allPicked();
+    return this.isScored() ? this.allMarked() : this.allVoted();
+  }
+
+  /* من يخمّن: كل متصلٍ عدا النجم. النجم يعرف جملته فلا معنى لسؤاله،
+     والمنقطع خارج الحساب كعادة اللعبة كلها. */
+  quizVoters() {
+    const r = this.room;
+    return this.activePlayers().filter(p => p.id !== r.starId).map(p => p.id);
+  }
+  allPicked() {
+    const v = this.quizVoters();
+    if (!v.length) return true;
+    const pk = this.room.picks || {};
+    return v.every(id => pk[id] !== undefined);
+  }
 
   allVoted() {
     const v = this.voters();
@@ -17472,6 +18174,14 @@ export class TariRoom {
     if (prompt.flat) r.prompt.flat = true;
     r.starId = (k.recorders === 'chain') ? null : this.nextStar();
     r.subs = {}; r.votes = {}; r.result = null; r.order = []; r.turn = 0;
+    r.picks = {}; r.quiz = null; r.peeked = false;
+    /* الجملة الصحيحة تُخلط مع بديليها هنا مرة واحدة، ويُحفظ موضعها.
+       الخلط في الخادم لا في الصفحة: لو خلطه العميل لعرف كلُّ جهازٍ
+       أيَّ واحدةٍ الأصل. */
+    if (k.vote === 'quiz' && prompt.alts && prompt.alts.length >= 2) {
+      const opts = tariShuffle([prompt.text, prompt.alts[0], prompt.alts[1]]);
+      r.quiz = { opts, correct: opts.indexOf(prompt.text) };
+    }
     r.turnEndsAt = 0; r.chainText = ''; r.chainSrc = null;
     r.readys = {};
     r.reported = {};
@@ -17585,6 +18295,13 @@ export class TariRoom {
     /* التصويت يحتاج خيارين على الأقل، أما القياس فلا: مسجّلٌ واحد
        يستحق درجته حتى لو ما فيه من يُقارَن به. بلا هذا الشرط كانت
        الجولة تسقط لحساب التصويت فيخرج الوحيد بلا درجة. */
+    /* «من ذاكرتك»: مُدخَلٌ واحد يكفي لتقوم الجولة — الحكم على جملةٍ
+       صحيحة لا مقارنةٌ بين مقاطع. وبلا مقطعٍ أصلًا (النجم تخطّى أو
+       انقطع) ما فيه ما يُسمَع، فنمضي للكشف بلا نقاط بدل شاشةٍ فارغة. */
+    if (k.vote === 'quiz') {
+      if (r.order.length && this.quizVoters().length) return this.startVote();
+      return this.scoreQuiz();
+    }
     if (k.vote === 'pickOne' && (r.order.length >= 2 || (r.order.length === 1 && this.isScored()))) {
       return this.startVote();
     }
@@ -17607,6 +18324,7 @@ export class TariRoom {
     this.clearPhaseTimer();
     r.phase = 'vote';
     r.votes = {};
+    r.picks = {};
     r.marks = {};
     r.endsAt = 0;
     await this.persist();
@@ -17671,6 +18389,8 @@ export class TariRoom {
   async endVote() {
     if (this.room.phase !== 'vote') return;
     this.clearPhaseTimer();
+    const k = this.kind();
+    if (k && k.vote === 'quiz') return this.scoreQuiz();
     if (this.isScored()) return this.scoreMarked();
     return this.scoreAndReveal();
   }
@@ -17712,6 +18432,57 @@ export class TariRoom {
       soundName: r.prompt ? String(r.prompt.text || '') : '',
     };
     r.log = (r.log || []).concat([{ round: r.round, kind: r.kind, top }]).slice(-24);
+    await this.persist();
+    this.broadcastState();
+  }
+
+  /* ── نقاط «من ذاكرتك» ──
+     من أصاب ياخذ نقاطه، والنجم ياخذ عن كل من أصاب — فذاكرةٌ نظيفة
+     تكسب الجميع. ومن ما أصاب لا يُخصم منه: الفشل يضحّك ولا يُعاقَب.
+     وزيادةُ «أصابوا كلهم» تُعطى حين يكون فيه من يخمّن أصلًا. */
+  async scoreQuiz() {
+    const r = this.room;
+    const k = this.kind();
+    const sc = (k && k.scoring) || {};
+    const q = r.quiz || { opts: [], correct: -1 };
+    const counts = q.opts.map(() => 0);
+    const gains = {};
+    const right = [];
+    let picked = 0;
+
+    for (const [pid, i] of Object.entries(r.picks || {})) {
+      if (!this.findPlayer(pid)) continue;                 // مقعدٌ انشطب
+      if (!Number.isInteger(i) || i < 0 || i >= q.opts.length) continue;
+      counts[i]++; picked++;
+      if (i === q.correct) { right.push(pid); gains[pid] = (gains[pid] || 0) + (sc.right || 0); }
+    }
+
+    let starGain = 0;
+    const starIn = !!(r.starId && this.findPlayer(r.starId) && r.order.includes(r.starId));
+    if (starIn) {
+      starGain = right.length * (sc.starPer || 0);
+      if (picked > 0 && right.length === picked) starGain += (sc.starAll || 0);
+      if (starGain) gains[r.starId] = (gains[r.starId] || 0) + starGain;
+    }
+
+    for (const [id, n] of Object.entries(gains)) {
+      const pl = this.findPlayer(id);
+      if (pl) pl.score = (pl.score | 0) + n;
+    }
+
+    r.phase = 'reveal';
+    r.endsAt = 0;
+    r.readys = {};
+    r.result = {
+      quiz: true,
+      opts: q.opts, correct: q.correct, counts,
+      right, picked, gains, starGain,
+      starId: starIn ? r.starId : null,
+      starName: r.starId ? this.nameOf(r.starId) : '',
+      picks: Object.entries(r.picks || {})
+        .filter(([pid]) => this.findPlayer(pid))
+        .map(([pid, i]) => ({ id: pid, name: this.nameOf(pid), pick: i, ok: i === q.correct })),
+    };
     await this.persist();
     this.broadcastState();
   }
@@ -17854,9 +18625,49 @@ export class TariRoom {
         case 'clip':   return this.onClip(playerId, msg);
         case 'getClip': return this.onGetClip(playerId, msg);
 
+        /* ── لمحة الجملة ──
+           تُطلَب ولا تُبَث: الخادم يرسلها مرةً واحدة ويعلّم أنها أُخذت.
+           فلا يعيد النجم تحميل الصفحة ليقرأها ثانية — وهذا هو الفرق بين
+           «اختفت عندي» و«ما عادت موجودة». */
+        case 'peek': {
+          if (r.phase !== 'brief' && r.phase !== 'collect') return;
+          const kp = this.kind();
+          if (!kp || kp.vote !== 'quiz' || !r.quiz) return;
+          if (playerId !== r.starId) return;
+          if (r.peeked) { this.sendPrivate(playerId, { type: 'peekGone' }); return; }
+          r.peeked = true;
+          await this.persist();
+          this.sendPrivate(playerId, {
+            type: 'sentence',
+            text: (r.prompt && r.prompt.text) || '',
+            ms: kp.peekMs || 2600,
+          });
+          this.broadcastState();
+          return;
+        }
+
+        case 'pick': {
+          if (r.phase !== 'vote') return;
+          const kq = this.kind();
+          if (!kq || kq.vote !== 'quiz' || !r.quiz) return;
+          if (playerId === r.starId) return;              // يعرف جملته
+          if (!this.quizVoters().includes(playerId)) return;
+          if (r.picks[playerId] !== undefined) return;    // مرّة واحدة، ولا تراجع
+          const i = Number(msg.i);
+          if (!Number.isInteger(i) || i < 0 || i >= r.quiz.opts.length) return;
+          r.picks[playerId] = i;
+          await this.persist(); this.broadcastState();
+          if (this.allPicked()) await this.endVote();
+          return;
+        }
+
         case 'vote': {
           if (r.phase !== 'vote') return;
           if (this.isScored()) return;      // جولة تُقاس: لا تصويت فيها
+          /* «من ذاكرتك» تصويتها بـpick لا vote. بلا هذا الحارس يقدر
+             لاعبٌ يرسل vote على مقطع النجم فيُحسب صوتًا، وallVoted تُنهي
+             الطور قبل أن يخمّن أحد. */
+          { const kv = this.kind(); if (kv && kv.vote === 'quiz') return; }
           const id = String(msg.id || '');
           if (!r.order.includes(id) || id === playerId) return;
           r.votes[playerId] = id;
@@ -17911,6 +18722,7 @@ export class TariRoom {
             r.players = r.players.filter(p => p.id !== playerId);
             delete r.subs[playerId];
             delete r.votes[playerId];
+            if (r.picks) delete r.picks[playerId];
             if (r.readys) delete r.readys[playerId];
             r.order = (r.order || []).filter(id => id !== playerId);
             r.starQueue = (r.starQueue || []).filter(id => id !== playerId);
@@ -17929,6 +18741,7 @@ export class TariRoom {
           this.clearPhaseTimer(); this.purgeClips();
           r.phase = 'lobby'; r.round = 0; r.result = null; r.prompt = null;
           r.kind = ''; r.starId = null; r.subs = {}; r.votes = {}; r.order = [];
+          r.picks = {}; r.quiz = null; r.peeked = false;
           /* المقاعد المنقطعة تُشطب هنا لا قبله: في شاشة النتيجة نحتفظ بها
              لأن شطب لاعبٍ منها يغيّر الفائز أمام الباقين. أما الردهة
              الجديدة فمن حضر لا من انصرف — وإلا تراكم الأشباح جولةً بعد
@@ -18176,6 +18989,7 @@ export class TariRoom {
     r.players = r.players.filter(p => p.id !== targetId);
     delete r.subs[targetId];
     delete r.votes[targetId];
+    if (r.picks) delete r.picks[targetId];
     if (r.tones) delete r.tones[targetId];
     r.order = r.order.filter(id => id !== targetId);
     this.clips.delete(targetId);        // صوته يُمحى معه فورًا
@@ -18215,7 +19029,7 @@ export class TariRoom {
       id: p.id, name: p.name, connected: p.connected, score: p.score | 0,
       host: p.id === r.hostId, star: p.id === r.starId,
       done: !!(r.subs[p.id] && r.subs[p.id].has),
-      voted: !!r.votes[p.id],
+      voted: !!r.votes[p.id] || !!(r.picks && r.picks[p.id] !== undefined),
       ready: !!(r.readys && r.readys[p.id]),
     }));
   }
@@ -18238,6 +19052,10 @@ export class TariRoom {
        وفي العرض تبقى فارغة كذلك: chain.text هو من يعرضها هناك تحت
        عنوان «الجملة الأصلية كانت»، فإرسالها في الحقلين يطبعها مرّتين. */
     if (this.isChain()) text = '';
+    /* «من ذاكرتك»: الجملة سرٌّ حتى الكشف. النجم يأخذها بـpeek خاصةً به،
+       ولا تمرّ في الحالة العامّة أبدًا — وإلا قرأها الجميع من شاشاتهم. */
+    const isQuiz = !!(k && k.vote === 'quiz');
+    if (isQuiz) text = '';
 
     const exp = this.expected();
     const iInput = exp.includes(playerId) && !mine;
@@ -18290,6 +19108,16 @@ export class TariRoom {
         srcId: (chainTurn === playerId) ? r.chainSrc : null,
       } : null,
       items,
+      /* ⚠️ opts هنا بلا correct: الجواب الصحيح لا يُبَث قبل الكشف، وهو
+         في r.result وحده (وr.result لا يُرسَل إلا في طور الكشف). */
+      quiz: isQuiz ? {
+        opts: (r.phase === 'vote' || r.phase === 'reveal') && r.quiz ? r.quiz.opts : null,
+        peeked: !!r.peeked,
+        peekMs: k.peekMs || 2600,
+        myPick: (r.picks && r.picks[playerId] !== undefined) ? r.picks[playerId] : null,
+        picked: Object.keys(r.picks || {}).length,
+        voters: this.quizVoters().length,
+      } : null,
       result: r.phase === 'reveal' ? r.result : null,
       players: this.publicPlayers(),
       log: r.log.slice(0, 4),
@@ -18301,7 +19129,8 @@ export class TariRoom {
         submitted: !!mine, myText: (mine && mine.text) || null,
         myChoice: (mine && typeof mine.choice === 'number') ? mine.choice : null,
         myVote: r.votes[playerId] || null,
-        canVote: r.phase === 'vote' && r.order.some(id => id !== playerId),
+        canVote: r.phase === 'vote' && (isQuiz ? playerId !== r.starId
+                                               : r.order.some(id => id !== playerId)),
       },
     };
   }
