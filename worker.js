@@ -5835,6 +5835,70 @@ const WL_SCENES = [
   }
 ];
 
+/* وضعُ العائلة: قضايا خفيفةٌ تناسب الصغار */
+const WL_FAMILY_SCENES = [
+  {
+    "occ": "عزيمةُ بيتِ الجدّة",
+    "crime": "اختفت علبةُ الشوكولاتة الكبيرة قبل أن تُفتح للضيوف.",
+    "detail": "العلبةُ كانت فوق الثلّاجة، ولا يصلها إلا من وقف على الكرسيّ — والكرسيُّ وُجد في غيرِ مكانه.",
+    "confession": "أنتَ من أخذها. وقفتَ على الكرسيّ وقتَ ما كان الكلُّ يسلّم على الخالة، وخبّأتَ العلبةَ تحت مخدّةِ الكنب. ما أكلتَ منها إلا قطعتين… وورقُ التغليفِ في جيبك."
+  },
+  {
+    "occ": "صباحُ الرحلةِ إلى البرّ",
+    "crime": "اختفى مفتاحُ السيّارة فتأخّرت الرحلةُ ساعة.",
+    "detail": "المفتاحُ كان على طاولةِ المدخل، وآخرُ من رآه رآه قبل الإفطار. ولم يخرج أحدٌ من البيت بعدها.",
+    "confession": "أنتَ من خبّأه. وضعتَه داخلَ حذائك عند الباب لأنّك لم ترد أن تذهبوا قبل أن تنتهي حلقتُك المفضّلة. الحذاءُ ما زال عند الباب."
+  },
+  {
+    "occ": "حفلةُ عيدِ ميلادِ الصغير",
+    "crime": "أكل أحدُهم الزهرةَ السكّريّةَ من فوقِ الكعكة قبل إطفاءِ الشموع.",
+    "detail": "الكعكةُ كانت في المطبخ مغطّاة، والغطاءُ رُفع ثم أُعيد مائلاً قليلاً. وعلى طرفِ الطاولةِ أثرُ كريمةٍ صغير.",
+    "confession": "أنتَ من أكلها. رفعتَ الغطاءَ حين ذهب الجميعُ لإحضارِ الشموع، وأكلتَ الزهرةَ في لقمةٍ واحدة، ومسحتَ إصبعك في المنديلِ الأخضر. المنديلُ في جيبك."
+  },
+  {
+    "occ": "سهرةُ المباراةِ العائليّة",
+    "crime": "اختفى الريموتُ في منتصفِ المباراة.",
+    "detail": "الريموتُ كان على الكنبةِ الكبيرة، واختفى وقتَ الاستراحةِ بين الشوطين. ولم يخرج من الصالةِ أحد.",
+    "confession": "أنتَ من خبّأه. دسستَه بين وسائدِ الكنبة لأنّ فريقَك كان يخسر وأردتَ أن تتوقّف المباراة. ما زال تحت الوسادةِ الثالثة."
+  },
+  {
+    "occ": "يومُ غسيلِ السيّارة",
+    "crime": "امتلأت السيّارةُ النظيفةُ بآثارِ أقدامٍ طينيّة.",
+    "detail": "السيّارةُ غُسلت الصبح، والآثارُ صغيرةٌ وتمشي من البابِ الخلفيّ إلى المقعدِ الأماميّ. والحديقةُ كانت مسقيّةً للتوّ.",
+    "confession": "أنتَ من ترك الآثار. دخلتَ السيّارةَ تبحث عن سمّاعتك بعد ما لعبتَ في الحديقةِ المبلولة، ونسيتَ أن تخلع حذاءك. الحذاءُ الطينيُّ خلفَ البابِ الخلفيّ."
+  },
+  {
+    "occ": "زيارةُ العمّةِ بعد السفر",
+    "crime": "انكسرت الفازةُ التي أهدتها العمّة، وأُعيدت قطعُها ملصقةً بالغراء.",
+    "detail": "الفازةُ على رفِّ المجلس، والغراءُ من علبةِ الأدوات في غرفةِ الدراسة. وأثرُ الغراءِ ما زال طريّاً.",
+    "confession": "أنتَ من كسرها. كانت الكرةُ في يدك في المجلس — واللعبُ فيه ممنوع — فأصبتَ الفازة. لصقتَها بسرعةٍ وأعدتَها. أنبوبُ الغراءِ في درجِ مكتبك."
+  },
+  {
+    "occ": "أوّلُ يومٍ في المدرسة",
+    "crime": "اختفت حقيبةُ طعامِ الصغير صباحاً.",
+    "detail": "الحقيبةُ كانت جاهزةً عند الباب قبل السابعة، واختفت أثناءَ البحثِ عن الجوارب. من أخذها كان مستيقظاً مبكّراً.",
+    "confession": "أنتَ من أخذها. رأيتَ فيها الكعكةَ المفضّلةَ لك، فأخذتَ الحقيبةَ لغرفتك تنوي أن تأكل الكعكةَ وتعيدَها. الحقيبةُ تحت سريرك."
+  },
+  {
+    "occ": "مسابقةُ الرسمِ في البيت",
+    "crime": "تمزّقت اللوحةُ الفائزةُ من طرفِها.",
+    "detail": "اللوحاتُ عُلّقت على بابِ الثلّاجة، والتمزّقُ بالأصابع لا بالمقصّ. ومن فعلها وقف على أطرافِ أصابعه ليصلها.",
+    "confession": "أنتَ من مزّقها. أردتَ أن تُنزلها لتراها عن قرب لأنّ لوحتَك خسرت، فانشدّت من الطرف وتمزّقت. القطعةُ الممزّقةُ في جيبك."
+  },
+  {
+    "occ": "سهرةُ الشواءِ في السطح",
+    "crime": "اختفى صحنُ الكباب كلُّه قبل أن يُقدَّم.",
+    "detail": "الصحنُ وُضع على الطاولة قربَ الدرج ليبرد، والقطّةُ كانت محبوسةً في الغرفة — فليست هي. ومن أخذه نزل الدرجَ بهدوء.",
+    "confession": "أنتَ من أخذه. نزلتَ به إلى المطبخ وخبّأتَه في الفرن لتأكلَ منه أوّلاً قبل أن يُقسَم. الفرنُ مطفأ… والصحنُ فيه كما هو تقريباً."
+  },
+  {
+    "occ": "يومُ الجمعةِ عند الجيران",
+    "crime": "خرج عصفورُ الجيرانِ من قفصِه وطار في البيت.",
+    "detail": "بابُ القفصِ يُفتح بسحبِ مزلاجٍ صغير، ولا يعرف ذلك إلا من راقب صاحبَه وهو يطعمه.",
+    "confession": "أنتَ من فتح القفص. أردتَ أن تلمسَ العصفورَ مرّةً واحدة، فسحبتَ المزلاجَ كما رأيتَ صاحبَه يفعل — فطار. الحبوبُ التي أغريتَه بها ما زالت في يدك."
+  }
+];
+
 const WL_CLUES = [
   "يُقال إنّ أحدَهم غادر المائدة دقائقَ قبل أن يُكتشف الأمر.",
   "بقيت أثارٌ غريبةٌ على ما لا ينبغي لمسُه.",
@@ -5889,11 +5953,11 @@ const WL_ROLES = [
     "key": "culprit",
     "t": "الجاني",
     "evil": true,
-    "winType": "escape",
+    "winType": "culprit",
     "secret": "أنتَ من فعلها. لا أحدَ يعلم بعد.",
     "goal": "حوّل الشكَّ إلى غيرك، واخرُج من الوليمة دون أن يتّهمك المحقّق.",
-    "win": "تفوز إذا اتّهم المحقّقُ أيَّ أحدٍ غيرك.",
-    "desc": "صاحبُ الجريمة، ويعرف ما فعله بالضبط. يفوز إن اتّهم المحقّقُ غيرَه."
+    "win": "تفوز إذا لم يُمسكك أحد: لا يتّهمك المحقّق، ولا يصوّت عليك أكثرُ المائدة.",
+    "desc": "صاحبُ الجريمة، ويعرف ما فعله بالضبط. يفوز إن لم يتّهمه المحقّق ولم تُجمع عليه أغلبيّةُ الأصوات."
   },
   {
     "key": "innocent",
@@ -5901,17 +5965,17 @@ const WL_ROLES = [
     "winType": "justice",
     "secret": "لا شيءَ يُثقل صدرَك — لكنّ بينكم كاذباً، ومصلحتُك أن يُكشف.",
     "goal": "ساعِدِ المحقّقَ على كشفِ الجاني: التقِطِ التناقض، واسأل، واتّهِم بحجّة.",
-    "win": "تفوز إذا اتّهم المحقّقُ الجانيَ الحقيقيّ.",
-    "desc": "لا سرَّ له، وهو في صفِّ العدالة. يفوز إن أمسك المحقّقُ الجانيَ الحقيقيّ."
+    "win": "تفوز إذا أُمسك الجاني: اتّهمه المحقّق، أو صوّت عليه أكثرُ المائدة.",
+    "desc": "لا سرَّ له، وهو في صفِّ العدالة. يفوز إن أُمسك الجاني — باتّهام المحقّق أو بأغلبيّة الأصوات."
   },
   {
     "key": "framed",
     "t": "البريء المُدان",
     "winType": "escape",
-    "secret": "قرينةٌ علنيّةٌ على المائدةِ تشير إليك بالاسم — وأنتَ بريءٌ تماماً.",
+    "secret": "قرينةٌ علنيّةٌ ستشير إليك بالاسم في الجولة الثانية — وأنتَ بريءٌ تماماً.",
     "goal": "أقنِعِ المحقّقَ ببراءتك، وفسِّرِ القرينةَ التي تشير إليك.",
     "win": "تفوز إذا لم يتّهمك المحقّق.",
-    "desc": "بريءٌ تشير إليه قرينةٌ علنيّة. يفوز إن لم يتّهمه المحقّق."
+    "desc": "بريءٌ ستشير إليه قرينةٌ علنيّة في الجولة الثانية. يفوز إن لم يتّهمه المحقّق."
   },
   {
     "key": "protector",
@@ -5949,7 +6013,7 @@ const WL_ROLES = [
     "needs": "ally",
     "secret": "تعرف من الجاني، ومصلحتُك معه لا مع المائدة. هو لا يعلم أنّك في صفّه.",
     "goal": "الجاني هو {target}. أبعِدِ الشكَّ عنه ووجِّهِ المحقّقَ نحو بريء.",
-    "win": "تفوز إذا لم يتّهمِ المحقّقُ {target}.",
+    "win": "تفوز إذا أفلت {target}: لا يتّهمه المحقّق، ولا يصوّت عليه أكثرُ المائدة.",
     "desc": "يعرف الجانيَ ويقف في صفّه سرّاً. يفوز إن أفلت الجاني."
   }
 ];
@@ -6164,8 +6228,9 @@ export class WalimaRoom {
       scene: this.room.phase === 'lobby' ? null : this.room.scene && {
         occ: this.room.scene.occ, crime: this.room.scene.crime, detail: this.room.scene.detail,
       },
-      clues: this.room.phase === 'lobby' ? [] : this.room.clues,
-      pointer: this.room.phase === 'lobby' ? null : (this.room.pointer || null),
+      clues: this.room.phase === 'lobby' ? [] : this.visibleClues(),
+      pointer: this.room.phase === 'lobby' ? null : (this.pointerVisible() ? (this.room.pointer || null) : null),
+      family: !!this.room.family,
       players: this.room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected, sus: p.sus || 0, submitted: !!p.submitted })),
       transcript: this.room.transcript,
       reveal: this.room.reveal || 'round',
@@ -6194,6 +6259,18 @@ export class WalimaRoom {
       return;
     }
     this.broadcastPublic(pub);
+  }
+
+  /* القرائن تظهر تدريجيًّا: واحدةٌ مع الجريمة ثم واحدةٌ كلَّ جولة، والقرينةُ
+     بالاسم في الجولة الثانية. المحقّقُ نفسُه لا يرى إلا المكشوف. */
+  shownRound(){ return Math.max(1, Math.min(this.room.round || 1, this.room.rounds || WL_ROUNDS)); }
+  visibleClues(){ return (this.room.clues || []).slice(0, this.shownRound()); }
+  pointerVisible(){ return !!this.room.pointer && (this.shownRound() >= 2 || this.room.phase === 'over'); }
+  /* الأغلبيّةُ تمسك الجاني: أكثرُ من نصفِ المصوّتين عليه = أُمسك، ولو أخطأ المحقّق */
+  tableCaught(culpritName){
+    if (!culpritName) return false;
+    const vs = Object.values(this.room.votes || {}).map(id => { const t = this.findPlayer(id); return t ? t.name : null; }).filter(Boolean);
+    return vs.length >= 2 && vs.filter(n => n === culpritName).length * 2 > vs.length;
   }
 
   roleMessageFor(p){
@@ -6235,6 +6312,7 @@ export class WalimaRoom {
       /* الإعدادُ يُثبَّت من قائمةٍ مغلقة، فأيُّ قيمةٍ أخرى تسقط
          للافتراضيّ بدل أن تُخزَّن كما جاءت من العميل. */
       this.room.reveal = msg.reveal === 'live' ? 'live' : 'round';
+      this.room.family = msg.family === true;
       await this.startGame(msg.rounds);
     }
     if (msg.type === 'statement' && this.room.phase === 'writing') await this.handleStatement(playerId, msg.text);
@@ -6315,8 +6393,9 @@ export class WalimaRoom {
       this.room.pointer = { name: who.name, text: wlPick(WL_POINTERS).replace('{name}', who.name) };
     }
 
-    this.room.scene = wlPick(WL_SCENES);
-    this.room.clues = wlShuffle(WL_CLUES).slice(0, 2);
+    this.room.scene = wlPick(this.room.family ? WL_FAMILY_SCENES : WL_SCENES);
+    /* قرائن تدريجيّة: واحدةٌ لكلِّ جولة، تُكشف مع الجولة لا قبلها */
+    this.room.clues = wlShuffle(WL_CLUES).slice(0, Math.max(2, this._rounds || WL_ROUNDS));
     const disp = { ...wlPick(WL_DISPOSITIONS) };
     if (disp.target) disp._target = wlPick(this.room.players).name;
     this.room.disposition = disp;
@@ -6490,8 +6569,9 @@ export class WalimaRoom {
       + (this.room.scene.detail ? 'تفاصيل الحادثة كما وصلتك: ' + this.room.scene.detail : '')
       + '\nأنت تشكّ أنّ أحدَ الجالسين هو الفاعل، وتحقّق بنفسك على المائدة.'
       + '\nطبعك في هذا التحقيق: ' + dispText
-      + '\nخيوطٌ همست بها الجلسة:\n- ' + this.room.clues[0] + '\n- ' + this.room.clues[1]
-      + '\nقرينةٌ علنيّةٌ يعرفها الجميع (قد تكون صادقةً وقد تكون مُضلِّلة): ' + (this.room.pointer ? this.room.pointer.text : '—')
+      + '\nالقرائنُ التي ظهرت للجميع حتى الآن:\n- ' + this.visibleClues().join('\n- ')
+      + (this.pointerVisible() ? '\nقرينةٌ علنيّةٌ تشير بالاسم (قد تكون صادقةً وقد تكون مُضلِّلة): ' + this.room.pointer.text : '')
+      + (this.room.family ? '\nهذه وليمةٌ عائليّةٌ فيها صغار: كلامُك بسيطٌ لطيفٌ مرِح، بلا تخويفٍ ولا قسوة.' : '')
       + '\nالجالسون: ' + names + '.'
       + '\nما صرّح به كلُّ ضيفٍ عن مكانه وقتَ الحادثة (قد يكون بعضُها كذباً):\n'
       + this.room.players.map(p => '- ' + p.name + ': ' + (p.alibi || 'لم يُصرِّح بمكانه')).join('\n')
@@ -6630,6 +6710,7 @@ export class WalimaRoom {
         accused, reason: out.reason, says: out.says,
         culprit: culprit ? culprit.name : null, results,
         tally: this.voteTally(),
+        tableCaught: this.tableCaught(culprit ? culprit.name : null),
       };
       this.room.phase = 'over';
       const kickedIds = new Set(this.room.players.filter(p => p.kicked).map(p => p.id));
@@ -6641,9 +6722,11 @@ export class WalimaRoom {
 
   didWin(p, accused, culpritName){
     const r = WL_ROLES.find(x => x.key === p.role) || {};
+    const caught = !!culpritName && (accused === culpritName || this.tableCaught(culpritName));
     switch (r.winType) {
-      case 'justice':   return !!culpritName && accused === culpritName;
-      case 'complicit': return accused !== culpritName;
+      case 'culprit':   return !caught;
+      case 'justice':   return caught;
+      case 'complicit': return !caught;
       case 'protect':   return accused !== p.target;
       case 'avenge':    return accused === p.enemy;
       case 'scapegoat': return accused === p.name;
@@ -10715,7 +10798,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v213';   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
+const WORKER_VERSION = 'v215';   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
