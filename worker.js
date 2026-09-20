@@ -646,6 +646,21 @@ const RoomCommon = {
     return (p && p.kicked) ? null : p;
   },
 
+  /* ── رفضٌ برسالة ثم إغلاق — لغرف السبات (v220) ──
+     مقاسٌ على workerd في v206 (سلالم): مقبسٌ قُبل بـ acceptWebSocket ثم أُغلق
+     قبل رجوع 101 تصل رسالته ولا يصل إغلاقه أبدًا. والـ404 قبل الترقية يصل
+     المتصفح انقطاعًا مبهمًا (1006) فتعيد الصفحة المحاولة وتقول «انقطع الاتصال»
+     لمن كتب رمزًا غلط. فالرفض يُقرَّر قبل قبول المقبس، وبـ accept() العادي،
+     وبسببٍ تعرفه الصفحة فتتوقف. بلا أي تخزين. */
+  refuse(message, reason) {
+    const p = new WebSocketPair();
+    const client = p[0], server = p[1];
+    server.accept();
+    try { server.send(JSON.stringify({ type: 'error', message, fatal: true, code: reason })); } catch {}
+    try { server.close(1000, reason); } catch {}
+    return new Response(null, { status: 101, webSocket: client });
+  },
+
   /* ── مضيف حيّ عند كل دخول ──
      نقل المضيف كان يُنادى من الإغلاق وحده. المضيف الذي يقفل التبويب وهو
      وحده في الردهة يبقى hostId له (لا أحد ينقله إليه)، ومن يدخل بعده
@@ -929,10 +944,79 @@ function roomNS(env, g) {
   }
 }
 
+/* ── كنس الإقلاع: راية «متصل» المحفوظة لا تُصدَّق بلا مقبسٍ حيّ (v220) ──
+   كل `wrangler deploy` (وكل إعادة تشغيل للكائن) يقتل الذاكرة والمقابس معًا،
+   ويبقى التخزين — وفيه `connected:true` لكل من كان داخل الغرفة لحظتها.
+   فيُقلع الكائن الجديد وهو «يرى» الجميع متصلين ولا مقبس عنده لأحد. من رجع
+   صحّح رايته بنفسه، ومن لم يرجع (قفل التبويب أثناء الانقطاع) بقي «متصلًا»
+   إلى الأبد:
+     • المضيف الشبح لا تنتقل عنه الاستضافة أبدًا — migrateHost تراه حاضرًا —
+       فلا أحد يقدر يبدأ ولا يطرد ولا يتجاوز مرحلة.
+     • المراحل التي تنتظر «كل متصل» تنتظر شبحًا لن يصوّت.
+     • البلياردو والبلوت وسلالم تعدّه حاضرًا فلا يُتخطّى دوره إلا بمهلة الحاضر.
+   مقاسٌ حيًّا في ١١ غرفة من ١٦. طاريك ومطاردة الحواري وحدهما كانتا سليمتين
+   (كلٌّ بحلّها الخاص) — وهنا الحلّ مرة واحدة للبقية.
+
+   يُنادى في أول fetch/alarm لكل نسخة من الكائن. في غرف السبات المقابس تنجو
+   من الإخلاء (لا من النشرة)، فنسأل getWebSockets() لا نفترض الصفر.
+   لا يحسم مرحلة ولا يشطب مقعدًا: يصحّح الراية فقط. الاستضافة تنتقل بالمسار
+   العادي عند أول دخول، ومن تأخّر رجوعه يجد مقعده بتوكنه كما تركه.
+   والمراحل المنتظِرة تُحسم بعد مهلة رجوع (BOOT_GRACE_MS) لا فورًا: بعد
+   النشرة يرجع الكل خلال ثوانٍ بترتيب عشوائي، وحسمٌ فوري يعني أن أول
+   الراجعين «اكتمل» التصويت به وحده. */
+const BOOT_GRACE_MS = 30000;
+function bootSweep(self) {
+  if (self._booted) return;
+  const r = self.room;
+  if (!r || !Array.isArray(r.players)) return;      // لم تُحمَّل بعد / غرفة لم تُنشأ
+  self._booted = true;
+  let live = null;
+  try {
+    if (self.sockets instanceof Map) {
+      live = new Set();
+      for (const [id, ws] of self.sockets) {
+        if (ws && (ws.readyState === undefined || ws.readyState === 1)) live.add(id);
+      }
+    } else if (self.state && typeof self.state.getWebSockets === 'function') {
+      live = new Set();
+      for (const ws of self.state.getWebSockets()) {
+        try { const a = ws.deserializeAttachment() || {}; if (a.id) live.add(a.id); } catch {}
+      }
+    }
+  } catch { live = null; }
+  if (!live) return;
+  const now = Date.now();
+  let ghosts = 0;
+  for (const p of r.players) {
+    if (!p || p.isBot || p.connected === false || live.has(p.id)) continue;
+    /* مقعد المنشئ قبل أول اتصال (connected:true من /create في غرف السبات)
+       يمرّ من هنا أيضًا، وهو الصحيح: لا مقبس = غير متصل، ويتصل بعد لحظة. */
+    p.connected = false;
+    if (typeof self.onBootGhost === 'function') { try { self.onBootGhost(p, now); } catch {} }
+    ghosts++;
+  }
+  if (!ghosts) return;
+  if (typeof self.maybeAdvanceOnDisconnect === 'function' && typeof setTimeout === 'function') {
+    try {
+      setTimeout(() => {
+        try {
+          const q = self.maybeAdvanceOnDisconnect();
+          if (q && typeof q.catch === 'function') q.catch(() => {});
+        } catch {}
+      }, BOOT_GRACE_MS);
+    } catch {}
+  }
+}
+
 function applyRoomCommon(cls, gameKey) {
   if (gameKey) cls.prototype.GAME = gameKey;
   for (const [k, v] of Object.entries(RoomCommon)) {
     if (!(k in cls.prototype)) cls.prototype[k] = v;
+  }
+  /* المنبّه قد يكون أول ما يوقظ الكائن بعد نشرة (مؤقّت دور البلوت/سلالم) */
+  const innerAlarm = cls.prototype.alarm;
+  if (typeof innerAlarm === 'function') {
+    cls.prototype.alarm = function () { bootSweep(this); return innerAlarm.apply(this, arguments); };
   }
 
   /* ── /seat-check: هل يملك حاملُ هذا التوكن مقعدًا في هذي الغرفة؟ ──
@@ -948,6 +1032,7 @@ function applyRoomCommon(cls, gameKey) {
      فما ينسى أحد إضافتها للعبة قادمة.                                */
   const innerFetch = cls.prototype.fetch;
   cls.prototype.fetch = async function (request) {
+    bootSweep(this);                  // أول طلبٍ بعد الإقلاع: راية «متصل» تُصدَّق بمقبسٍ حيّ فقط
     let u = null;
     try { u = new URL(request.url); } catch {}
     if (u && u.pathname === '/seat-check') {
@@ -1083,7 +1168,9 @@ function applyRoomCommon(cls, gameKey) {
           /* وليمة: النبضة كلَّ ٢٥ ثانية هي الرسالة الوحيدة وقتَ «المحقّق
              يفكّر»، فهي من يُحيي طورًا علق بعد إعادة تشغيل. محصورٌ بوليمة
              عمدًا — بقيّة الغرف لم تُفحص على هذا المسار. */
-          if (gameKey === 'walima' && typeof this.resumePhase === 'function') { try { this.resumePhase(); } catch {} }
+          /* وطاريك: فُحصت على هذا المسار — resumePhase فيها يعيد تسليح بطاقة
+             التعريف ويعيد جولةً صوتية ضاعت تسجيلاتها، وكلاهما آمن التكرار. */
+          if ((gameKey === 'walima' || gameKey === 'tari') && typeof this.resumePhase === 'function') { try { this.resumePhase(); } catch {} }
           return;   // لا تمرّ للعبة: النبضة ما تخصّها ولا تستهلك خانقها
         }
       } catch {}
@@ -6211,7 +6298,10 @@ export class WalimaRoom {
     return (p && p.kicked) ? null : p;
   }
   findPlayer(id){ return this.room.players.find(p => p.id === id) || null; }
-  async persist(){ await this.state.storage.put('room', this.room); }
+  /* v220: كانت تحفظ بلا touchRoom — فلا منبّه كنس يُسلَّح أبدًا، وكل غرفة
+     وليمة تبقى في التخزين إلى الأبد (نفس عيب BtaqatiRoom في v50 وChatRoom
+     في v57). الآن كبقية الغرف: تُمسح بعد ست ساعات بلا أحد. */
+  async persist(){ await this.touchRoom(); await this.state.storage.put('room', this.room); }
   sendPrivate(id, payload){
     const ws = this.sockets.get(id);
     if (ws) { try { ws.send(JSON.stringify(payload)); } catch {} }
@@ -10798,7 +10888,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v215';   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
+const WORKER_VERSION = 'v220';   // v220 = فحص الاتصال الشامل: كنس الإقلاع (أشباح «متصل» بعد النشرة في ١١ غرفة) · وليمة تُكنس · رمز غلط لا يفتح غرفة وهمية في الشفرة/المربعات/الحلبة · رفض البلياردو/البلوت قبل قبول المقبس. قبله:   // v219 = طاريك: ٩٠ جملة كتابية جديدة · «توقّع الأغلبية» (إجابات جاهزة) أُزيل نهائيًا. قبله:   // v218 = مطاردة الحواري: صاحب الحساب يستردّ مقعده المنقطع من أي جهاز · لهجة الغرفة يختارها المضيف · الغرفة تنجو من إعادة التشغيل · المنقطع لا يعلّق الطور · رمزٌ غلط لا يفتح غرفة وهمية. قبله:   // v216 = طاريك: الكشف لا يُعاد بعد إعادة التشغيل (نقاط مرتين) · النبضة توقظ بطاقة التعريف. قبله:   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10983,16 +11073,22 @@ export class BilliardRoom {
       return new Response('expected-websocket', { status: 426 });
     }
     if (!this.room || !this.room.code) {
-      return new Response('room-not-found', { status: 404 });
+      return this.refuse('ما فيه غرفة بهذا الرمز — تأكد منه أو أنشئ غرفة', 'notfound');
+    }
+
+    const token = url.searchParams.get('token') || '';
+    const name = url.searchParams.get('name') || 'لاعب';
+    let me = token ? this.seatByToken(token) : null;
+
+    /* الرفض قبل قبول المقبس في السبات — السبب في RoomCommon.refuse */
+    if (!me) {
+      if (this.room.phase !== 'lobby') return this.refuse('المباراة بدأت — انتظر الجولة القادمة', 'started');
+      if ((this.room.players || []).length >= BIL_MAX) return this.refuse('الغرفة ممتلئة', 'full');
     }
 
     const pair = new WebSocketPair();
     const client = pair[0], server = pair[1];
     this.state.acceptWebSocket(server);          // سبات، لا accept()
-
-    const token = url.searchParams.get('token') || '';
-    const name = url.searchParams.get('name') || 'لاعب';
-    let me = token ? this.seatByToken(token) : null;
 
     if (me) {
       me.connected = true;
@@ -11001,16 +11097,6 @@ export class BilliardRoom {
          فما يوصل هنا إلا صاحب مقعد سليم. */
       this.noteAccount(url, me);
     } else {
-      if (this.room.phase !== 'lobby') {
-        this.send(server, { type: 'error', message: 'المباراة بدأت — انتظر الجولة القادمة' });
-        try { server.close(1000, 'started'); } catch {}
-        return new Response(null, { status: 101, webSocket: client });
-      }
-      if ((this.room.players || []).length >= BIL_MAX) {
-        this.send(server, { type: 'error', message: 'الغرفة ممتلئة' });
-        try { server.close(1000, 'full'); } catch {}
-        return new Response(null, { status: 101, webSocket: client });
-      }
       me = this.newPlayer(name, url);
       this.room.players.push(me);
       if (!this.room.hostId) this.room.hostId = me.id;
@@ -14827,31 +14913,27 @@ export class BalootRoom {
       return new Response('expected-websocket', { status: 426 });
     }
     if (!this.room || !this.room.code) {
-      return new Response('room-not-found', { status: 404 });
+      return this.refuse('ما فيه غرفة بهذا الرمز — تأكد منه أو أنشئ غرفة', 'notfound');
+    }
+
+    const token = url.searchParams.get('token') || '';
+    const name = url.searchParams.get('name') || 'لاعب';
+    let me = token ? this.seatByToken(token) : null;
+
+    /* الرفض قبل قبول المقبس في السبات — السبب في RoomCommon.refuse */
+    if (!me) {
+      if (this.room.phase !== 'lobby') return this.refuse('المباراة بدأت — انتظر الجولة القادمة', 'started');
+      if ((this.room.players || []).filter(p => !p.isBot).length >= BAL_MAX) return this.refuse('الغرفة ممتلئة', 'full');
     }
 
     const pair = new WebSocketPair();
     const client = pair[0], server = pair[1];
     this.state.acceptWebSocket(server);
 
-    const token = url.searchParams.get('token') || '';
-    const name = url.searchParams.get('name') || 'لاعب';
-    let me = token ? this.seatByToken(token) : null;
-
     if (me) {
       me.connected = true;
       this.noteAccount(url, me);
     } else {
-      if (this.room.phase !== 'lobby') {
-        this.send(server, { type: 'error', message: 'المباراة بدأت — انتظر الجولة القادمة' });
-        try { server.close(1000, 'started'); } catch {}
-        return new Response(null, { status: 101, webSocket: client });
-      }
-      if ((this.room.players || []).filter(p => !p.isBot).length >= BAL_MAX) {
-        this.send(server, { type: 'error', message: 'الغرفة ممتلئة' });
-        try { server.close(1000, 'full'); } catch {}
-        return new Response(null, { status: 101, webSocket: client });
-      }
       me = this.newPlayer(name, url);
       this.room.players.push(me);
       if (!this.room.hostId) this.room.hostId = me.id;
@@ -15855,6 +15937,20 @@ export class ShifraRoom {
     const ws = pair[1];
     ws.accept();
 
+    /* ── رمزٌ غلط لا يفتح غرفة وهمية (v220 — نفس إصلاح المطاردة في v218) ──
+       الغرفة تُنشأ بأول اتصال، فكان «ادخل» برمزٍ فيه حرف غلط يفتح غرفة
+       جديدة فاضية ويجعل الداخل مضيفها: ينتظر أصحابه في ردهةٍ لن يصلها
+       أحد. الآن لا يُنشئها إلا طلب الإنشاء الصريح (new=1) — أو صفحةٌ تحمل
+       مقعدًا في هذا الرمز (pid+tok): هذي الغرفة بلا تخزين، فالنشرة تمسحها،
+       ومن كانوا فيها يرجعون بمقاعدهم القديمة فيجتمعون في ردهتها من جديد
+       بدل أن يُقال لكلٍّ منهم «ما فيه غرفة» وهم كانوا فيها قبل ثوانٍ. */
+    if (!this.g && url.searchParams.get('new') !== '1' && !(pid && tok)) {
+      ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'nosuchroom',
+        m: 'ما فيه غرفة بهذا الكود — تأكّد منه أو اطلبه من المضيف. (لو كنت تنشئ غرفة: حدّث الصفحة وجرّب)' }));
+      ws.close(1000);
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
     if (!this.g) this.init(code);
     seatSweep(this.g, this.sockets);
 
@@ -15881,12 +15977,12 @@ export class ShifraRoom {
       if (did) p.did = String(did).slice(0, 64);
     } else {
       if (this.g.phase !== 'lobby' && this.g.phase !== 'end') {
-        ws.send(JSON.stringify({ t: 'err', m: 'الجولة بدأت — انتظر انتهاءها.' }));
+        ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'busy', m: 'الجولة بدأت — انتظر انتهاءها.' }));
         ws.close(1000);
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
       if (this.g.players.length >= 16) {
-        ws.send(JSON.stringify({ t: 'err', m: 'الغرفة ممتلئة.' }));
+        ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'full', m: 'الغرفة ممتلئة.' }));
         ws.close(1000);
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
@@ -16426,6 +16522,68 @@ export class HuntRoom {
     this.kicked = new Set();
     this.g = null;
     this._rate = new Map();
+    /* ── الغرفة تعيش على القرص لا في الذاكرة وحدها ──
+       كانت this.g في الذاكرة فقط، وكلاودفلير يُخلي كائنًا سكتت مقابسه
+       (قفل الشاشات وقت النقاش، تبديل شبكة جماعي) أو يعيد تشغيله مع أي
+       نشرة. فيرجع اللاعبون فيجدون ردهةً فاضية: الأدوار والليلة والأصوات
+       راحت، وأوّل العائدين صار «مضيف غرفة جديدة». الآن تُقرأ الغرفة من
+       التخزين عند الإقلاع، ويُكتب كل تغيّر يُبَثّ. */
+    if (state && state.storage && typeof state.blockConcurrencyWhile === 'function') {
+      state.blockConcurrencyWhile(async () => {
+        try {
+          const g = await state.storage.get('g');
+          if (g && Array.isArray(g.players)) {
+            /* المقابس ماتت مع الذاكرة: لا أحد متصل حتى يعود بنفسه. */
+            for (const p of g.players) { p.connected = false; p.sid = 0; if (!p.left) p.left = Date.now(); }
+            this.g = g;
+            const k = await state.storage.get('kicked');
+            if (Array.isArray(k)) this.kicked = new Set(k);
+            this.listed = !!(await state.storage.get('listed'));
+          }
+        } catch {}
+      });
+    }
+  }
+
+  /* الكتابة: الغرفة كاملة في مفتاح واحد (بضعة كيلوبايت). وتُجدَّد مهلة
+     الكنس: غرفة بلا أحد ست ساعات تُمسح من القرص. */
+  async persist() {
+    if (!this.g || !this.state || !this.state.storage) return;
+    try {
+      this.g.lastSeen = Date.now();
+      await this.state.storage.put('g', this.g);
+      await this.state.storage.put('kicked', [...this.kicked]);
+      await this.state.storage.put('listed', !!this.listed);
+      if (!this._alarmAt || Date.now() - this._alarmAt > 10 * 60 * 1000) {
+        this._alarmAt = Date.now();
+        await this.state.storage.setAlarm(Date.now() + ROOM_TTL_MS);
+      }
+    } catch {}
+  }
+
+  async alarm() {
+    const idle = Date.now() - ((this.g && this.g.lastSeen) || 0);
+    if (idle >= ROOM_TTL_MS && this.sockets.size === 0) {
+      try { await this.state.storage.deleteAll(); } catch {}
+      this.g = null; this.kicked = new Set();
+    } else {
+      try { await this.state.storage.setAlarm(Date.now() + ROOM_TTL_MS); } catch {}
+    }
+  }
+
+  /* ── من ينتظره الطور غاب ──
+     الليل يُحلّ حين يثبّت كل حيٍّ متصل، والتصويت حين يصوّت — لكن الفحص
+     كان عند وصول حركةٍ أو صوت فقط. فمن ينقطع وهو آخر من لم يثبّت يترك
+     الباقين أمام «ننتظر…» حتى ينتبه المضيف لزر التجاوز (وإن كان المضيف
+     هو المنقطع، ما عاد أحد يملكه لحظتها). يُنادى عند كل انقطاع وكنس. */
+  maybeAdvance() {
+    const g = this.g;
+    if (!g) return false;
+    const live = g.players.filter(p => p.alive && p.connected);
+    if (!live.length) return false;          // الكل غائب: ننتظر أوّل عائد
+    if (g.phase === 'night' && live.every(p => p.submitted)) { this.resolveNight(); return true; }
+    if (g.phase === 'vote' && live.every(p => p.vote !== undefined)) { this.tally(); return true; }
+    return false;
   }
 
   allowMsg(playerId) {
@@ -16483,6 +16641,7 @@ export class HuntRoom {
     const did = url.searchParams.get('did') || '';
     const cid = seatCid(url.searchParams.get('cid'));
     const wantsPublic = url.searchParams.get('pub') === '1';
+    const wantsNew = url.searchParams.get('new') === '1';
 
     if (request.headers.get('Upgrade') !== 'websocket')
       return new Response('expected websocket', { status: 426 });
@@ -16490,6 +16649,18 @@ export class HuntRoom {
     const pair = new WebSocketPair();
     const ws = pair[1];
     ws.accept();
+
+    /* ── رمزٌ غلط لا يفتح غرفة وهمية ──
+       الغرفة تُنشأ بأول اتصال، فكان «ادخل» برمزٍ فيه حرف غلط — أو رابط
+       دعوة لغرفةٍ انتهت وانكنست — يفتح غرفة جديدة فاضية ويجعل الداخل
+       مضيفها: ينتظر أصحابه في ردهةٍ لن يصلها أحد، وهم ينتظرونه في غرفتهم.
+       الآن لا يُنشئ الغرفة إلا طلب الإنشاء الصريح (new=1)، وما عداه يُردّ
+       برفضٍ نهائي يقول السبب. */
+    if (!this.g && !wantsNew) {
+      ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'nosuchroom', m: 'ما فيه غرفة بهذا الكود — تأكّد منه أو اطلبه من المضيف.' }));
+      ws.close(1000);
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
 
     const brandNew = !this.g;
     if (!this.g) this.init(code);
@@ -16510,6 +16681,14 @@ export class HuntRoom {
        ومن يعرف معرّف غيره كان يفتح اتصالًا باسمه فيستلم دوره وموقعه.
        التوكن و cid سرّيّان لا يُبَثّان إطلاقًا. */
     let p = seatFind(this.g, pid, tok, cid);
+    /* صاحب حساب رجع من جهازٍ أو متصفّحٍ آخر (فتح الرابط في واتساب ثم
+       رجع من كروم): لا توكن معه ولا cid، لكن did يثبت هويّته — الموجّه
+       تحقّق من توكن الحساب ولا يمرّ did من العميل. يستردّ مقعده المنقطع
+       وحده؛ مقعدٌ متصل لا يُمسّ، فما أحد يُخرَج من لعبته بهذا. */
+    if (!p && did) {
+      const mine = this.g.players.filter(x => x.did && x.did === String(did).slice(0, 64) && !x.connected);
+      if (mine.length === 1) p = mine[0];
+    }
     if (p) {
       pid = p.id;                       // العائد بـcid وحده لا يحمل معرّفه بعد
       p.connected = true;
@@ -16520,12 +16699,12 @@ export class HuntRoom {
       if (did) p.did = String(did).slice(0, 64);
     } else {
       if (this.g.phase !== 'lobby' && this.g.phase !== 'over') {
-        ws.send(JSON.stringify({ t: 'err', m: 'المطاردة بدأت — انتظر انتهاءها.' }));
+        ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'busy', m: 'المطاردة بدأت — انتظر انتهاءها.' }));
         ws.close(1000);
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
       if (this.g.players.length >= HUNT_MAX_PLAYERS) {
-        ws.send(JSON.stringify({ t: 'err', m: 'الغرفة ممتلئة.' }));
+        ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'full', m: 'الغرفة ممتلئة.' }));
         ws.close(1000);
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
@@ -16559,7 +16738,7 @@ export class HuntRoom {
          الشبكةَ الصامتة من المقبس الميت فيبقى ينتظر إلى الأبد. */
       if (m2 && m2.t === 'hb') {
         try { ws.send('{"t":"hb"}'); } catch {}
-        if (seatSweep(this.g, this.sockets)) { this.hostCheck(); this.broadcast(); }
+        if (seatSweep(this.g, this.sockets)) { this.hostCheck(); this.maybeAdvance(); this.broadcast(); }
         /* نبضة اللوبي: الإدراج كان يتجدّد عند الدخول والخروج فقط، ومدخل
            «الغرف المفتوحة» يسقط بعد ٨ دقائق بلا نبض — فمضيف ينتظر ربع ساعة
            تختفي غرفته من القائمة وهو ما زال فيها. نبضة العميل كل ٢٥ ثانية
@@ -16598,6 +16777,7 @@ export class HuntRoom {
       }
       seatSweep(this.g, this.sockets);
       this.hostCheck();
+      this.maybeAdvance();
       // غرفة فرغت ما لها مكان في «الغرف المفتوحة»
       const here = this.g.players.filter(x => x.connected !== false).length;
       this.lobbySync(here === 0 ? 'remove' : 'ping');
@@ -16634,6 +16814,7 @@ export class HuntRoom {
       phase: 'lobby',          // lobby | night | dawn | vote | expel | over
       round: 0,
       city: 'جدة',
+      dialect: 'ar',
       unit: { s: 'حي', p: 'أحياء' },
       killers: 1,
       districts: [],
@@ -16667,6 +16848,9 @@ export class HuntRoom {
           };
         }
         if (Number.isInteger(m.killers)) g.killers = Math.max(1, Math.min(3, m.killers));
+        /* لهجة الغرفة: يختارها المضيف فتصل كل الجوالات. كانت إعدادًا في
+           جوال كل لاعب وحده، فمن لم يضغط «لهجتنا» بنفسه ما وصلته. */
+        if (m.dialect === 'fy' || m.dialect === 'ar') g.dialect = m.dialect;
         return;
       }
 
@@ -16766,7 +16950,7 @@ export class HuntRoom {
       case 'again': {
         if (!isHost || g.phase !== 'over') return;
         g.phase = 'lobby';
-        g.round = 0; g.winner = null; g.news = ''; g.expel = null;
+        g.round = 0; g.winner = null; g.news = ''; g.newsFacts = null; g.expel = null;
         g.dawnList = []; g.activeTraps = []; g.pendingTraps = []; g.log = [];
         for (const p of g.players) {
           const fresh = this.blankPlayer(p.id, p.name, p.did);
@@ -16840,7 +17024,7 @@ export class HuntRoom {
 
     g.round = 1;
     g.winner = null; g.expel = null; g.news = '';
-    g.activeTraps = []; g.pendingTraps = [];
+    g.activeTraps = []; g.pendingTraps = []; g.newsFacts = null;
     g.log.unshift(`بدأت المطاردة في ${g.city}`);
     this.startNight();
   }
@@ -16930,13 +17114,18 @@ export class HuntRoom {
     const busy = [];
     for (const d in occ) if (occ[d].length >= 2) busy.push(d);
 
-    g.news = this.dawnNews({
+    const facts = {
       round: g.round,
       victims,
       aliveCount: g.players.filter(p => p.alive).length,
       crowded: busy,
       quiet: victims.length === 0,
-    });
+    };
+    g.news = this.dawnNews(facts);
+    /* الوقائع نفسها تُرسَل كذلك: الصفحة تصوغ منها خبر الفجر بنفس صياغة
+       الجهاز الواحد (ومعها جملة المدينة: ضباب فيفاء، بحر جدة…). كان خبر
+       الأونلاين بصياغةٍ ثانية فلا تلتقطه طبقة اللهجة. */
+    g.newsFacts = facts;
     g.dawnList = g.players.map(p => ({
       name: p.name, alive: p.alive,
       how: p.alive ? '' : (byTrap.includes(p.id) ? 'وُجد بلا أثر مواجهة' : (deaths.includes(p.id) ? 'اغتيل' : 'خرج بالتصويت')),
@@ -17056,6 +17245,8 @@ export class HuntRoom {
       districts: g.districts,
       adj: g.adj,
       news: g.news,
+      newsFacts: g.newsFacts || null,
+      dialect: g.dialect || 'ar',
       dawnList: g.dawnList,
       expel: g.expel,
       winner: g.winner,
@@ -17089,6 +17280,8 @@ export class HuntRoom {
     for (const [pid, ws] of this.sockets) {
       try { ws.send(JSON.stringify(this.viewFor(pid))); } catch { this.sockets.delete(pid); }
     }
+    /* كل ما يُبَثّ تغيّرٌ يستحق الحفظ. لا ننتظره: البثّ لا يتأخّر عليه. */
+    this.persist();
   }
 }
 
@@ -17183,6 +17376,20 @@ export class SquaresRoom {
     const ws = pair[1];
     ws.accept();
 
+    /* ── رمزٌ غلط لا يفتح غرفة وهمية (v220 — نفس إصلاح المطاردة في v218) ──
+       الغرفة تُنشأ بأول اتصال، فكان «ادخل» برمزٍ فيه حرف غلط يفتح غرفة
+       جديدة فاضية ويجعل الداخل مضيفها: ينتظر أصحابه في ردهةٍ لن يصلها
+       أحد. الآن لا يُنشئها إلا طلب الإنشاء الصريح (new=1) — أو صفحةٌ تحمل
+       مقعدًا في هذا الرمز (pid+tok): هذي الغرفة بلا تخزين، فالنشرة تمسحها،
+       ومن كانوا فيها يرجعون بمقاعدهم القديمة فيجتمعون في ردهتها من جديد
+       بدل أن يُقال لكلٍّ منهم «ما فيه غرفة» وهم كانوا فيها قبل ثوانٍ. */
+    if (!this.g && url.searchParams.get('new') !== '1' && !(pid && tok)) {
+      ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'nosuchroom',
+        m: 'ما فيه غرفة بهذا الكود — تأكّد منه أو اطلبه من المضيف. (لو كنت تنشئ غرفة: حدّث الصفحة وجرّب)' }));
+      ws.close(1000);
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
     const brandNew = !this.g;
     if (!this.g) this.init(code);
     if (brandNew) this.g.pub = wantsPublic;
@@ -17206,12 +17413,12 @@ export class SquaresRoom {
       if (did) p.did = String(did).slice(0, 64);
     } else {
       if (this.g.phase === 'race') {
-        ws.send(JSON.stringify({ t: 'err', m: 'الجولة جارية — انتظر نهايتها ثم ادخل.' }));
+        ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'busy', m: 'الجولة جارية — انتظر نهايتها ثم ادخل.' }));
         ws.close(1000);
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
       if (this.g.players.length >= SQ_MAX_PLAYERS) {
-        ws.send(JSON.stringify({ t: 'err', m: 'الغرفة ممتلئة — تسعة لاعبين كحد أقصى.' }));
+        ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'full', m: 'الغرفة ممتلئة — تسعة لاعبين كحد أقصى.' }));
         ws.close(1000);
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
@@ -17535,14 +17742,10 @@ const TARI_KINDS = {
     needsTones: true,                // ولا نبرة = لا جولة
     anon: true, tagged: true, ask: 'مين طلعت نبرته أصدق؟',
   },
-  guess: {
-    name: 'توقّع الأغلبية',
-    inputType: 'choice', recorders: 'all', vote: 'none', starAside: true,
-    needsOpts: true,                 // مطالبةٌ بلا خيارات ناقصة، فتُرفض
-    scoring: { agree: 8 },
-    collectMs: 24000, revealMs: 11000,
-    anon: false, ask: '',
-  },
+  /* «توقّع الأغلبية» (اختيارٌ من إجاباتٍ جاهزة) أُزيل نهائيًا بطلب يا٧
+     (٢٠ سبتمبر ٢٠٢٦): كل جولة كتابية يكتب فيها اللاعب جوابه بنفسه. بلا
+     مدخلٍ هنا يرفض tariNormPrompt أي سؤال guess — من البنك أو من
+     الأسئلة المضافة أو من prompts.json — فلا يرجع من أي باب. */
   free: {
     name: 'نص حر',
     inputType: 'text', recorders: 'all', vote: 'pickOne', starAside: true,
@@ -17649,14 +17852,6 @@ const TARI_BANK = [
   { id: 'uthr:34', kind: 'uthr', text: 'وش يقول {نجم} لو انكشف إنه ما قرأ الرسالة أصلًا؟' },
   { id: 'uthr:35', kind: 'uthr', text: 'وش عذر {نجم} لو دخل بيت غلط؟' },
 
-  { id: 'guess:42', kind: 'guess', text: 'وش يسوي {نجم} لو وصل المطعم ولقى الطلب غلط؟', opts: ['يأكله وما يقول شي', 'ينادي العامل بهدوء', 'يسوي مشكلة', 'يطلع ويطلب من مكان ثاني'] },
-  { id: 'guess:43', kind: 'guess', text: 'وش أول شي يسويه {نجم} أول ما يوصل البيت؟', opts: ['يرمي نفسه على السرير', 'يفتح الثلاجة', 'يفتح جواله ساعة', 'يبدأ يرتّب'] },
-  { id: 'guess:44', kind: 'guess', text: 'لو ضاع جوال {نجم}، وش أول رد فعل؟', opts: ['يدور بهدوء', 'يتّهم أقرب واحد له', 'ينهار تمامًا', 'يقول «معليه» ويكمل'] },
-  { id: 'guess:45', kind: 'guess', text: 'لو صار {نجم} مسؤولًا عن الرحلة، وش يصير؟', opts: ['جدول دقيقة بدقيقة', 'يضيّعنا وينكر', 'ينسى الحجز', 'ينجح ويذكّرنا كل يوم'] },
-  { id: 'guess:46', kind: 'guess', text: 'وش يطلب {نجم} لو عزمناه على عشاء؟', opts: ['أغلى شي في القائمة', 'نفس طلب اللي جنبه', 'شي ما أحد سمع فيه', 'يقول «أنا شبعان» ثم يأكل من الكل'] },
-  { id: 'guess:47', kind: 'guess', text: 'لو تأخّرنا على {نجم} ساعة، وش يسوي؟', opts: ['يتصل كل خمس دقائق', 'يطلع ويرجع البيت', 'ما ينتبه أصلًا', 'يجي بعدنا بساعتين'] },
-  { id: 'guess:48', kind: 'guess', text: 'أي وصف يناسب {نجم} أكثر؟', opts: ['أهدأ واحد فينا', 'أعلى واحد صوت', 'اللي دايم متأخّر', 'اللي دايم يخطّط'] },
-  { id: 'guess:49', kind: 'guess', text: 'وش يسوي {نجم} في اجتماع ممل؟', opts: ['يتظاهر بالانتباه', 'ينام صح', 'يسأل سؤالًا يطوّل الاجتماع', 'يطلع بحجّة'] },
 
   { id: 'free:50', kind: 'free', text: 'كمّل: أكثر جملة يقولها {نجم} كل يوم هي…' },
   { id: 'free:51', kind: 'free', text: 'كمّل: لو صار {نجم} رئيسًا، أول قرار له…' },
@@ -17799,12 +17994,6 @@ const TARI_BANK = [
   { id: 'uthr:206', kind: 'uthr', text: 'وش عذر {نجم} لو وعدكم وما جاء ولا اعتذر؟' },
   { id: 'uthr:207', kind: 'uthr', text: 'وش يقول {نجم} لو انكشف إنه ما شاف الفيلم اللي يتكلّم عنه؟' },
 
-  { id: 'guess:200', kind: 'guess', text: 'لو انكسر شي في البيت، وش يسوي {نجم}؟', opts: ['يركّبه بالغراء ويسكت', 'يتّهم أصغر واحد', 'يعترف من أول ثانية', 'يحطّه مكانه ويطنّش'] },
-  { id: 'guess:201', kind: 'guess', text: '{نجم} في المطعم — وش يطلب؟', opts: ['نفس طلبه من عشر سنين', 'أغرب شي في القائمة', '«سوّوا لي مثلكم»', 'يطلب ثلاثة وياكل واحد'] },
-  { id: 'guess:202', kind: 'guess', text: 'لو صار {نجم} سائق التوصيلة، وش يصير؟', opts: ['يوصّل قبل الوقت', 'يضيع ويقول «مختصر»', 'يشغّل أغانيه بأعلى صوت', 'يوقف يشتري قهوة قبل'] },
-  { id: 'guess:203', kind: 'guess', text: 'وش يسوي {نجم} لو شاف صرصورًا؟', opts: ['يقتله ببرود', 'يصرخ وينط', 'يطلع من البيت', 'يصوّره ويرسله للقروب'] },
-  { id: 'guess:204', kind: 'guess', text: 'لو أعطيناه المايك في العرس، وش يسوي {نجم}؟', opts: ['خطبة عشر دقايق', 'كلمتين ويهرب', 'يغنّي', 'يعطيه لغيره فورًا'] },
-  { id: 'guess:205', kind: 'guess', text: 'لو {نجم} طبخ لكم، وش تتوقّعون؟', opts: ['أطيب أكلة', 'مالح زيادة', 'يطلب مطعم بالسر', 'يحرق المطبخ'] },
 
   /* ── من ذاكرتك ── الجملة تُلمَح ثوانيَ ثم تُقال حفظًا، والبديلان
      يختلفان عنها بتفصيلةٍ واحدة: رقم أو اسم أو يوم أو لون. لو اختلفا
@@ -17859,6 +18048,98 @@ const TARI_BANK = [
     alts: ['صاحبي طلب برجر بلا مخلل وجاه مخلل زيادة وقال خلاص عادي ما أبي أتكلّم', 'صاحبي طلب برجرين بلا بصل وجاه بصل زيادة وقال خلاص عادي ما أبي أتكلّم'] },
   { id: 'zakira:324', kind: 'zakira', text: 'الساعة كانت ثلاث ونص لمّا رن جواله وقام يدوّره تحت السرير',
     alts: ['الساعة كانت أربع ونص لمّا رن جواله وقام يدوّره تحت السرير', 'الساعة كانت ثلاث ونص لمّا رن جواله وقام يدوّره تحت الكنب'] },
+
+  /* ── v219: جملٌ كتابية جديدة (طلب يا٧: «اكتب عنوان لحياة فلان» وأخواتها) ── */
+  { id: 'free:300', kind: 'free', text: 'اكتب عنوان مسلسل رمضاني بطله {نجم}' },
+  { id: 'free:301', kind: 'free', text: 'اكتب عنوان خبر في جريدة بكرة عن {نجم}' },
+  { id: 'free:302', kind: 'free', text: 'اكتب اسم الأغنية اللي تحكي قصة {نجم}' },
+  { id: 'free:303', kind: 'free', text: 'اكتب اسم الفصل اللي يعيشه {نجم} الحين لو كانت حياته رواية' },
+  { id: 'free:304', kind: 'free', text: 'اكتب شعار {نجم} في الحياة بثلاث كلمات' },
+  { id: 'free:305', kind: 'free', text: 'اكتب أول سطر في مذكّرات {نجم}' },
+  { id: 'free:306', kind: 'free', text: 'اكتب آخر رسالة يرسلها {نجم} قبل ما ينام' },
+  { id: 'free:307', kind: 'free', text: 'اكتب النصيحة اللي يعطيها {نجم} لنفسه وهو صغير' },
+  { id: 'free:308', kind: 'free', text: 'اكتب تعليق {نجم} تحت صورة أكله' },
+  { id: 'free:309', kind: 'free', text: 'اكتب البايو اللي يحطّه {نجم} في حسابه' },
+  { id: 'free:310', kind: 'free', text: 'اكتب عنوان محاضرة يلقيها {نجم} في الجامعة' },
+  { id: 'free:311', kind: 'free', text: 'اكتب الوظيفة اللي تناسب {نجم} أكثر من أي أحد' },
+  { id: 'free:312', kind: 'free', text: 'اكتب إعلانًا يسوّق فيه {نجم} لنفسه' },
+  { id: 'free:313', kind: 'free', text: 'اكتب اسم الماركة لو طلّع {نجم} خط ملابس' },
+  { id: 'free:314', kind: 'free', text: 'اكتب اسم الحركة اللي يسوّيها {نجم} لمّا يفوز' },
+  { id: 'free:315', kind: 'free', text: 'اكتب عنوان كتاب تعليمي يكتبه {نجم} للمبتدئين' },
+  { id: 'free:316', kind: 'free', text: 'اكتب أول رسالة يرسلها {نجم} في قروب العائلة الصبح' },
+  { id: 'free:317', kind: 'free', text: 'اكتب ملاحظة المعلّم عن {نجم} في الشهادة' },
+  { id: 'free:318', kind: 'free', text: 'اكتب اسم البرنامج اللي يقدّمه {نجم} لو صار مذيعًا' },
+  { id: 'free:319', kind: 'free', text: 'اكتب اسم الرحلة لو {نجم} نظّم لنا سفرة' },
+  { id: 'free:320', kind: 'free', text: 'اكتب ملاحظة الكاشير عن {نجم} بعد ما خدمه' },
+  { id: 'free:321', kind: 'free', text: 'اكتب تقييم {نجم} على خرائط قوقل لبيته' },
+  { id: 'free:322', kind: 'free', text: 'اكتب الهاشتاق اللي يترند لو صار {نجم} مشهورًا فجأة' },
+  { id: 'free:323', kind: 'free', text: 'اكتب عنوان الفلوق لو صوّر {نجم} يومه كامل' },
+  { id: 'free:324', kind: 'free', text: 'اكتب اسم {نجم} المحفوظ في جوال أمه' },
+  { id: 'free:325', kind: 'free', text: 'اكتب أول شي يقوله {نجم} لو فاز بمليون' },
+  { id: 'free:326', kind: 'free', text: 'اكتب الأمنية اللي يطلبها {نجم} لو طلع له مارد المصباح' },
+  { id: 'free:327', kind: 'free', text: 'اكتب اسم المتحف لو سوّوا متحفًا لأغراض {نجم}' },
+  { id: 'free:328', kind: 'free', text: 'اكتب نصيحة {نجم} للعرسان الجدد' },
+  { id: 'free:329', kind: 'free', text: 'اكتب شرط {نجم} الوحيد لو بيسكن معك' },
+  { id: 'free:330', kind: 'free', text: 'اكتب اسم الطبخة اللي اخترعها {نجم}' },
+  { id: 'free:331', kind: 'free', text: 'اكتب أول شي في قائمة أحلام {نجم}' },
+  { id: 'free:332', kind: 'free', text: 'اكتب عنوان مقال ينشره {نجم} في الجريدة' },
+  { id: 'free:333', kind: 'free', text: 'اكتب هتاف الجمهور لو صار {نجم} لاعب كورة' },
+  { id: 'free:334', kind: 'free', text: 'اكتب عنوان الدورة التدريبية اللي يقدّمها {نجم}' },
+  { id: 'free:335', kind: 'free', text: 'اكتب رسالة {نجم} لمديره يطلب فيها إجازة' },
+  { id: 'free:336', kind: 'free', text: 'اكتب رد {نجم} لو أحد قال له «وحشتنا»' },
+  { id: 'free:337', kind: 'free', text: 'اكتب الكلمة اللي يقولها {نجم} لمّا ينصدم' },
+  { id: 'free:338', kind: 'free', text: 'اكتب اسم ألبوم {نجم} لو صار مطربًا' },
+  { id: 'free:339', kind: 'free', text: 'اكتب عنوان قصيدة كتبها {نجم} لأكلته المفضّلة' },
+  { id: 'free:340', kind: 'free', text: 'اكتب اسم الواي فاي في بيت {نجم}' },
+  { id: 'free:341', kind: 'free', text: 'اكتب شعار حملة {نجم} لانتخابات مجلس الطلاب' },
+  { id: 'free:342', kind: 'free', text: 'اكتب قائمة الممنوعات في بيت {نجم}' },
+  { id: 'free:343', kind: 'free', text: 'اكتب اسم اللعبة اللي يخترعها {نجم}' },
+  { id: 'free:344', kind: 'free', text: 'اكتب اللوحة اللي يعلّقها {نجم} على باب غرفته' },
+  { id: 'free:345', kind: 'free', text: 'اكتب الإشعار اللي يطلع لـ{نجم} أكثر شي في جواله' },
+  { id: 'free:346', kind: 'free', text: 'اكتب عنوان يوميات {نجم} في الإجازة' },
+  { id: 'free:347', kind: 'free', text: 'اكتب المهارة اللي يقدر {نجم} يعلّمها للعالم' },
+  { id: 'free:348', kind: 'free', text: 'اكتب اسم حساب {نجم} في سناب' },
+  { id: 'free:349', kind: 'free', text: 'اكتب الجملة اللي يختم فيها {نجم} أي رسالة' },
+  { id: 'free:350', kind: 'free', text: 'اكتب الجملة المكتوبة تحت صورة {نجم} في ألبوم التخرّج' },
+  { id: 'free:351', kind: 'free', text: 'اكتب أغرب هدية ممكن يجيبها {نجم} لعيد ميلادك' },
+  { id: 'free:352', kind: 'free', text: 'اكتب اسم القطوة لو ربّاها {نجم}' },
+  { id: 'free:353', kind: 'free', text: 'اكتب الشي اللي يبي {نجم} الناس يتذكّرونه فيه' },
+  { id: 'free:354', kind: 'free', text: 'اكتب عنوان خطة {نجم} للسنوات الخمس الجاية' },
+  { id: 'free:355', kind: 'free', text: 'اكتب أول تغريدة لـ{نجم} لو صار عنده مليون متابع' },
+  { id: 'free:356', kind: 'free', text: 'اكتب ترحيب {نجم} بالركّاب لو صار مضيف طيران' },
+  { id: 'free:357', kind: 'free', text: 'اكتب اسم المهرجان لو سوّوا مهرجانًا عن {نجم}' },
+  { id: 'free:358', kind: 'free', text: 'اكتب وصف {نجم} في إعلان يبحث عن شريك سكن' },
+  { id: 'free:359', kind: 'free', text: 'اكتب الرقم القياسي اللي يدخل فيه {نجم} موسوعة غينيس' },
+  { id: 'sentence:300', kind: 'sentence', text: '{نجم} يقول «دقيقتين وأجيك» ويجي بعد…' },
+  { id: 'sentence:301', kind: 'sentence', text: 'لو صار {نجم} مرشدًا سياحيًا، أول مكان يودّينا له…' },
+  { id: 'sentence:302', kind: 'sentence', text: 'لو صار عند {نجم} يوم إجازة زيادة، بيقضيه…' },
+  { id: 'sentence:303', kind: 'sentence', text: '{نجم} يعرف إن يومه بيكون حلو لمّا…' },
+  { id: 'sentence:304', kind: 'sentence', text: 'لو كتب {نجم} كتاب طبخ، أول وصفة فيه…' },
+  { id: 'sentence:305', kind: 'sentence', text: '{نجم} يقول «هذي آخر مرة» كل ما…' },
+  { id: 'sentence:306', kind: 'sentence', text: 'لو سافر {نجم} لحاله، أول صورة يرسلها لنا…' },
+  { id: 'sentence:307', kind: 'sentence', text: 'أكثر شي يفتخر فيه {نجم} وما أحد انتبه له…' },
+  { id: 'sentence:308', kind: 'sentence', text: '{نجم} يضحك من قلبه لمّا…' },
+  { id: 'sentence:309', kind: 'sentence', text: 'لو صار {نجم} مدير المدرسة، الطلاب بيحبّونه لأن…' },
+  { id: 'laqab:300', kind: 'laqab', text: 'وش لقب {نجم} لو صار بهلوانًا في السيرك؟' },
+  { id: 'laqab:301', kind: 'laqab', text: 'لو ركض {نجم} في ماراثون، وش يكتبون على قميصه؟' },
+  { id: 'laqab:302', kind: 'laqab', text: 'وش يسمّون {نجم} عمّال المطعم اللي يطلب منه دايم؟' },
+  { id: 'laqab:303', kind: 'laqab', text: 'لو صار {نجم} حكمًا في مباراة، وش يسمّيه الجمهور؟' },
+  { id: 'laqab:304', kind: 'laqab', text: 'وش اسم {نجم} لو كان الشرير في فيلم كرتون؟' },
+  { id: 'laqab:305', kind: 'laqab', text: 'لو صار {نجم} ملك جزيرة، وش لقبه؟' },
+  { id: 'laqab:306', kind: 'laqab', text: 'وش لقب {نجم} لو صار بطل ألعاب إلكترونية؟' },
+  { id: 'laqab:307', kind: 'laqab', text: 'لو سمّوا إعصارًا على {نجم}، وش اسمه؟' },
+  { id: 'laqab:308', kind: 'laqab', text: 'لو صار {نجم} نكهة آيس كريم، وش اسمها؟' },
+  { id: 'laqab:309', kind: 'laqab', text: 'وش كان لقب {نجم} في الحارة وهو صغير؟' },
+  { id: 'uthr:300', kind: 'uthr', text: 'وش عذر {نجم} لو نام في نص السالفة؟' },
+  { id: 'uthr:301', kind: 'uthr', text: 'وش عذر {نجم} لو قفل السيارة والمفتاح داخلها؟' },
+  { id: 'uthr:302', kind: 'uthr', text: 'وش عذر {نجم} لو طلع قدّام الناس بثوب مقلوب؟' },
+  { id: 'uthr:303', kind: 'uthr', text: 'وش عذر {نجم} لو ضحك في موقف ما يضحّك أبد؟' },
+  { id: 'uthr:304', kind: 'uthr', text: 'وش يقول {نجم} لو انكشف إنه يحفظ أغاني أطفال كاملة؟' },
+  { id: 'uthr:305', kind: 'uthr', text: 'وش عذر {نجم} لو نسي اسم واحد يعرفه من سنين؟' },
+  { id: 'uthr:306', kind: 'uthr', text: 'وش عذر {نجم} لو طلع من المطبخ ومعه نص الكيكة؟' },
+  { id: 'uthr:307', kind: 'uthr', text: 'وش يقول {نجم} لو صحّيناه وهو يحلف إنه كان صاحي؟' },
+  { id: 'uthr:308', kind: 'uthr', text: 'وش عذر {نجم} لو ما ضحك على نكتتك؟' },
+  { id: 'uthr:309', kind: 'uthr', text: 'وش عذر {نجم} لو طبخ لنا والأكل طلع ني؟' },
 ];
 
 /* المطالبة تُسلّم للمحرّك «مُسوّاة»: ما ينقصها يُكمَّل من نمطها.
@@ -17971,7 +18252,10 @@ export class TariRoom {
          بدل أن تعلق على شاشة تصويتٍ فارغة ست ساعات. */
       if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
         const k = TARI_KINDS[this.room.kind];
-        if (k && k.inputType === 'audio' && this.room.phase !== 'brief') this.room.lostAudio = true;
+        /* الكشف خارج الحساب: نقاطه أُضيفت فعلًا، وإعادة جولته من أولها
+           تحسبها مرة ثانية فوق الأولى. ما ضاع فيه إعادة سماعٍ لا أكثر،
+           والشاشة تمشي بـ«تم» كعادتها. الجمع والتصويت وحدهما يُعادان. */
+        if (k && k.inputType === 'audio' && (this.room.phase === 'collect' || this.room.phase === 'vote')) this.room.lostAudio = true;
       }
     });
   }
@@ -19530,6 +19814,20 @@ export class RedVsBlueRoom {
     const ws = pair[1];
     ws.accept();
 
+    /* ── رمزٌ غلط لا يفتح غرفة وهمية (v220 — نفس إصلاح المطاردة في v218) ──
+       الغرفة تُنشأ بأول اتصال، فكان «ادخل» برمزٍ فيه حرف غلط يفتح غرفة
+       جديدة فاضية ويجعل الداخل مضيفها: ينتظر أصحابه في ردهةٍ لن يصلها
+       أحد. الآن لا يُنشئها إلا طلب الإنشاء الصريح (new=1) — أو صفحةٌ تحمل
+       مقعدًا في هذا الرمز (pid+tok): هذي الغرفة بلا تخزين، فالنشرة تمسحها،
+       ومن كانوا فيها يرجعون بمقاعدهم القديمة فيجتمعون في ردهتها من جديد
+       بدل أن يُقال لكلٍّ منهم «ما فيه غرفة» وهم كانوا فيها قبل ثوانٍ. */
+    if (!this.g && url.searchParams.get('new') !== '1' && !(pid && tok)) {
+      ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'nosuchroom',
+        m: 'ما فيه غرفة بهذا الكود — تأكّد منه أو اطلبه من المضيف. (لو كنت تنشئ غرفة: حدّث الصفحة وجرّب)' }));
+      ws.close(1000);
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
     const brandNew = !this.g;
     if (!this.g) this.init(code);
     if (brandNew) this.g.pub = wantsPublic;
@@ -19553,12 +19851,12 @@ export class RedVsBlueRoom {
       if (did) p.did = String(did).slice(0, 64);
     } else {
       if (this.g.phase === 'play') {
-        ws.send(JSON.stringify({ t: 'err', m: 'المعركة جارية — انتظر نهايتها ثم ادخل.' }));
+        ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'busy', m: 'المعركة جارية — انتظر نهايتها ثم ادخل.' }));
         ws.close(1000);
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
       if (this.g.players.length >= RVB_MAX_PLAYERS) {
-        ws.send(JSON.stringify({ t: 'err', m: 'الغرفة ممتلئة — أربعة لاعبين كحد أقصى.' }));
+        ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'full', m: 'الغرفة ممتلئة — أربعة لاعبين كحد أقصى.' }));
         ws.close(1000);
         return new Response(null, { status: 101, webSocket: pair[0] });
       }
