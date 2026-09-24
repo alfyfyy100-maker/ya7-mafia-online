@@ -628,10 +628,10 @@ const RoomCommon = {
     const hostId = this.room.hostId;
     const openToName = (p) => {
       if (p.jid && jid && p.jid === jid) return true;          // نفس التبويب: هو هو
-      if (p.did) return !!did && p.did === did;                // الحساب يثبت نفسه
+      if (p.did) return !!did && p.did === did;                // الحساب يثبت نفسه بـ did موثوق
       if (hostId && p.id === hostId) return false;             // مقعد المضيف لا يُفتح باسم
-      if (p.jid && jid && p.jid !== jid) return false;         // تبويبان مختلفان بنفس الاسم
-      return true;                                             // مقعد بلا هوية ثابتة
+      if (p.jid) return false;                                 // أي مقعدٍ عُرف تبويبُه: الاسم وحده لا يفتحه — لا بتبويبٍ مختلف ولا بلا تبويب إطلاقًا (v255؛ كان الشرط `p.jid && jid && p.jid !== jid` يقصّر حين يكون jid المهاجم فارغًا فيمرّ الطلب بلا jid ويسرق مقعد كل لاعبٍ طبيعيّ في طاريك)
+      return true;                                             // مقعد بلا هوية ثابتة إطلاقًا — أصل الميزة (متصفّح داخل تطبيق بلا تخزين)
     };
     const pick = () => this.room.players.filter(
       p => !p.connected && !p.kicked && p.name === want && openToName(p));
@@ -6233,12 +6233,12 @@ export class WalimaRoom {
         player.id = newId;
         if (this.room.hostId === oldId) this.room.hostId = newId;
         const stale = this.sockets.get(oldId);
-        if (stale) { try { stale.close(); } catch {} }
+        if (stale) { try { stale.close(1000, 'takeover'); } catch {} }
         this.sockets.delete(oldId);
-      } else {
-        const stale = this.sockets.get(oldId);
-        if (stale && stale !== server) { try { stale.close(); } catch {} }
       }
+      /* v222: كان هنا إغلاقٌ ثانٍ للمقبس القديم بلا سبب، يسبق إغلاق «takeover»
+         أدناه فيبتلع سببه — فلا يعرف التبويب القديم أنّ مقعده فُتح في مكانٍ آخر،
+         ويعيد الاتصال، فيتناوب التبويبان على المقعد بلا نهاية. */
     }
 
     // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
@@ -6249,13 +6249,33 @@ export class WalimaRoom {
       return new Response(null, { status: 101, webSocket: client });
     }
 
+    /* v222 — توكن ضائع وسط المباراة (متصفّح داخل تطبيق بلا تخزين، مسح بيانات،
+       جهاز ثانٍ): كان يُردّ بـ«الوليمة بدأت» وهو ضيفٌ فيها. الآن مقعدٌ منقطعٌ
+       بنفس الاسم يستردّه صاحبه — بنفس حرّاس reclaimByName (المضيف والحساب
+       وتبويبٌ آخر لا تُفتح بالاسم، والمتصل لا يُمسّ أبدًا). */
+    let reclaimed = false;
+    if (!player && this.room.phase !== 'lobby' && this.room.phase !== 'over') {
+      const _did = url.searchParams.get('did') || '', _jid = url.searchParams.get('jid') || '';
+      let mine = this.reclaimByName(name, { did: _did, jid: _jid });
+      /* أضيق من القاعدة المشتركة، عمدًا: مقعدٌ عُرف تبويبُه (jid) لا يُفتح لطلبٍ بلا
+         jid. وإلا فمن عرف رمزَ غرفةٍ عامّة واسمَ ضيفٍ فيها ينتظر انقطاعَه ثوانيَ
+         فيأخذ مقعدَه ودورَه السرّيّ — وتدويرُ التوكن يقفل صاحبَه خارج مباراته.
+         يبقى المسار مفتوحًا لمن صُمِّم له: متصفّحٌ بلا تخزين (لا jid له من الأصل)
+         وصاحبُ الحساب. */
+      if (mine && mine.jid && mine.jid !== _jid && !(mine.did && mine.did === _did)) mine = null;
+      if (mine) { player = mine; player.seatToken = newSeatToken(); reclaimed = true; }
+    }
+
     if (!player) {
-      if (this.room.phase !== 'lobby') {
-        server.send(JSON.stringify({ type: 'error', message: 'الوليمة بدأت، ما تقدر تنضم الآن' }));
+      /* v222: طور الحكم ('over') ردهةٌ بين مباراتين — من وصل متأخرًا يدخل الآن
+         ويأخذ دورًا في «وليمةٍ أخرى»، بدل «الوليمة بدأت» وهي منتهية. */
+      const openDoor = this.room.phase === 'lobby' || this.room.phase === 'over';
+      if (!openDoor) {
+        server.send(JSON.stringify({ type: 'error', message: 'الوليمة بدأت، ما تقدر تنضم الآن — ادخل بعد الحكم' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
-      if (this.room.players.length >= 10) {
+      if (this.room.players.filter(q => !q.kicked).length >= 10) {
         server.send(JSON.stringify({ type: 'error', message: 'المائدة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -6268,7 +6288,15 @@ export class WalimaRoom {
       if (_jid && /^[a-f0-9]{32}$/i.test(_jid)) player.jid = _jid;
     } else {
       player.connected = true;
+      if (reclaimed) {
+        const _j = url.searchParams.get('jid');
+        if (_j && /^[a-f0-9]{32}$/i.test(_j)) player.jid = _j;
+      }
     }
+    player.goneAt = 0; player.left = false;
+    /* مقعد المنشئ يُولد من /create بلا jid، ويدخل بتوكنه فلا يمرّ بفرع التسجيل:
+       نسجّل تبويبَه هنا، وإلا بقي مقعدُه «بلا هويّة» مفتوحًا بالاسم بعد انتقال الاستضافة. */
+    if (!player.jid) { const _j0 = url.searchParams.get('jid'); if (_j0 && /^[a-f0-9]{32}$/i.test(_j0)) player.jid = _j0; }
     if (!player.seatToken) player.seatToken = newSeatToken();
 
     this.noteAccount(url, player);
@@ -6287,7 +6315,8 @@ export class WalimaRoom {
     await this.persist();
     this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code, seatToken: player.seatToken });
     this.broadcastState();
-    if (player.role) this.sendPrivate(player.id, this.roleMessageFor(player));
+    if (player.role && this.room.phase !== 'lobby') this.sendPrivate(player.id, this.roleMessageFor(player));
+    this.flushWhispers(player.id);    // همساتٌ وصلت وهو منقطع (v222)
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -6315,13 +6344,18 @@ export class WalimaRoom {
     const pub = {
       type: 'state', phase: this.room.phase, code: this.room.code, hostId: this.room.hostId,
       round: this.room.round, rounds: this.room.rounds,
+      /* رقم المباراة في هذي الغرفة: به يعرف الجوال أنّ مباراةً جديدة بدأت فيفرّغ
+         صندوق همساته ومسودّاته، ولا يعيد إرسال كلمةٍ علقت من مباراةٍ سابقة. */
+      game: this.room.gameNo || 0,
+      /* من ننتظر رجوعه (انقطع قبل ثوانٍ ولم يسلّم): يراه الباقون «انقطع — ننتظره» */
+      graceFor: this.graceNames(),
       scene: this.room.phase === 'lobby' ? null : this.room.scene && {
         occ: this.room.scene.occ, crime: this.room.scene.crime, detail: this.room.scene.detail,
       },
       clues: this.room.phase === 'lobby' ? [] : this.visibleClues(),
       pointer: this.room.phase === 'lobby' ? null : (this.pointerVisible() ? (this.room.pointer || null) : null),
       family: !!this.room.family,
-      players: this.room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected, sus: p.sus || 0, submitted: !!p.submitted })),
+      players: this.room.players.filter(p => !p.kicked).map(p => ({ id: p.id, name: p.name, connected: p.connected, sus: p.sus || 0, submitted: !!p.submitted })),
       transcript: this.room.transcript,
       reveal: this.room.reveal || 'round',
       hostSays: this.room.hostSays, lastSus: this.room.lastSus, thinking: !!this.room.thinking,
@@ -6405,11 +6439,19 @@ export class WalimaRoom {
       this.room.family = msg.family === true;
       await this.startGame(msg.rounds);
     }
-    if (msg.type === 'statement' && this.room.phase === 'writing') await this.handleStatement(playerId, msg.text);
+    if (msg.type === 'leave') { await this.handleLeave(playerId); return; }
+    if (msg.type === 'whisperAck') { this.ackWhisper(playerId, msg.id); return; }
+    /* v222: الكلمة تحمل رقم جولتها ومباراتها — كلمةٌ علقت في مقبسٍ ميت ثم وصلت
+       بعد أن مضت جولتها لا تُسجَّل على الجولة التالية. (الصفحات القديمة لا ترسل
+       الرقمين فتمرّ كما كانت.) */
+    if (msg.type === 'statement' && this.room.phase === 'writing'
+        && (msg.round == null || Number(msg.round) === this.room.round)
+        && (msg.game == null || Number(msg.game) === (this.room.gameNo || 0))) await this.handleStatement(playerId, msg.text);
     if (msg.type === 'nextRound' && playerId === this.room.hostId && this.room.phase === 'beat') await this.nextRound();
     if (msg.type === 'hostForce' && playerId === this.room.hostId && this.room.phase === 'writing') await this.forceRound();
     if (msg.type === 'whisper') await this.handleWhisper(playerId, msg.toId, msg.text);
-    if (msg.type === 'vote' && this.room.phase === 'voting') await this.handleVote(playerId, msg.targetId);
+    if (msg.type === 'vote' && this.room.phase === 'voting'
+        && (msg.game == null || Number(msg.game) === (this.room.gameNo || 0))) await this.handleVote(playerId, msg.targetId);
     if (msg.type === 'hostForce' && playerId === this.room.hostId && this.room.phase === 'voting') await this.runHost(true);
   }
 
@@ -6421,15 +6463,73 @@ export class WalimaRoom {
        نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
     if (ws && this.sockets.get(playerId) !== ws) return;
     const p = this.findPlayer(playerId);
-    if (p) p.connected = false;
+    if (p) { p.connected = false; if (!p.left) p.goneAt = Date.now(); }
     this.sockets.delete(playerId);
     if (this.room.hostId === playerId) {
-      const next = this.room.players.find(x => x.connected);
+      const next = this.room.players.find(x => x.connected && !x.kicked);
       if (next) this.room.hostId = next.id;
     }
     await this.persist();
     this.broadcastState();
-    // ما ننتظر منقطعًا: لو الباقون سلّموا (أو صوّتوا)، امضِ
+    /* المنقطع يُنتظر مهلةَ رجوع قصيرة (v222) ثم تمضي المائدة بلا كلمته */
+    await this.maybeAdvance();
+  }
+
+  /* ══════════ مهلة الرجوع (v222) ══════════
+     شبكة الجوال تنقطع ثوانيَ ثم ترجع (تبديل برج، رجوع من واتساب لإرسال الرابط).
+     كان الانقطاع = «لا ننتظره»: لو سلّم الباقون في تلك الثواني انتهت الجولة بلا
+     كلمته، فيرجع ويجد حقل الكتابة اختفى وما كتبه «ما انرسل». الآن من انقطع ولم
+     يسلّم يُنتظر WL_GRACE_MS من لحظة انقطاعه، ثم تمضي المائدة وحدها. من خرج بزرّ
+     الخروج أو طُرد لا يُنتظر، وزرّ «تجاوز المتأخّرين» عند المضيف يتخطّى المهلة. */
+  graceLeft(){
+    const ph = this.room.phase;
+    if (ph !== 'writing' && ph !== 'voting') return 0;
+    const G = WalimaRoom.GRACE_MS, now = Date.now();
+    let left = 0;
+    for (const p of this.room.players) {
+      if (p.connected || p.kicked || p.left || !p.goneAt) continue;
+      const done = ph === 'writing' ? !!p.submitted : !!(this.room.votes && this.room.votes[p.id]);
+      if (done) continue;
+      left = Math.max(left, p.goneAt + G - now);
+    }
+    return Math.max(0, left);
+  }
+  graceNames(){
+    if (this.graceLeft() <= 0) return [];
+    const ph = this.room.phase, G = WalimaRoom.GRACE_MS, now = Date.now();
+    return this.room.players.filter(p => !p.connected && !p.kicked && !p.left && p.goneAt && p.goneAt + G > now
+      && !(ph === 'writing' ? p.submitted : (this.room.votes && this.room.votes[p.id]))).map(p => p.name);
+  }
+  armGrace(ms){
+    if (this._graceT) { try { clearTimeout(this._graceT); } catch {} }
+    this._graceT = setTimeout(() => {
+      this._graceT = null;
+      this.maybeAdvance().then(() => this.broadcastState()).catch(() => {});
+    }, ms + 60);
+  }
+  onBootGhost(p, now){ p.goneAt = now; }                 // بعد نشرة: الكل «انقطع الآن»
+  maybeAdvanceOnDisconnect(){ return this.maybeAdvance(); }
+
+  /* خروجٌ مقصود (زرّ «خروج»): لا مهلة رجوع. في الردهة وبين المباراتين يُشطب
+     المقعد فلا يبقى «غائب» في القائمة إلى الأبد؛ وسط المباراة يبقى اسمه في
+     الحكم ويمضي الطور بلا انتظاره. */
+  async handleLeave(playerId){
+    const p = this.findPlayer(playerId);
+    if (!p) return;
+    p.left = true; p.connected = false; p.goneAt = 0;
+    const sock = this.sockets.get(playerId);
+    this.sockets.delete(playerId);
+    if (sock) { try { sock.close(1000, 'left'); } catch {} }
+    if (this.room.phase === 'lobby' || this.room.phase === 'over') {
+      this.room.players = this.room.players.filter(x => x.id !== playerId);
+    }
+    if (this.room.hostId === playerId) {
+      const next = this.room.players.find(x => x.connected && !x.kicked);
+      if (next) this.room.hostId = next.id;
+    }
+    this.dropWhispers(playerId);
+    await this.persist();
+    this.broadcastState();
     await this.maybeAdvance();
   }
 
@@ -6496,7 +6596,9 @@ export class WalimaRoom {
     /* مباراةٌ جديدة في الغرفة نفسِها: الهمسةُ تعود لكلِّ ضيف، ولا
        يُورَّث استجوابٌ ولا صوتٌ من المباراة السابقة. */
     this.room.ask = null; this.room.votes = {};
-    this.room.players.forEach(p => { p.whisperUsed = false; });
+    this.room.players.forEach(p => { p.whisperUsed = false; p.goneAt = 0; p.left = false; });
+    this.room.gameNo = (this.room.gameNo || 0) + 1;
+    this._wq = new Map();             // همساتٌ لم تُؤكَّد من مباراةٍ سابقة لا تعبر
     this.room.phase = 'writing';
     await this.persist();
 
@@ -6506,7 +6608,7 @@ export class WalimaRoom {
 
   allIn(){
     const live = this.room.players.filter(p => p.connected && !p.kicked);
-    return live.length > 0 && live.every(p => p.submitted);
+    return live.length > 0 && live.every(p => p.submitted) && this.graceLeft() <= 0;
   }
 
   /* ══════════ الهمس ══════════
@@ -6522,12 +6624,37 @@ export class WalimaRoom {
     if (!to || to.id === from.id) { this.sendPrivate(from.id, { type:'error', message:'اختر ضيفاً غير نفسك' }); return; }
     const clean = cleanText(text, WL_MAX_STATEMENT);
     if (clean.length < 2) { this.sendPrivate(from.id, { type:'error', message:'اكتب همستك أولاً' }); return; }
+    if (to.kicked || to.left) { this.sendPrivate(from.id, { type:'error', message:'هذا الضيف غادر المائدة — اختر غيره' }); return; }
     from.whisperUsed = true;
     await this.persist();
-    this.sendPrivate(to.id, { type: 'whisper', from: from.name, text: clean });
+    /* v222: كانت تُرسَل مرّةً وتُنسى — فهمسةٌ لضيفٍ انقطع لحظتها (أو مقبسُه ميتٌ
+       ولم ينكشف بعد) تضيع للأبد وصاحبها احترقت همستُه الوحيدة. الآن تبقى في
+       ذاكرة الكائن (لا في this.room ولا في التخزين ولا في أي حالةٍ مبثوثة) حتى
+       يؤكّد جوالُ المقصود استلامَها، وتُعاد عليه عند رجوعه. الجوال يُسقط المكرّر
+       بالمعرّف. «تُقال مرّةً وتُسمع مرّة» باقية — لكنها صارت تُسمع فعلًا. */
+    const item = { id: newSeatToken().slice(0, 12), from: from.name, text: clean, sent: 0 };
+    if (!this._wq) this._wq = new Map();
+    const q = this._wq.get(to.id) || [];
+    q.push(item); this._wq.set(to.id, q);
+    this.flushWhispers(to.id);
     this.sendPrivate(from.id, { type: 'whisperSent', to: to.name });
     this.broadcastState();
   }
+  flushWhispers(id){
+    const q = this._wq && this._wq.get(id);
+    if (!q || !q.length || !this.sockets.get(id)) return;
+    for (const it of q) { it.sent++; this.sendPrivate(id, { type: 'whisper', id: it.id, from: it.from, text: it.text }); }
+    /* صفحةٌ قديمة لا تؤكّد: بعد ثلاث محاولات نكفّ، فلا تتكرّر عليه مع كل رجوع */
+    const keep = q.filter(it => it.sent < 3);
+    if (keep.length) this._wq.set(id, keep); else this._wq.delete(id);
+  }
+  ackWhisper(id, wid){
+    const q = this._wq && this._wq.get(id);
+    if (!q || typeof wid !== 'string') return;
+    const keep = q.filter(it => it.id !== wid);
+    if (keep.length) this._wq.set(id, keep); else this._wq.delete(id);
+  }
+  dropWhispers(id){ if (this._wq) this._wq.delete(id); }
 
   /* ══════════ تصويت الضيوف ══════════
      يسبق الحكمَ لا يستبدله: الأصواتُ تصل المحقّقَ رأياً يُؤخذ به أو
@@ -6560,8 +6687,14 @@ export class WalimaRoom {
     if (this.room.thinking) return;
     const live = this.room.players.filter(p => p.connected && !p.kicked);
     if (!live.length) return;
-    if (this.room.phase === 'writing' && live.every(p => p.submitted)) await this.endOfRound();
-    else if (this.room.phase === 'voting' && live.every(p => this.room.votes && this.room.votes[p.id])) await this.runHost(true);
+    const ph = this.room.phase;
+    const ready = ph === 'writing' ? live.every(p => p.submitted)
+      : ph === 'voting' ? live.every(p => this.room.votes && this.room.votes[p.id]) : false;
+    if (!ready) return;
+    const wait = this.graceLeft();
+    if (wait > 0) { this.armGrace(wait); return; }      // منقطعٌ قبل ثوانٍ: أمهِله
+    if (ph === 'writing') await this.endOfRound();
+    else await this.runHost(true);
   }
 
   /* الطرد وسط اللعب: كان يمرّ على المسار العامّ فيُعلَّم المطرود ويبقى
@@ -6578,7 +6711,8 @@ export class WalimaRoom {
       try { sock.close(4002, 'kicked'); } catch {}
     }
     this.sockets.delete(victim.id);
-    if (this.room.phase === 'lobby') this.room.players = this.room.players.filter(p => p.id !== victim.id);
+    this.dropWhispers(victim.id);
+    if (this.room.phase === 'lobby' || this.room.phase === 'over') this.room.players = this.room.players.filter(p => p.id !== victim.id);
     await this.persist();
     this.broadcastState();
     await this.maybeAdvance();
@@ -6593,6 +6727,12 @@ export class WalimaRoom {
       this.room.thinking = false;
       const final = !!this.room.thinkingFinal;
       this.runHost(final).catch(() => {});
+      return;
+    }
+    /* مهلة رجوعٍ انقضت ومؤقّتها ضاع (إعادة تشغيل): أيُّ رسالةٍ أو نبضة تحسمها */
+    if (this.room && (this.room.phase === 'writing' || this.room.phase === 'voting')
+        && !this._graceT && !this.room.thinking && this.room.players.some(p => !p.connected && p.goneAt)) {
+      this.maybeAdvance().catch(() => {});
     }
   }
 
@@ -6630,7 +6770,7 @@ export class WalimaRoom {
     this.room.transcript.push({ round: this.room.round, name: p.name, text: clean });
     await this.persist();
     this.broadcastState();
-    if (this.allIn()) await this.endOfRound();
+    await this.maybeAdvance();        // يحسم — أو يسلّح مهلة رجوع المنقطع
   }
 
   /* الجولةُ الأخيرة لا تذهب للحكم مباشرةً: يتخلّلها تصويتُ الضيوف */
@@ -6641,8 +6781,9 @@ export class WalimaRoom {
 
   // من لم يتكلّم يُسجَّل صمته — أفضل من تجميد المائدة
   async forceRound(){
+    if (this._graceT) { try { clearTimeout(this._graceT); } catch {} this._graceT = null; }
     for (const p of this.room.players) {
-      if (p.connected && !p.submitted) {
+      if (p.connected && !p.kicked && !p.submitted) {
         p.submitted = true; p.statement = '';
         this.room.transcript.push({ round: this.room.round, name: p.name, text: 'صمَت ولم يُجب.' });
       }
@@ -6691,13 +6832,30 @@ export class WalimaRoom {
       + names.map(n => n + ' — ' + t[n] + ' صوت').join('، ');
   }
 
+  /* v222: كانت تأخذ أوّل اسمٍ «يحتويه» النص — فمع «سم» و«سمير» على المائدة يصير
+     «الضيف سمير» = «سم»، ويُتّهم غيرُ من قصده المحقّق. الآن: تطابقٌ تامّ (بعد
+     إسقاط التشكيل والتطويل وتوحيد الألف والياء)، ثم أطولُ اسمٍ يرد في النصّ، ثم
+     اسمٌ يبدأ بالنصّ إن كان وحيدًا. */
   matchName(raw){
-    const s = String(raw || '').trim();
+    const norm = (x) => String(x || '').replace(/[\u064B-\u0652\u0670\u0640]/g, '')
+      .replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه')
+      .replace(/[«»"'.,،:؛!؟()\[\]<>]/g, ' ').replace(/\s+/g, ' ').trim();
+    const s = norm(raw);
     if (!s) return null;
-    const exact = this.room.players.find(p => p.name === s);
+    const ps = this.room.players.filter(p => !p.kicked);
+    const exact = ps.find(p => norm(p.name) === s);
     if (exact) return exact.name;
-    const part = this.room.players.find(p => s.includes(p.name) || p.name.includes(s));
-    return part ? part.name : null;
+    const inside = ps.filter(p => { const n = norm(p.name); return n && (' ' + s + ' ').includes(' ' + n + ' '); })
+      .sort((a, b) => norm(b.name).length - norm(a.name).length);
+    if (inside.length) return inside[0].name;
+    const loose = ps.filter(p => { const n = norm(p.name); return n && (s.includes(n) || n.includes(s)); })
+      .sort((a, b) => norm(b.name).length - norm(a.name).length);
+    if (loose.length === 1) return loose[0].name;
+    if (loose.length > 1) {                       // أطولُها إن كان النصّ يحتويه، وإلا فلا نخمّن
+      const best = loose.find(p => s.includes(norm(p.name)));
+      return best ? best.name : null;
+    }
+    return null;
   }
 
   async askAI(prompt){
@@ -6724,6 +6882,12 @@ export class WalimaRoom {
     return (data.content || []).filter(b => b.text).map(b => b.text).join('\n');
   }
 
+  topSuspect(){
+    const ps = this.room.players.filter(p => !p.kicked);
+    const top = [...(ps.length ? ps : this.room.players)].sort((a, b) => (b.sus || 0) - (a.sus || 0))[0];
+    return top ? top.name : null;
+  }
+
   // مضيف احتياطي بلا ذكاء: يمنع تعليق الوليمة لو تعطّل المزوّد
   fallbackHost(final){
     const sus = {};
@@ -6736,9 +6900,19 @@ export class WalimaRoom {
       if (Math.random() < 0.4) v += Math.random() < 0.5 ? 1 : -1;
       sus[p.name] = Math.max(-3, Math.min(3, v));
     }
-    if (!final) return { says: 'صمتُ بعضِكم أبلغُ من كلامِ بعضِكم… أكمِلوا، فالمائدةُ طويلة.', sus };
-    const top = [...this.room.players].sort((a, b) => (b.sus || 0) - (a.sus || 0))[0];
-    return { says: 'قد سمعتُ ما يكفي.', accused: top.name, reason: 'أثقلُكم ريبةً في كلامه.' };
+    /* v222: كان سطرًا واحدًا ثابتًا يتكرّر كلَّ جولةٍ ما دام المزوّد معطّلًا */
+    if (!final) {
+      const hi = Object.keys(sus).sort((a, b) => sus[b] - sus[a])[0] || this.topSuspect() || '';
+      const lines = [
+        'صمتُ بعضِكم أبلغُ من كلامِ بعضِكم… {hi}، عيني عليك. أكمِلوا، فالمائدةُ طويلة.',
+        'كلماتٌ تتزاحم وعيونٌ تتجنّبني. {hi}، ارتباكُك يقول أكثرَ من لسانك. ليخبرني كلُّ واحدٍ: أين كان حين وقع الأمر؟',
+        'أرى التهرّبَ يا {hi}، وأرى الجرأةَ تُصطنَع. لن أُخدَع. من الذي ربِح من هذه الليلة؟',
+        'همساتٌ وتناقضات… المائدةُ تُخفي أكثرَ ممّا تُطعم. {hi}، اقترِب، فلي معك حساب.',
+      ];
+      const line = lines[((this.room.round || 1) - 1 + (this.room.gameNo || 0)) % lines.length];
+      return { says: line.replace(/\{hi\}/g, hi), sus, askWho: hi };
+    }
+    return { says: 'قد سمعتُ ما يكفي، والحقيقةُ تطلّ من بين الكلمات.', accused: this.topSuspect(), reason: 'أثقلُكم ريبةً في كلامه.' };
   }
 
   async runHost(final){
@@ -6752,16 +6926,24 @@ export class WalimaRoom {
     let out;
     try {
       const raw = await this.askAI(this.buildPrompt(final));
-      const says = wlGrab(raw, 'مضيف') || String(raw).replace(/<[^>]+>/g, '').trim().slice(0, 400);
+      const says = (wlGrab(raw, 'مضيف') || String(raw || '').replace(/<[^>]*>/g, ' ').replace(/\{[^{}]*\}/g, ' ').replace(/\s+/g, ' ').trim()).slice(0, 600);
+      /* v222: ردٌّ فارغ (نموذجٌ استهلك حصّتَه في التفكير، أو مزوّدٌ ردّ 200 بلا
+         محتوى) كان يمرّ «نجاحًا»: فقاعةُ محقّقٍ فارغة، وفي الحكم متّهمٌ عشوائيّ
+         بتعليل «حدس المحقّق». الفراغ إخفاقٌ ← المحقّق الاحتياطيّ. */
+      if (says.replace(/[^\u0621-\u064A]/g, '').length < 2) throw new Error('ai-empty');
       if (!final) {
+        const susRaw = wlSafeJSON(wlGrab(raw, 'شك')) || {};
+        const sus = {};
+        for (const k of Object.keys(susRaw)) { const nm = this.matchName(k); if (nm) sus[nm] = susRaw[k]; }
         out = {
-          says, sus: wlSafeJSON(wlGrab(raw, 'شك')) || {},
+          says, sus,
           askWho: wlGrab(raw, 'لمن'), askQ: wlGrab(raw, 'سؤال'),
         };
       } else {
         out = {
           says,
-          accused: this.matchName(wlGrab(raw, 'تهمة')) || wlPick(this.room.players).name,
+          /* لا اسمَ مفهومًا في الردّ: أثقلُهم ريبةً لا اسمٌ عشوائيّ */
+          accused: this.matchName(wlGrab(raw, 'تهمة')) || this.topSuspect(),
           reason: wlGrab(raw, 'تعليل') || 'حدسُ المحقّق.',
         };
       }
@@ -6844,6 +7026,8 @@ applyRoomCommon(MawwihRoom, 'mawwih');
    وهو الآن غير قابل للوصول من أي مسار، فلا يكلّف شيئًا. */
 applyRoomCommon(FatinRoom, 'fatin');
 applyRoomCommon(WalimaRoom, 'walima');
+/* مهلة رجوع المنقطع في وليمة (v222). ثابتٌ على الصنف ليصفّره محاكي الجولات. */
+WalimaRoom.GRACE_MS = 20000;
 
 // حدّ إنشاء الغرف لكل IP — يمنع تفريخ غرف بلا نهاية
 /* ٨ كان ضيّقًا فعلًا: بيت واحد على واي فاي واحد = عنوان واحد، ومضيف
@@ -10888,7 +11072,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v220';   // v220 = فحص الاتصال الشامل: كنس الإقلاع (أشباح «متصل» بعد النشرة في ١١ غرفة) · وليمة تُكنس · رمز غلط لا يفتح غرفة وهمية في الشفرة/المربعات/الحلبة · رفض البلياردو/البلوت قبل قبول المقبس. قبله:   // v219 = طاريك: ٩٠ جملة كتابية جديدة · «توقّع الأغلبية» (إجابات جاهزة) أُزيل نهائيًا. قبله:   // v218 = مطاردة الحواري: صاحب الحساب يستردّ مقعده المنقطع من أي جهاز · لهجة الغرفة يختارها المضيف · الغرفة تنجو من إعادة التشغيل · المنقطع لا يعلّق الطور · رمزٌ غلط لا يفتح غرفة وهمية. قبله:   // v216 = طاريك: الكشف لا يُعاد بعد إعادة التشغيل (نقاط مرتين) · النبضة توقظ بطاقة التعريف. قبله:   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
+const WORKER_VERSION = 'v255';   // v255 = سدّ سرقة مقعد بالاسم بلا jid: مقعدٌ يحمل jid (حال كل لاعبٍ طبيعيّ) كان يُستعاد بطلبٍ بلا jid — في اللعب (reclaimByName، يصيب طاريك) وفي الردهة (reclaimSeat، كل الألعاب). الحارس صار يرفض أي مقعدٍ ذي jid ما لم يطابق jid الطلب. قبله:   // v229 = «رد يا سامي» في GAME_NAMES (حتى يقبل /account/rate و/rate/notes تقييمها من بطاقة الرئيسية) — لا شيء غيره. قبله:   // v222 = وليمة: مهلة رجوع للمنقطع · كلمةٌ تحمل رقم جولتها · همسةٌ لا تضيع · استرداد المقعد بالاسم وسط اللعب · الدخول بين مباراتين · خروجٌ مقصود · سبب takeover يصل · ردٌّ فارغ من المزوّد = المحقّق الاحتياطي · مطابقة الأسماء القصيرة. قبله:   // v220 = v220 = فحص الاتصال الشامل: كنس الإقلاع (أشباح «متصل» بعد النشرة في ١١ غرفة) · وليمة تُكنس · رمز غلط لا يفتح غرفة وهمية في الشفرة/المربعات/الحلبة · رفض البلياردو/البلوت قبل قبول المقبس. قبله:   // v219 = طاريك: ٩٠ جملة كتابية جديدة · «توقّع الأغلبية» (إجابات جاهزة) أُزيل نهائيًا. قبله:   // v218 = مطاردة الحواري: صاحب الحساب يستردّ مقعده المنقطع من أي جهاز · لهجة الغرفة يختارها المضيف · الغرفة تنجو من إعادة التشغيل · المنقطع لا يعلّق الطور · رمزٌ غلط لا يفتح غرفة وهمية. قبله:   // v216 = طاريك: الكشف لا يُعاد بعد إعادة التشغيل (نقاط مرتين) · النبضة توقظ بطاقة التعريف. قبله:   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
 
 const LOBBY_GAMES = {
   mafia:   { name: 'مافيا',        path: '/mafia/' },
@@ -10940,13 +11124,14 @@ const GAME_NAMES = {
   kirm: 'الكِيرَم', shifra: 'الشفرة', mutarada: 'المطاردة',
   fatin: 'فَطِن', liar: 'الكذّاب', kalimat: 'كلمات', fateel: 'فتيل',
   throne: 'عرش الذئب', westeros: 'ويستروس', island: 'الجزيرة',
-  'blocked-road': 'الطريق المسدود', guest13: 'الضيف الثالث عشر', juraa: 'جرعة',
+  'blocked-road': 'الطريق المسدود', guest13: 'الضيف السابع', juraa: 'جرعة',
   sukoon: 'سُكون', ramad: 'رماد', murawagha: 'مُراوَغة', darbah: 'ضربة', snake: 'أفعى نيون',
   ghazw: 'غَزْو',
   bilyardo: 'بلياردو',
   squares: 'سباق المربعات', tari: 'طاريك',
   redvsblue: 'الحلبة',
   salalem: 'سلالم وثعابين',
+  sami: 'رد يا سامي',
 };
 
 /* ═══════════════════════ البلياردو (BilliardRoom) ═══════════════════════
@@ -11465,9 +11650,14 @@ function reclaimSeat(room, sockets, rawName, jid) {
      فيمرّ من مسار التوكن لا الاسم. */
   const isHostSeat = !!(room.hostId && seat.id === room.hostId);
   if ((isHostSeat || seat.did) && !(jid && seat.jid && seat.jid === jid)) return null;
-  /* لا نسرق مقعد صاحب jid آخر: لو المقعد مربوط بتبويب معروف وجاء
-     طلب بـ jid مختلف فهما شخصان مختلفان يحملان نفس الاسم */
-  if (seat.jid && jid && seat.jid !== jid) return null;
+  /* أي مقعدٍ عُرف تبويبُه (jid) لا يُستعاد بالاسم: مطابقة الـjid تحصل في
+     أعلى الدالة قبل هذا الموضع، فالوصول هنا بمقعدٍ يحمل jid يعني أن jid
+     الطلب لم يطابق (مختلفًا كان أو غائبًا). كان الشرط `seat.jid && jid &&
+     seat.jid !== jid` يقصّر حين يكون jid المهاجم فارغًا فيُسرَق مقعد لاعبٍ
+     له تبويب معروف في الردهة بطلبٍ بلا jid (v255). لا يكسر إصلاح الضغط
+     المزدوج: مقاعد الألعاب بلا jid لا تتأثر، والألعاب التي ترسل jid
+     تُطابَق بالـjid أعلاه لا بالاسم. */
+  if (seat.jid) return null;
   const stale = sockets.get(seat.id);
   const live = stale && stale.readyState === 1;   // 1 = OPEN
   if (live) return null;
