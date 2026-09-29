@@ -53,7 +53,7 @@ const MAX_PLAYERS = 20;
 function cleanName(raw) {
   const s = String(raw == null ? '' : raw)
     .replace(/[<>&"'`\\]/g, '')
-    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')   // v264: ومحارف C1 (U+0080–U+009F) كذلك
     // محارف الاتجاه والعرض الصفري: تقلب ترتيب الاسم المعروض وتزوّر شكله
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
@@ -83,7 +83,7 @@ function randInt(n) {
 function cleanText(raw, max = 60) {
   return String(raw == null ? '' : raw)
     .replace(/[<>&"'`\\]/g, '')
-    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')   // v264: ومحارف C1 (U+0080–U+009F) كذلك
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -514,6 +514,111 @@ function wsOversize(raw, max) {
 const ROOM_TTL_MS = 6 * 60 * 60 * 1000;
 
 // خليط مشترك لكل الغرف: خنق + تنظيف تلقائي + استعادة المقعد بتوكن
+/* ═══════════ مقابس السبات — مشتركة (v265) ═══════════
+   رُحِّلت الغرف السبع (مافيا، لمن العرش، موّه، وليمة، داقش، الدخيل، الكيرم) إلى
+   السبات في ٨–٩ سبتمبر ثم ضاع الترحيل برفعٍ يوم ١١ (التفاصيل في AUDIT-v261).
+   هذي أدوات ذلك الترحيل نفسه (وليمة، v19x) صارت مشتركة للسبع.
+
+   لماذا: `server.accept()` يُبقي الكائن حيًّا ويُحاسَب على المدة ما دام فيه مقبس
+   مفتوح — غرفة منسيّة بتبويبٍ مفتوح تلتهم الحصة. مع `acceptWebSocket` ينام الكائن
+   بين الرسائل والرَّنتايم يمسك المقابس.
+
+   `this.sockets` كان `Map` في الذاكرة، والذاكرة تُمسح مع أول نومة بينما المقابس
+   نفسها تنجو في `getWebSockets()`. فبعد النومة يجد الكائن خريطة فارغة ولاعبين كلهم
+   `connected:true`: لا يصلهم بايت ولا يُطردون — صمتٌ كامل لا انقطاعٌ ظاهر. الواجهة
+   تحت تقرأ الحقيقة من الرَّنتايم عند كل نداء بدل أن تحفظها، فتبقى المواضع التي
+   تلمس `sockets` (في الأصناف، وRoomCommon، وreclaimSeat، و/kick) تعمل بلا تعديل.
+   المعرّف يعيش في `serializeAttachment` لا في الذاكرة، فينجو النومة. */
+function wsAttachId(ws) {
+  try { const a = ws.deserializeAttachment(); return (a && a.id) ? a.id : null; }
+  catch { return null; }
+}
+
+function hibernatingSockets(state) {
+  const all  = () => { try { return state.getWebSockets(); } catch { return []; } };
+  const live = () => all().filter(ws => wsAttachId(ws));
+  const find = id => {
+    if (!id) return null;
+    for (const ws of all()) if (wsAttachId(ws) === id) return ws;
+    return null;
+  };
+  return {
+    get: id => find(id),
+    has: id => !!find(id),
+    /* `set` مُلزِمة لا مُضيفة: أي مقبس أقدم يحمل نفس المعرّف يُنزع منه أولًا.
+       بلا هذا يبقى مقبسا استلامٍ بنفس المعرّف بعد إعادة الاتصال، فيرجع البحث
+       أوّلهما في ترتيب `getWebSockets()` — وهو الميت. */
+    set(id, ws) {
+      for (const w of all()) {
+        if (w !== ws && wsAttachId(w) === id) {
+          try { w.serializeAttachment({ id: null }); } catch {}
+        }
+      }
+      try { ws.serializeAttachment({ id }); } catch {}
+      return this;
+    },
+    /* الحذف ينزع المعرّف ولا يغلق: النداءات كلها تغلق بنفسها قبله. ومقبسٌ بلا
+       معرّف لا يُعنون ولا يُبثّ إليه ولا يُحسب في `size`. */
+    delete(id) {
+      const ws = find(id);
+      if (ws) { try { ws.serializeAttachment({ id: null }); } catch {} }
+      return !!ws;
+    },
+    values: () => live(),
+    keys:   () => live().map(wsAttachId),
+    entries: () => live().map(ws => [wsAttachId(ws), ws]),
+    forEach(fn) { for (const ws of live()) fn(ws, wsAttachId(ws), this); },
+    get size() { return live().length; },
+    [Symbol.iterator]() {
+      return live().map(ws => [wsAttachId(ws), ws])[Symbol.iterator]();
+    },
+  };
+}
+
+/* الغرفة تنام: الردّ الآلي على النبضة + واجهة المقابس. النصّان حرفيّان: ya7-net.js
+   يرسل {"type":"hb"} كل ٢٥ ثانية لهذي الغرف، ومُغلِّف onMessage في applyRoomCommon
+   كان يردّ {"type":"pong"} — فالردّ الآلي مطابق له بايتًا ببايت، والنبضة لا توقظ
+   الكائن ولا تُحتسب. ومعالج hb في المُغلِّف باقٍ شبكةَ أمان: لو لم يطابق النصّ يومًا
+   تنزل النبضة للكائن ويردّ pong كما اليوم — نخسر التوفير لا لاعبًا. */
+function hibernate(state) {
+  try {
+    state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"pong"}'));
+  } catch {}
+  return hibernatingSockets(state);
+}
+
+/* مداخل السبات لصنفٍ يقبل مقابسه بـ acceptWebSocket (مع hibernate أعلاه).
+   تُنادى قبل applyRoomCommon فيلفّ مُغلِّفُه webSocketMessage بسقف الحجم.
+   لا addEventListener مع السبات: المستمِع في الذاكرة يموت مع أول نومة.
+
+   حارس الهوية هنا (حارس onClose القديم منقولًا): close() قد يُخرج المقبس من
+   getWebSockets() قبل أن تنزع sockets.set معرّفه، فيصل إغلاقه حاملًا معرّف
+   اللاعب ويشطب مقعدًا رجع صاحبه للتوّ. فمن كان المسجَّل الآن لهذا المعرّف مقبسًا
+   آخر، فإغلاق القديم لا يخصّ أحدًا. ولذلك onClose(id) في الصنف لا تُنادى إلا
+   لمقبس المقعد الحالي (أو لمقعدٍ بلا مقبسٍ بعده). */
+function applyHibernation(cls) {
+  const P = cls.prototype, own = k => Object.prototype.hasOwnProperty.call(P, k);
+  if (!own('webSocketMessage')) {
+    P.webSocketMessage = async function (ws, raw) {
+      const id = wsAttachId(ws);
+      if (!id) return;
+      return this.onMessage(id, { data: raw });
+    };
+  }
+  if (!own('closedSeat')) {
+    P.closedSeat = async function (ws) {
+      const id = wsAttachId(ws);
+      if (!id) return;
+      const cur = this.sockets.get(id);
+      if (cur && cur !== ws) return;
+      try { ws.serializeAttachment({ id: null }); } catch {}
+      await this.onClose(id, ws);
+    };
+  }
+  if (!own('webSocketClose')) P.webSocketClose = async function (ws) { await this.closedSeat(ws); };
+  if (!own('webSocketError')) P.webSocketError = async function (ws) { await this.closedSeat(ws); };
+}
+
 /* أصحاب أعلى قيمة — التعادل يُحسب فوزًا للطرفين لا لأحدهما */
 function topBy(players, valueOf) {
   const list = (players || []).filter(p => p && !p.isBot);
@@ -541,10 +646,23 @@ const RoomCommon = {
     const win = new Set(winnerIds || []);
     const done = new Set();
     for (const p of (this.room && this.room.players) || []) {
-      if (!p || !p.did || p.isBot || done.has(p.did)) continue;
+      /* v263: المطرود لا تُسجَّل له خسارة ولا فوز — خرج بقرار المضيف لا باللعب
+         (كان يأخذ خسارة في خمّن من؟ والبلياردو ووليمة والدخيل) */
+      if (!p || !p.did || p.isBot || p.kicked || done.has(p.did)) continue;
       done.add(p.did);
       try { await recordResult(this.env, p.did, win.has(p.id), this.GAME || ''); } catch {}
     }
+  },
+
+  /* ── v263: المطرود يخرج من دردشة الغرفة أيضًا ──
+     الدردشة كائن مستقل لا يسأل عن المقعد إلا عند فتح المقبس، فكان المطرود
+     يكمل من مقبسه المفتوح. token = توكن المقعد قبل تدويره. لا يرمي أبدًا:
+     فشل الإشعار ما يكسر الطرد. */
+  async chatKick(targetId, token) {
+    try {
+      const code = this.room && this.room.code;
+      if (this.GAME && code) await ChatRoom.kickSeat(this.env, this.GAME, code, targetId, token);
+    } catch {}
   },
 
   // ── خنق الرسائل ──
@@ -559,18 +677,41 @@ const RoomCommon = {
   },
 
   // ── تنظيف الغرف الخاملة ──
+  /* ── منبّهٌ واحد لكل كائن (v265) ──
+     غرفة السبات لا مؤقّت في ذاكرتها ينجو النوم: setTimeout يموت مع أول نومة
+     فيتجمّد الطور. مواعيد الأطوار تُحفظ في الغرفة، والصنف يعرّف nextWake()
+     (أقرب موعد عمل بالمللي ثانية، أو 0) وonWake() (يؤدّي ما استحقّ ويحفظ).
+     المنبّه يُضبط على الأقرب منه ومن التنظيف. صنفٌ بلاهما: منبّه التنظيف وحده
+     كما كان حرفيًا. */
+  wakeTime() {
+    const now = Date.now(), ttl = now + ROOM_TTL_MS;
+    const w = typeof this.nextWake === 'function' ? (Number(this.nextWake()) || 0) : 0;
+    return w > 0 ? Math.max(now + 20, Math.min(w, ttl)) : ttl;
+  },
+
   async touchRoom() {
     this.room.lastSeen = Date.now();
-    try { await this.state.storage.setAlarm(Date.now() + ROOM_TTL_MS); } catch {}
+    try { await this.state.storage.setAlarm(this.wakeTime()); } catch {}
   },
 
   async alarm() {
+    let stalled = false;
+    if (typeof this.onWake === 'function' && typeof this.nextWake === 'function') {
+      const w = Number(this.nextWake()) || 0;
+      if (w > 0 && w <= Date.now() + 20) {
+        try { await this.onWake(); } catch {}
+        /* موعدٌ لم يتحرّك بعد onWake (رمى، أو حارسٌ رفض الحسم) كان يعيد المنبّه كل
+           ٢٠ms حتى التنظيف — نصف دقيقة بدلها، والرسالة التالية تعيد الضبط */
+        const w2 = Number(this.nextWake()) || 0;
+        stalled = w2 > 0 && w2 <= Date.now() + 20;
+      }
+    }
     const idle = Date.now() - (this.room.lastSeen || 0);
     const live = (this.sockets ? this.sockets.size : 0) + (this.screens ? this.screens.size : 0);
     if (idle >= ROOM_TTL_MS && live === 0) {
       await this.state.storage.deleteAll();
     } else {
-      try { await this.state.storage.setAlarm(Date.now() + ROOM_TTL_MS); } catch {}
+      try { await this.state.storage.setAlarm(stalled ? Date.now() + 30000 : this.wakeTime()); } catch {}
     }
   },
 
@@ -778,8 +919,33 @@ async function encryptPushPayload(plaintext, uaPublicB64, authSecretB64) {
 /* الإرسال الفعلي. الفشل الدائم (404/410) يعني الاشتراك انتهى عند
    المتصفح — يُحذف فورًا وإلا تراكمت اشتراكات ميتة تُبطئ كل إرسال لاحقًا.
    الفشل المؤقت يُترك بصمت؛ إشعار مفقود أهون من تعطيل ميزة أخرى. */
+/* v264: الخادم يرسل POST لكل endpoint مخزَّن، وكان يقبل أي رابط https — فالحساب
+   يسجّل روابط يختارها ويصير الوركر يطرقها عند كل إشعار. الرابط يضعه المتصفح لا
+   الصفحة (pushManager.subscribe في /account/)، فلا يأتي إلا من خدمات الدفع
+   الحقيقية: FCM (كروم/إيدج أندرويد/سامسونج/أوبرا)، موزيلا، أبل، WNS (إيدج
+   ويندوز)، سامسونج. أي مضيف آخر يُرفض عند الاشتراك ولا يُرسل له. */
+const PUSH_HOSTS = ['fcm.googleapis.com', 'android.googleapis.com',
+  'updates.push.services.mozilla.com', 'web.push.apple.com'];
+const PUSH_HOST_SUFFIXES = ['.push.apple.com', '.notify.windows.com',
+  '.push.services.mozilla.com', '.push.samsungosp.com'];
+function pushEndpointOk(raw) {
+  let u;
+  try { u = new URL(String(raw || '')); } catch { return false; }
+  if (u.protocol !== 'https:' || u.port || u.username || u.password) return false;
+  const h = u.hostname.toLowerCase();
+  return PUSH_HOSTS.includes(h) || PUSH_HOST_SUFFIXES.some(x => h.endsWith(x));
+}
+
 async function sendPush(env, sub, title, body, url) {
   if (!env.VAPID_PRIVATE_D || !env.VAPID_PUBLIC_KEY) return;
+  /* v264: صفٌّ مخزَّن قبل القائمة بمضيفٍ غريب لا يُطرق — يُحذف */
+  if (!pushEndpointOk(sub && sub.endpoint)) {
+    try {
+      await env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ?1')
+        .bind(String((sub && sub.endpoint) || '')).run();
+    } catch {}
+    return;
+  }
   try {
     const endpoint = new URL(sub.endpoint);
     const audience = endpoint.origin;
@@ -1019,6 +1185,22 @@ function applyRoomCommon(cls, gameKey) {
     cls.prototype.alarm = function () { bootSweep(this); return innerAlarm.apply(this, arguments); };
   }
 
+  /* v263: كل طردٍ يمرّ على kickPlayer (لوحة الغرفة /kick، أو رسالة المضيف
+     في الردهة) يُخرج المطرود من دردشة الغرفة — هنا مرة واحدة للكل. ولا
+     إشعار إلا لو وقع الطرد فعلًا (علمه، أو خرج من القائمة، أو دُوِّر توكنه). */
+  const innerKick = cls.prototype.kickPlayer;
+  if (typeof innerKick === 'function') {
+    cls.prototype.kickPlayer = async function (targetId) {
+      const v = ((this.room && this.room.players) || []).find(q => q && String(q.id) === String(targetId));
+      const tok = v ? String(v.seatToken || '') : '';
+      const out = await innerKick.apply(this, arguments);
+      if (v && (v.kicked || v.seatToken !== tok || !((this.room && this.room.players) || []).includes(v))) {
+        await this.chatKick(String(targetId), tok);
+      }
+      return out;
+    };
+  }
+
   /* ── /seat-check: هل يملك حاملُ هذا التوكن مقعدًا في هذي الغرفة؟ ──
      يُنادى من الراوتر وحده (دردشة الغرفة، ونبضة اللوبي). سبب وجوده:
      الدردشة ونبضة اللوبي كانتا تصدّقان ما يرسله العميل — فأي أحد يعرف
@@ -1091,6 +1273,9 @@ function applyRoomCommon(cls, gameKey) {
       try {
         let body = {};
         try { body = await request.json(); } catch {}
+        /* v264: جسم null (أو رقم/نص) كان يرمي عند body.token ⇒ 500 */
+        if (!body || typeof body !== 'object')
+          return Response.json({ ok: false, error: 'bad-body' }, { status: 400 });
         const me = this.seatByToken(String(body.token || ''));
         if (!me) return Response.json({ ok: false, error: 'no-seat' }, { status: 403 });
         if (!this.room || this.room.hostId !== me.id) {
@@ -1105,24 +1290,29 @@ function applyRoomCommon(cls, gameKey) {
         if (!victim) return Response.json({ ok: false, error: 'not-found' }, { status: 404 });
 
         if (typeof this.kickPlayer === 'function') {
-          await this.kickPlayer(target);
+          await this.kickPlayer(target);     // غلافه أعلاه يُخرجه من الدردشة (v263)
         } else {
+          const tok0 = String(victim.seatToken || '');
           victim.kicked = true;
           victim.connected = false;
           /* تدوير التوكن: العلم وحده لا يكفي لو أضاف أحدٌ لاحقًا مسار
              بحث ثانيًا لا يمرّ على seatByToken. التوكن القديم يموت هنا. */
           victim.seatToken = 'kicked-' + newSeatToken();
           const sock = this.sockets && this.sockets.get(target);
+          /* v265: الشطب قبل الإغلاق — في غرف السبات يخرج المقبس من getWebSockets()
+             لحظة إغلاقه، فشطبٌ بعده لا يجده ويصل إغلاقه للغرفة انقطاعًا عاديًا (بثٌّ
+             زائد ومهلة رجوع لمطرود). في غرف Map النتيجة نفسها كما كانت. */
+          if (this.sockets) this.sockets.delete(target);
           if (sock) {
             try { sock.send(JSON.stringify({ type: 'error', message: 'طردك المضيف من الغرفة' })); } catch {}
             try { sock.close(4002, 'kicked'); } catch {}
           }
-          if (this.sockets) this.sockets.delete(target);
           const i = list.indexOf(victim);
           if (i >= 0 && this.room.phase === 'lobby') list.splice(i, 1);
           if (typeof this.persist === 'function') { try { await this.persist(); } catch {} }
           if (typeof this.broadcastState === 'function') { try { this.broadcastState(); } catch {} }
           else if (typeof this.broadcast === 'function') { try { this.broadcast(); } catch {} }
+          await this.chatKick(target, tok0);  // v263: ومن الدردشة كذلك
         }
         return Response.json({ ok: true });
       } catch { return Response.json({ ok: false, error: 'failed' }, { status: 500 }); }
@@ -1279,6 +1469,14 @@ function neededSeats(config) {
   for (const k of ['doctor','detective','heir','spy','witch','avenger','trap']) if (config[k]) n++;
   if (config.twins) n += 2;
   return n;
+}
+
+/* v264: أكثر مافيا تحتمله طاولة من n لاعبين (البوت لاعب). checkWinCondition يعلن
+   فوز الشر حين الشر ≥ الخير، والشر عند التوزيع = المافيا + الفخ + توأمٌ قد يطلع
+   شريرًا. فبعد قتل ليلة واحدة لازم يبقى الخير أكثر: (n − الشر) − 1 > الشر
+   ⇔ الشر ≤ ⌊(n − 2) / 2⌋. كان مافيا اثنين من أربعة يُحسم عند أول فجر بلا قتيل. */
+function mafiaMaxFor(config, n) {
+  return Math.floor((n - 2) / 2) - (config.trap ? 1 : 0) - (config.twins ? 1 : 0);
 }
 
 // ══════════════════════ Durable Object: غرفة واحدة ══════════════════════
@@ -1604,7 +1802,8 @@ export class MafiaRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map(); // playerId -> WebSocket
+    /* v265: السبات — واجهة فوق getWebSockets() بدل Map في الذاكرة (تنجو النومة) */
+    this.sockets = hibernate(state); // playerId -> WebSocket
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null,
@@ -1668,7 +1867,8 @@ export class MafiaRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* v265: السبات — القبول يتأخّر حتى يُحسم الرفض: الرفض بـ accept() العادي
+       (مقبس سباتٍ يُغلق قبل ١٠١ لا يصل إغلاقه)، والمقعد بـ acceptWebSocket تحت. */
 
     // ── الهوية بالتوكن السري فقط ──
     // كان: البحث بـ playerId القادم من الرابط. ومعرّفات كل اللاعبين تُبَث في
@@ -1685,8 +1885,8 @@ export class MafiaRoom {
         if (this.room.hostId === oldId) this.room.hostId = newId;
         this.remapId(oldId, newId);
         const stale = this.sockets.get(oldId);
+        this.sockets.delete(oldId);        // v265: المرفق يُنزع قبل الإغلاق (انظر kickPlayer)
         if (stale) { try { stale.close(); } catch {} }
-        this.sockets.delete(oldId);
       } else {
         const stale = this.sockets.get(oldId);
         if (stale && stale !== server) { try { stale.close(); } catch {} }
@@ -1696,6 +1896,7 @@ export class MafiaRoom {
     // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
     // بدون هذا يتجاوز المهاجم حدّ allowCreate بالكامل ويفرّخ غرفًا بلا سقف.
     if (!player && !this.room.code) {
+      server.accept();
       server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
       server.close();
       return new Response(null, { status: 101, webSocket: client });
@@ -1704,11 +1905,13 @@ export class MafiaRoom {
     if (!player) {
       // لاعب جديد ينضم
       if (this.room.phase !== 'lobby') {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت، ما تقدر تنضم الحين' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.players.length >= MAX_PLAYERS) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -1733,13 +1936,12 @@ export class MafiaRoom {
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
+    this.state.acceptWebSocket(server);   // v265: سبات — الرسائل والإغلاق تصل webSocketMessage/Close
     this.sockets.set(player.id, server);
     this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    server.addEventListener('message', (evt) => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.broadcastLobby();
@@ -1786,7 +1988,12 @@ export class MafiaRoom {
 
     if (msg.type === 'updateConfig' && playerId === this.room.hostId) {
       // مفاتيح معروفة فقط — Object.assign كان يسمح بحقن أي مفتاح وأي حجم
-      this.room.config = sanitizeMafiaConfig(msg.config);
+      /* v264: الصفحة ترسل المفتاح الذي تغيّر وحده، فكان كل ما سواه يرجع لقيمته
+         الدنيا («+» للمافيا يطفئ الطبيب والمحقق، وأي خيار يرجّع المافيا ١) — يُدمج
+         مع الحالي ثم يُنقّى. والمافيا لا تتجاوز ما تحتمله الطاولة الآن. */
+      const cfg = sanitizeMafiaConfig({ ...this.room.config, ...(msg.config && typeof msg.config === 'object' ? msg.config : {}) });
+      cfg.mafia = Math.max(1, Math.min(cfg.mafia, mafiaMaxFor(cfg, this.room.players.length)));
+      this.room.config = cfg;
       await this.persist();
       this.broadcastLobby();
     }
@@ -1833,8 +2040,11 @@ export class MafiaRoom {
        العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
        إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
        الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
-       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
-    if (ws && this.sockets.get(playerId) !== ws) return;
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب.
+       v265: closedSeat (applyHibernation) حرسها ونزع المرفق قبلنا، فـ get هنا
+       ترجع null لمقبسه — الحارس يبقى لمقبسٍ آخر مسجَّلٍ بعده فقط. */
+    const cur = this.sockets.get(playerId);
+    if (ws && cur && cur !== ws) return;
     const player = this.room.players.find(p => p.id === playerId);
     if (player) player.connected = false;
     this.sockets.delete(playerId);
@@ -1867,8 +2077,22 @@ export class MafiaRoom {
     if (!target) return;
     this.sendPrivate(targetId, { type: 'kicked' });
     const ws = this.sockets.get(targetId);
-    if (ws) { try { ws.close(); } catch {} this.sockets.delete(targetId); }
+    /* v265: المرفق يُنزع قبل الإغلاق — المقبس المُغلَق يخرج من getWebSockets فلا يجده
+       delete بعده، فيصل إغلاقُه onClose ويبثّ حالةً زائدة لم تكن في v264. */
+    if (ws) { this.sockets.delete(targetId); try { ws.close(); } catch {} }
     this.room.players = this.room.players.filter(p => p.id !== targetId);
+    /* v263: صوته يطلع معه كما في لمن العرش (v262) — المطرود ما عاد في اللعبة. */
+    if (this.room.dayVotes) delete this.room.dayVotes[targetId];
+    /* v264: وفعله الليلي كذلك — اختيار مافيا مطرودة بقي في mafiaVotes يُعدّ في حسم
+       الضحية (مع مافيا اثنين فأكثر يقلبها)، وحماية طبيبٍ أو سُمّ ساحرةٍ مطرودة
+       يمضيان. الليلة تُحسم تحت لو كانت تنتظره وحده (maybeAdvanceOnDisconnect). */
+    const na = this.room.nightActions;
+    if (na && this.room.phase === 'night') {
+      if (na.mafiaVotes) delete na.mafiaVotes[targetId];
+      const own = { doctor: ['doctorTarget'], detective: ['detectiveTarget'], spy: ['spyTarget'],
+        witch: ['witchSaveTarget', 'witchPoisonTarget', 'witchResponded'] }[target.role] || [];
+      if (target.alive) for (const k of own) delete na[k];
+    }
     await this.persist();
     this.broadcastLobby();
     /* الطرد هو المسار الوحيد الذي يُخرج لاعبًا **حيًّا** من اللعبة، فقد
@@ -1917,6 +2141,10 @@ export class MafiaRoom {
     const target = this.room.players.find(p => p.id === targetId);
     if (!target || !target.isBot) return;
     this.room.players = this.room.players.filter(p => p.id !== targetId);
+    /* v263: البوت بلا مقبس — لو علِق به مقبس (إنسانٌ استعاد مقعد بوتٍ باسمه
+       قبل v263) يُغلق ويُشطب، وإلا بقي متصلًا بلا مقعد يستقبل بثّ الغرفة. */
+    const ws = this.sockets.get(targetId);
+    if (ws) { this.sockets.delete(targetId); try { ws.close(); } catch {} }   // v265: قبل الإغلاق (انظر kickPlayer)
     await this.persist();
     this.broadcastLobby();
   }
@@ -1936,6 +2164,17 @@ export class MafiaRoom {
     if (need > n) {
       this.sendPrivate(this.room.hostId, { type: 'error',
         message: `الأدوار المفعّلة تحتاج ${need} لاعبين وعندك ${n} — قلّل الأدوار أو زد اللاعبين` });
+      return;
+    }
+    /* v264: عدد يحسم اللعبة قبل أول تصويت لا يبدأ (الطاولة قد تصغر بعد ضبط العدد) */
+    const maxMafia = mafiaMaxFor(this.room.config, n);
+    if (this.room.config.mafia > maxMafia) {
+      const { trap, twins } = this.room.config;
+      const with_ = trap && twins ? ' والفخ والتوأمين' : trap ? ' والفخ' : twins ? ' والتوأمين' : '';
+      const off = trap && twins ? 'الفخ أو التوأمين' : trap ? 'الفخ' : 'التوأمين';
+      this.sendPrivate(this.room.hostId, { type: 'error', message: maxMafia >= 1
+        ? `مع ${n} لاعبين${with_} أقصى عدد للمافيا ${maxMafia} — أكثر من كذا تنحسم اللعبة قبل أول تصويت`
+        : `مع ${n} لاعبين${with_} يصير الشر نصّ الطاولة فتنحسم اللعبة قبل أول تصويت — زد اللاعبين أو أطفئ ${off}` });
       return;
     }
     const { roles, hasTwins } = buildRoleList(this.room.config, n);
@@ -1965,13 +2204,15 @@ export class MafiaRoom {
     this.room.lastDeaths = [];
     this.room.phase = 'night';
     this.room.dayNum = 1;
+    /* v263: أفعال البوتات قبل الحفظ (كلمن العرش) — كانت بعده، فنشرةٌ بعد «ابدأ»
+       مباشرة تمحوها ولا شيء يعيد توليدها: الليلة الأولى تنتظر بوتًا للأبد. */
+    this.autoBotNightActions();
     await this.persist();
 
     // كل لاعب يستقبل دوره الخاص فقط — ما حد غيره يشوفه
     for (const p of this.room.players) {
       this.sendPrivate(p.id, this.roleMessageFor(p));
     }
-    this.autoBotNightActions();
     this.broadcastPublic({ type: 'phaseChanged', phase: 'night', dayNum: 1 });
     this.sendAvengerInfo();
     if (this.allNightActionsIn()) await this.resolveNight();
@@ -1987,9 +2228,15 @@ export class MafiaRoom {
   isHere(p) { return !!p && (p.isBot || p.connected); }
   presentRole(role) { return this.alivePlayers().some(p => p.role === role && this.isHere(p)); }
   votersExpected() { return this.alivePlayers().filter(p => this.isHere(p)).length; }
+  /* v263: الاكتمال بمن صوّت لا بعدد الأصوات. صوتُ من صوّت ثم انقطع يبقى في
+     العدّ، لكنه كان يكمّل العدد فيُحسم التصويت قبل صوتِ حاضرٍ لم يُدلِ به. */
+  votesCast() {
+    const dv = this.room.dayVotes || {};
+    return this.alivePlayers().filter(p => this.isHere(p) && Object.prototype.hasOwnProperty.call(dv, p.id)).length;
+  }
   votesComplete() {
     const exp = this.votersExpected();
-    return exp > 0 && Object.keys(this.room.dayVotes).length >= exp;
+    return exp > 0 && this.votesCast() >= exp;
   }
 
   // البوتات تقرر أفعالها تلقائيًا فور دخول الليل — بنفس شكل رسائل اللاعبين الحقيقيين
@@ -2335,7 +2582,7 @@ export class MafiaRoom {
     await this.persist();
     this.broadcastPublic({
       type: 'voteUpdate',
-      votesIn: Object.keys(this.room.dayVotes).length,
+      votesIn: this.votesCast(),          // v263: من الحاضرين — وإلا ظهر «٤/٤» والتصويت ينتظر
       totalAlive: this.votersExpected(),
     });
     if (this.votesComplete()) {
@@ -3327,9 +3574,11 @@ export class GotRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
-    // من أعلن دعمه لواجهة الغراب — ما ننتظر إلا هؤلاء، وإلا تجمّدت الليلة على نسخة قديمة مخزّنة في المتصفح
-    this.ravenClients = new Set();
+    /* v265: السبات — واجهة فوق getWebSockets() بدل Map في الذاكرة (تنجو النومة) */
+    this.sockets = hibernate(state);
+    /* من أعلن دعمه لواجهة الغراب — ما ننتظر إلا هؤلاء، وإلا تجمّدت الليلة على نسخة
+       قديمة مخزّنة في المتصفح. v265: كان Set في الذاكرة يُفرَّغ مع أول نومة فتُحسم
+       الليلة بلا انتظار فاريس/بيليش — صار this.room.ravenClients (انظر noteRavenClient). */
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -3376,7 +3625,8 @@ export class GotRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* v265: السبات — القبول يتأخّر حتى يُحسم الرفض: الرفض بـ accept() العادي
+       (مقبس سباتٍ يُغلق قبل ١٠١ لا يصل إغلاقه)، والمقعد بـ acceptWebSocket تحت. */
 
     // ── الهوية بالتوكن السري فقط (نفس علّة مافيا: المعرّف يُبَث للجميع) ──
     const token = url.searchParams.get('token');
@@ -3390,8 +3640,8 @@ export class GotRoom {
         if (this.room.hostId === oldId) this.room.hostId = newId;
         this.remapId(oldId, newId);
         const stale = this.sockets.get(oldId);
+        this.sockets.delete(oldId);        // v265: المرفق يُنزع قبل الإغلاق (انظر kickPlayer)
         if (stale) { try { stale.close(); } catch {} }
-        this.sockets.delete(oldId);
       } else {
         const stale = this.sockets.get(oldId);
         if (stale && stale !== server) { try { stale.close(); } catch {} }
@@ -3401,6 +3651,7 @@ export class GotRoom {
     // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
     // بدون هذا يتجاوز المهاجم حدّ allowCreate بالكامل ويفرّخ غرفًا بلا سقف.
     if (!player && !this.room.code) {
+      server.accept();
       server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
       server.close();
       return new Response(null, { status: 101, webSocket: client });
@@ -3408,11 +3659,13 @@ export class GotRoom {
 
     if (!player) {
       if (this.room.phase !== 'lobby') {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت، ما تقدر تنضم الحين' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.players.length >= MAX_PLAYERS) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -3433,13 +3686,12 @@ export class GotRoom {
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
+    this.state.acceptWebSocket(server);   // v265: سبات — الرسائل والإغلاق تصل webSocketMessage/Close
     this.sockets.set(player.id, server);
     this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.broadcastLobby();
@@ -3471,6 +3723,17 @@ export class GotRoom {
     if (this.room.accusedId === oldId) this.room.accusedId = newId;
     if (this.room.bronnContract === oldId) this.room.bronnContract = newId;
     for (const p of this.room.players) if (p.partnerId === oldId) p.partnerId = newId;
+    /* v264: حالة الغراب تتبعه كالباقي — كان غرابٌ معلّق له يسقط عند الفجر (يُبحث
+       بالمعرّف القديم)، وسجلّ غربانه يضيع، وغراب الليلة يُرسَل مرة ثانية، وفاريس
+       يفقد من كشفه فلا يراسله. */
+    for (const bag of ['ravenUsed', 'ravenLog']) {
+      const b = this.room[bag];
+      if (b && oldId in b) { b[newId] = b[oldId]; delete b[oldId]; }
+    }
+    for (const r of this.room.ravenPending || []) { if (r.to === oldId) r.to = newId; if (r.from === oldId) r.from = newId; }
+    if (Array.isArray(this.room.varysKnown)) this.room.varysKnown = this.room.varysKnown.map(x => x === oldId ? newId : x);
+    const rc = this.room.ravenClients;   // v265: إعلان الغراب صار في الغرفة — يتبعه كالباقي
+    if (rc && oldId in rc) { rc[newId] = rc[oldId]; delete rc[oldId]; }
   }
 
   async onMessage(playerId, evt) {
@@ -3480,7 +3743,9 @@ export class GotRoom {
     if (!msg || typeof msg !== 'object') return;
 
     if (msg.type === 'updateConfig' && playerId === this.room.hostId) {
-      this.room.config = sanitizeGotConfig(msg.config);
+      /* v264: الصفحة ترسل الخيار الذي تغيّر وحده — كان كل ما سواه ينطفئ (تفعيل
+         ميليساندرا يطفئ فاريس)، فما يجتمع دوران اختياريان. يُدمج مع الحالي كمافيا. */
+      this.room.config = sanitizeGotConfig({ ...this.room.config, ...(msg.config && typeof msg.config === 'object' ? msg.config : {}) });
       await this.persist(); this.broadcastLobby();
     }
     if (msg.type === 'kickPlayer' && playerId === this.room.hostId && this.room.phase === 'lobby') await this.kickPlayer(msg.targetId);
@@ -3497,7 +3762,7 @@ export class GotRoom {
     if (msg.type === 'baelishAlign') await this.handleBaelishAlign(playerId, msg.side);
     if (msg.type === 'ravenSend') await this.handleRavenSend(playerId, msg);
     if (msg.type === 'ravenSkip') await this.handleRavenSkip(playerId);
-    if (msg.type === 'ravenReady') this.ravenClients.add(playerId);
+    if (msg.type === 'ravenReady') await this.noteRavenClient(playerId);
     if (msg.type === 'startAccusation' && playerId === this.room.hostId && this.room.phase === 'day') await this.startAccusation();
     if (msg.type === 'accuseVote' && this.room.phase === 'accusing') await this.handleAccuseVote(playerId, msg.targetId);
     if (msg.type === 'startFinalVote' && playerId === this.room.hostId && this.room.phase === 'trial') await this.startFinalVote();
@@ -3510,10 +3775,16 @@ export class GotRoom {
        العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
        إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
        الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
-       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
-    if (ws && this.sockets.get(playerId) !== ws) return;
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب.
+       v265: closedSeat (applyHibernation) حرسها ونزع المرفق قبلنا، فـ get هنا
+       ترجع null لمقبسه — الحارس يبقى لمقبسٍ آخر مسجَّلٍ بعده فقط. */
+    const cur = this.sockets.get(playerId);
+    if (ws && cur && cur !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
+    /* v265: إعلان الغراب يسقط مع الاتصال — معناه «هذا المقبس الحيّ يدعم الغراب».
+       النومة ليست انقطاعًا فلا تمسّه، وya7-raven.js يعيد إرساله مع كل فتح مقبس. */
+    if (this.room.ravenClients) delete this.room.ravenClients[playerId];
     this.sockets.delete(playerId);
     this.migrateHostIfNeeded();
     await this.persist();
@@ -3538,8 +3809,14 @@ export class GotRoom {
     if (!target) return;
     this.sendPrivate(targetId, { type: 'kicked' });
     const ws = this.sockets.get(targetId);
-    if (ws) { try { ws.close(); } catch {} this.sockets.delete(targetId); }
+    /* v265: المرفق يُنزع قبل الإغلاق — المقبس المُغلَق يخرج من getWebSockets فلا يجده
+       delete بعده، فيصل إغلاقُه onClose ويبثّ حالةً زائدة لم تكن في v264. */
+    if (ws) { this.sockets.delete(targetId); try { ws.close(); } catch {} }
     this.room.players = this.room.players.filter(p => p.id !== targetId);
+    /* صوته يطلع معه (v262): المطرود ما عاد يُنتظر، فبقاء صوته في السجل
+       يكمّل العدد قبل صوتٍ حاضر لم يُدلَ بعد. */
+    if (this.room.accuseVotes) delete this.room.accuseVotes[targetId];
+    if (this.room.finalVotes) delete this.room.finalVotes[targetId];
     await this.persist();
     this.broadcastLobby();
     /* كمافيا: الطرد وحده يُخرج لاعبًا حيًّا، فقد يحسم اللعبة بخروجه. */
@@ -3547,8 +3824,26 @@ export class GotRoom {
       const winner = this.checkWin();
       if (winner) { await this.endGame(winner); return; }
     }
+    /* طرد المتّهم نفسه وسط محاكمته (v262): كانت المحاكمة تكمل على لاعبٍ ما
+       عاد في القائمة، فينهار الحكم على findPlayer فارغ بعد تبديل الطور، وتبقى
+       الغرفة في resolvingFinalVote للأبد — محفوظةً فتنجو حتى من النشر، ولا
+       «فرض الحسم» يطلّعها. المحاكمة تنلغى ويهبط الليل كأنه ما اتُّهم أحد. */
+    if (targetId === this.room.accusedId && (this.room.phase === 'trial' || this.room.phase === 'finalVoting')) {
+      await this.cancelTrial();
+      return;
+    }
     /* كالانقطاع: المطرود قد يكون آخر من ننتظر صوته أو فعله الليلي. */
     await this.maybeAdvanceOnDisconnect();
+  }
+
+  /* محاكمة بلا متّهم حاضر: لا حكم على غائب. يُفحص الفوز أولًا لأن من
+     يصل هنا من «فرض الحسم» ما مرّ بفحص kickPlayer. */
+  async cancelTrial() {
+    this.room.accusedId = null;
+    this.room.finalVotes = {};
+    const winner = this.checkWin();
+    if (winner) { await this.endGame(winner); return; }
+    await this.startNextNight();
   }
 
   alivePlayers(){ return this.room.players.filter(p=>p.alive); }
@@ -3558,10 +3853,17 @@ export class GotRoom {
   presentRole(role){ return this.alivePlayers().some(p=>p.role===role && this.isHere(p)); }
   votersExpected(){ return this.alivePlayers().filter(p=>this.isHere(p)).length; }
   finalVotersExpected(){ return this.alivePlayers().filter(p=>this.isHere(p) && p.id!==this.room.accusedId).length; }
+  /* v263: الاكتمال بمن صوّت لا بعدد الأصوات. صوتُ من صوّت ثم انقطع يبقى في
+     الحسم، لكنه كان يكمّل العدد فيُغلق التصويت قبل صوتِ حاضرٍ لم يُدلِ به. */
+  castBy(bag, list){ const b = this.room[bag] || {}; return list.filter(p=>Object.prototype.hasOwnProperty.call(b, p.id)).length; }
+  accuseCast(){ return this.castBy('accuseVotes', this.alivePlayers().filter(p=>this.isHere(p))); }
+  finalCast(){ return this.castBy('finalVotes', this.alivePlayers().filter(p=>this.isHere(p) && p.id!==this.room.accusedId)); }
+  accuseComplete(){ const e = this.votersExpected(); return e > 0 && this.accuseCast() >= e; }
+  finalComplete(){ const e = this.finalVotersExpected(); return e > 0 && this.finalCast() >= e; }
   async maybeAdvanceOnDisconnect(){
     if (this.room.phase==='night' && this.allNightActionsIn()) await this.resolveNight();
-    else if (this.room.phase==='accusing' && this.votersExpected()>0 && Object.keys(this.room.accuseVotes).length>=this.votersExpected()) await this.resolveAccusation();
-    else if (this.room.phase==='finalVoting' && this.finalVotersExpected()>0 && Object.keys(this.room.finalVotes).length>=this.finalVotersExpected()) await this.resolveFinalVote();
+    else if (this.room.phase==='accusing' && this.accuseComplete()) await this.resolveAccusation();
+    else if (this.room.phase==='finalVoting' && this.finalComplete()) await this.resolveFinalVote();
   }
   // ═══════════ البوتات ═══════════
   async addBot(wanted, dialect){
@@ -3588,6 +3890,9 @@ export class GotRoom {
     const t = this.findPlayer(targetId);
     if (!t || !t.isBot) return;
     this.room.players = this.room.players.filter(p => p.id !== targetId);
+    /* v263: كمافيا — مقبسٌ علِق بمقعد البوت يُغلق ويُشطب مع المقعد. */
+    const ws = this.sockets.get(targetId);
+    if (ws) { this.sockets.delete(targetId); try { ws.close(); } catch {} }   // v265: قبل الإغلاق (انظر kickPlayer)
     await this.persist();
     this.broadcastLobby();
   }
@@ -3744,14 +4049,20 @@ export class GotRoom {
       na.inspectTarget = msg.targetId;
     }
     else if (p.role==='melisandre') {
+      /* v264: الإحياء يُحجز عند الاختيار، فتبديله لحماية في نفس الليلة كان يحرقه بلا
+         ما يُستعمل (usedRevive يبقى true). reviveBy = حجزُ هذي الليلة: التبديل يردّه،
+         وتغيير هدف الإحياء نفسه لا يُرفض. */
       if (msg.action==='revive') {
         // لو الإحياء انتهى، ما نسقط بصمت على حماية ميت — نرجّع خطأ وننتظر اختيارًا صحيحًا
-        if (p.usedRevive) {
+        if (p.usedRevive && na.reviveBy !== p.id) {
           this.sendPrivate(p.id, { type:'error', message:'استخدمتِ الإحياء مرة واحدة — اختاري حماية بدلًا منه' });
           return;
         }
-        na.reviveTarget = msg.targetId; p.usedRevive = true; na.protectTarget = null;
-      } else { na.protectTarget = msg.targetId; na.reviveTarget = null; }
+        na.reviveTarget = msg.targetId; p.usedRevive = true; na.protectTarget = null; na.reviveBy = p.id;
+      } else {
+        if (na.reviveBy === p.id) { p.usedRevive = false; delete na.reviveBy; }
+        na.protectTarget = msg.targetId; na.reviveTarget = null;
+      }
     }
     else if (p.role==='hound') na.guardTarget = msg.targetId;
     else if (p.role==='craster') {
@@ -3781,7 +4092,7 @@ export class GotRoom {
   // الليلة ما تُحسم قبل ما صاحب الغراب يرسل أو يتخطّى — نفس أسلوب برون
   ravenPendingFrom(){
     return this.alivePlayers().filter(p =>
-      !p.isBot && p.connected && this.ravenClients.has(p.id) &&
+      !p.isBot && p.connected && !!(this.room.ravenClients || {})[p.id] &&
       (p.role === 'varys' || p.role === 'baelish') &&
       !(this.room.ravenUsed || {})[p.id] &&
       !(((this.room.nightActions || {}).ravenDone || {})[p.id]) &&
@@ -3906,6 +4217,9 @@ export class GotRoom {
         crasterTransformed: this.room.crasterTransformed,
         bronnArrowUsed: this.room.bronnArrowUsed,
         usedRevive: !!p.usedRevive,
+        /* v264: الصفحة تقرأ reviveUsed لا usedRevive — فزرّ الإحياء ما كان يتعطّل بعد
+           استعماله، والضغط عليه ثانيةً يرجع خطأً يرمي ميليساندرا للرئيسية وسط اللعب */
+        reviveUsed: !!p.usedRevive,
       });
       const rv = this.ravenStateFor(p);
       if (rv) this.sendPrivate(p.id, rv);
@@ -3922,6 +4236,10 @@ export class GotRoom {
     const p = this.findPlayer(playerId);
     if (!p || p.role!=='baelish' || this.room.baelishSide!==null) return;
     if (side!=='lannister' && side!=='stark') return;
+    /* v264: «ينحاز سرًّا لفريق بعد سقوط قتيلين» (وصف الدور، وشرط maybePromptBaelish
+       والبوت) — كان الخادم يقبل الانحياز من أول ليلة لأي عميل يرسله. بلا «error»:
+       الصفحة ترجع للرئيسية عند أي خطأ. */
+    if (!(this.room.deathsTotal >= 2)) return;
     this.room.baelishSide = side;
     await this.persist();
   }
@@ -3932,8 +4250,7 @@ export class GotRoom {
     this.autoBotAccuse();
     await this.persist();
     this.broadcastPublic({ type:'phaseChanged', phase:'accusing' });
-    const expA0 = this.votersExpected();
-    if (expA0 > 0 && Object.keys(this.room.accuseVotes).length >= expA0) await this.resolveAccusation();
+    if (this.accuseComplete()) await this.resolveAccusation();
   }
   async handleAccuseVote(playerId, targetId){
     const voter = this.findPlayer(playerId);
@@ -3945,33 +4262,44 @@ export class GotRoom {
     }
     this.room.accuseVotes[playerId] = targetId || null;
     await this.persist();
-    const expA = this.votersExpected();
-    this.broadcastPublic({ type:'voteUpdate', votesIn:Object.keys(this.room.accuseVotes).length, totalAlive:expA });
-    if (expA > 0 && Object.keys(this.room.accuseVotes).length >= expA) await this.resolveAccusation();
+    this.broadcastPublic({ type:'voteUpdate', votesIn:this.accuseCast(), totalAlive:this.votersExpected() });
+    if (this.accuseComplete()) await this.resolveAccusation();
   }
   async resolveAccusation(){
     if (this.room.phase !== 'accusing') return;
     this.room.phase = 'resolvingAccusation';
-    const tally = {};
-    for (const t of Object.values(this.room.accuseVotes)) { if (t) tally[t]=(tally[t]||0)+1; }
-    const entries = Object.entries(tally);
-    let accusedId = null;
-    if (entries.length) {
-      const max = Math.max(...entries.map(e=>e[1]));
-      const top = entries.filter(e=>e[1]===max);
-      accusedId = top[randInt(top.length)][0];           // من يُتَّهم — لا يُتوقَّع
-    }
-    this.room.accusedId = accusedId;
-    await this.persist();
-    if (accusedId) {
-      const p = this.findPlayer(accusedId);
-      this.room.phase = 'trial';
+    this._resolving = true;
+    try {
+      const tally = {};
+      for (const [voterId, t] of Object.entries(this.room.accuseVotes)) {
+        if (!t) continue;
+        /* الهدف لاعب حيّ في الغرفة وقت الحسم، والمصوّت ما زال فيها (v262):
+           صوتٌ على مطرود كان يفتح محاكمةً على غائب، فينهار accusedName على
+           findPlayer فارغ — /kick يرجع 500 والغرفة تعلق في trial. */
+        const tp = this.findPlayer(t);
+        if (!tp || !tp.alive || !this.findPlayer(voterId)) continue;
+        tally[t]=(tally[t]||0)+1;
+      }
+      const entries = Object.entries(tally);
+      let accusedId = null;
+      if (entries.length) {
+        const max = Math.max(...entries.map(e=>e[1]));
+        const top = entries.filter(e=>e[1]===max);
+        accusedId = top[randInt(top.length)][0];           // من يُتَّهم — لا يُتوقَّع
+      }
+      this.room.accusedId = accusedId;
       await this.persist();
-      this.broadcastPublic({ type:'trialStarted', accusedId, accusedName:p.name });
-    } else {
-      this.broadcastPublic({ type:'noAccusation' });
-      await this.startNextNight();
-    }
+      const p = accusedId ? this.findPlayer(accusedId) : null;   // قد يُطرد أثناء الحفظ
+      if (p) {
+        this.room.phase = 'trial';
+        await this.persist();
+        this.broadcastPublic({ type:'trialStarted', accusedId, accusedName:p.name });
+      } else {
+        this.room.accusedId = null;
+        this.broadcastPublic({ type:'noAccusation' });
+        await this.startNextNight();
+      }
+    } finally { this._resolving = false; }
   }
 
   async startFinalVote(){
@@ -3979,47 +4307,52 @@ export class GotRoom {
     this.autoBotFinalVote();
     await this.persist();
     this.broadcastPublic({ type:'phaseChanged', phase:'finalVoting' });
-    const expF0 = this.finalVotersExpected();
-    if (expF0 > 0 && Object.keys(this.room.finalVotes).length >= expF0) await this.resolveFinalVote();
+    if (this.finalComplete()) await this.resolveFinalVote();
   }
   async handleFinalVote(playerId, guilty){
     const voter = this.findPlayer(playerId);
     if (!voter || !voter.alive || voter.id===this.room.accusedId) return;
     this.room.finalVotes[playerId] = !!guilty;
     await this.persist();
-    const eligible = this.finalVotersExpected();
-    this.broadcastPublic({ type:'voteUpdate', votesIn:Object.keys(this.room.finalVotes).length, totalAlive:eligible });
-    if (eligible > 0 && Object.keys(this.room.finalVotes).length >= eligible) await this.resolveFinalVote();
+    this.broadcastPublic({ type:'voteUpdate', votesIn:this.finalCast(), totalAlive:this.finalVotersExpected() });
+    if (this.finalComplete()) await this.resolveFinalVote();
   }
   async resolveFinalVote(){
     if (this.room.phase !== 'finalVoting') return;
     this.room.phase = 'resolvingFinalVote';
-    const votes = Object.values(this.room.finalVotes);
-    const guiltyCount = votes.filter(v=>v).length;
-    const executed = guiltyCount > votes.length/2;
-    let name=null, roleName=null;
-    const alsoDead = [];
-    if (executed) {
+    this._resolving = true;
+    try {
       const p = this.findPlayer(this.room.accusedId);
-      p.alive = false; this.room.deathsTotal++;
-      name = p.name; roleName = GOT_ROLES[p.role].name;
-      this.tryInherit(p);
-      // الشريك يموت معه — ولازم يُعلن، وإلا بقي ظاهرًا حيًّا للجماعة وبنوا تصويتهم على معلومة غلط
-      if (p.partnerId) {
-        const partner = this.findPlayer(p.partnerId);
-        if (partner && partner.alive) {
-          partner.alive = false; this.room.deathsTotal++;
-          alsoDead.push({ id: partner.id, name: partner.name, roleName: GOT_ROLES[partner.role].name });
+      /* لا حكم على غائب (v262): كان `p.alive = false` ينهار هنا على متّهمٍ
+         مطرود بعد تبديل الطور، فتبقى الغرفة في resolvingFinalVote للأبد. */
+      if (!p) { await this.cancelTrial(); return; }
+      const votes = Object.entries(this.room.finalVotes)
+        .filter(([voterId]) => this.findPlayer(voterId)).map(([, v]) => v);
+      const guiltyCount = votes.filter(v=>v).length;
+      const executed = guiltyCount > votes.length/2;
+      let name=null, roleName=null;
+      const alsoDead = [];
+      if (executed) {
+        p.alive = false; this.room.deathsTotal++;
+        name = p.name; roleName = GOT_ROLES[p.role].name;
+        this.tryInherit(p);
+        // الشريك يموت معه — ولازم يُعلن، وإلا بقي ظاهرًا حيًّا للجماعة وبنوا تصويتهم على معلومة غلط
+        if (p.partnerId) {
+          const partner = this.findPlayer(p.partnerId);
+          if (partner && partner.alive) {
+            partner.alive = false; this.room.deathsTotal++;
+            alsoDead.push({ id: partner.id, name: partner.name, roleName: GOT_ROLES[partner.role].name });
+          }
         }
       }
-    }
-    await this.persist();
-    this.broadcastPublic({ type:'verdictResult', executed, name, roleName, alsoDead });
-    this.broadcastLobby();
-    this.maybePromptBaelish();
-    const winner = this.checkWin();
-    if (winner) { await this.endGame(winner); return; }
-    await this.startNextNight();
+      await this.persist();
+      this.broadcastPublic({ type:'verdictResult', executed, name, roleName, alsoDead });
+      this.broadcastLobby();
+      this.maybePromptBaelish();
+      const winner = this.checkWin();
+      if (winner) { await this.endGame(winner); return; }
+      await this.startNextNight();
+    } finally { this._resolving = false; }
   }
 
   async startNextNight(){
@@ -4046,11 +4379,23 @@ export class GotRoom {
     return null;
   }
 
+  /* v264: الفائزون حسب الأدوار — كان المرشّح team === winner وحده، ففوز كراستر
+     (فريقه neutral) لا يُسجَّل لأحد. بيليش يفوز مع الفريق الذي انحاز له (checkWin
+     يعدّه معهم)، وبرون مع ولاء عقده («ولاؤك يتحدد بأثر رجعي حسب من تقتل»). */
+  winnerIds(winner){
+    return this.room.players.filter(p => {
+      if (!GOT_ROLES[p.role]) return false;
+      if (winner === 'craster') return p.role === 'craster';
+      if (p.role === 'baelish') return this.room.baelishSide === winner;
+      if (p.role === 'bronn') return this.room.bronnContract === winner;
+      return GOT_ROLES[p.role].team === winner;
+    }).map(p => p.id);
+  }
+
   async endGame(winner){
     this.room.phase = 'over';
     await this.persist();
-    await this.recordResults(this.room.players
-      .filter(p => GOT_ROLES[p.role] && GOT_ROLES[p.role].team === winner).map(p => p.id));
+    await this.recordResults(this.winnerIds(winner));
     this.broadcastPublic({
       type:'gameOver', winner,
       players: this.room.players.map(p=>({ id:p.id, name:p.name, role:p.role, roleName:GOT_ROLES[p.role].name, alive:p.alive })),
@@ -4075,6 +4420,7 @@ export class GotRoom {
           crasterTransformed: this.room.crasterTransformed,
           bronnArrowUsed: this.room.bronnArrowUsed,
           usedRevive: !!me.usedRevive,
+          reviveUsed: !!me.usedRevive,   // v264: الاسم الذي تقرؤه الصفحة (انظر sendNightState)
         });
         const rv = this.ravenStateFor(me);
         if (rv) this.sendPrivate(playerId, rv);
@@ -4096,9 +4442,17 @@ export class GotRoom {
 
   // صمام أمان: المضيف يقدر يفرض حسم المرحلة لو علقت
   async forceAdvance(){
-    if (this.room.phase === 'night') await this.resolveNight();
-    else if (this.room.phase === 'accusing') await this.resolveAccusation();
-    else if (this.room.phase === 'finalVoting') await this.resolveFinalVote();
+    const ph = this.room.phase;
+    if (ph === 'night') await this.resolveNight();
+    else if (ph === 'accusing') await this.resolveAccusation();
+    else if (ph === 'finalVoting') await this.resolveFinalVote();
+    /* محاكمة متّهمها غائب: ما لها حكم ولا زرّ يكمّلها — تنلغى (v262). */
+    else if (ph === 'trial' && !this.findPlayer(this.room.accusedId)) await this.cancelTrial();
+    /* طوران عابران لا تبقى فيهما غرفة إلا إذا انهار حسمٌ في نصّه — قبل v262
+       كان طرد المتّهم يسوّيها، والحالة محفوظة فتنجو من النشر. لو ما فيه حسم
+       جارٍ الآن، يرجع الطور لما قبله ويُعاد الحسم بالحرّاس الجديدة. */
+    else if (ph === 'resolvingAccusation' && !this._resolving) { this.room.phase = 'accusing'; await this.resolveAccusation(); }
+    else if (ph === 'resolvingFinalVote' && !this._resolving) { this.room.phase = 'finalVoting'; await this.resolveFinalVote(); }
   }
 
   broadcastPublic(payload){
@@ -4227,6 +4581,15 @@ export class GotRoom {
     this.room.ravenUsed = {};
   }
 
+  /* v265: إعلان دعم الغراب يُحفظ في الغرفة مرة واحدة لكل لاعب — لا كتابة على كل رسالة */
+  async noteRavenClient(playerId){
+    const k = safeKey(String(playerId || ''));
+    if (!k) return;
+    this.room.ravenClients = this.room.ravenClients || {};
+    if (this.room.ravenClients[k]) return;
+    this.room.ravenClients[k] = 1;
+    await this.persist();
+  }
   async persist(){ await this.touchRoom(); await this.state.storage.put('room', this.room); }
 }
 
@@ -4505,7 +4868,8 @@ export class MawwihRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
+    /* v265: سبات — المقابس عند الرَّنتايم والمعرّف في مرفق المقبس (hibernate أعلى الملف) */
+    this.sockets = hibernate(state);
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -4548,9 +4912,10 @@ export class MawwihRoom {
     const gender = url.searchParams.get('gender') || 'm';
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('يتطلب WebSocket', { status: 426 });
 
+    /* v265: لا accept() هنا — الرفض يقبل مقبسه عاديًا ويغلقه (نفس الرسالة حرفيًا)،
+       والدخول وحده يُقبل بـ acceptWebSocket قبيل تسجيله. */
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
 
     const token = url.searchParams.get('token');
 
@@ -4565,13 +4930,22 @@ export class MawwihRoom {
         const newId = (validPlayerId(playerId) && !this.room.players.some(p => p.id === playerId)) ? playerId : oldId;
         seat.id = newId;
         // ننقل كل ما هو مرتبط بالمعرّف القديم
-        if (this.room.subs && oldId in this.room.subs) { this.room.subs[newId] = this.room.subs[oldId]; delete this.room.subs[oldId]; }
-        if (this.room.votes && oldId in this.room.votes) { this.room.votes[newId] = this.room.votes[oldId]; delete this.room.votes[oldId]; }
+        /* v265: بنفس المعرّف (الرجوع العادي) كان النقل ثم الحذف على المفتاح نفسه يمسح
+           إجابته وصوته — فيرجع من انقطع لحظةً ليجد الجولة تنتظره من جديد. */
+        if (newId !== oldId) {
+          if (this.room.subs && oldId in this.room.subs) { this.room.subs[newId] = this.room.subs[oldId]; delete this.room.subs[oldId]; }
+          if (this.room.votes && oldId in this.room.votes) { this.room.votes[newId] = this.room.votes[oldId]; delete this.room.votes[oldId]; }
+        }
         if (this.room.options) this.room.options.forEach(o => { o.by = o.by.map(b => b === oldId ? newId : b); });
         if (this.room.hostId === oldId) this.room.hostId = newId;
+        /* v263: المختار يرجع بمعرّف جديد فيبقى المختار — كان chooserId يبقى على
+           القديم، فيُعرض الدور على غيره ولا يقبل اختياره هو. */
+        if (this.room.chooserId === oldId) this.room.chooserId = newId;
         const stale = this.sockets.get(oldId);
-        if (stale && stale !== server) { try { stale.close(); } catch {} }
+        /* v265: نزع المعرّف قبل الإغلاق — وإلا وصل إغلاقه حاملًا المعرّف القديم
+           فعُدّ انقطاعًا (بثّ ردهة زائد وفحص مرحلة) لمقعدٍ رجع صاحبه للتوّ */
         this.sockets.delete(oldId);
+        if (stale && stale !== server) { try { stale.close(); } catch {} }
         player = seat;
       }
     }
@@ -4579,6 +4953,7 @@ export class MawwihRoom {
     // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
     // بدون هذا يتجاوز المهاجم حدّ allowCreate بالكامل ويفرّخ غرفًا بلا سقف.
     if (!player && !this.room.code) {
+      server.accept();
       server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
       server.close();
       return new Response(null, { status: 101, webSocket: client });
@@ -4586,11 +4961,13 @@ export class MawwihRoom {
 
     if (!player) {
       if (this.room.phase !== 'lobby') {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — ما تقدر تنضم الحين' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.players.length >= MAX_PLAYERS) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -4610,13 +4987,12 @@ export class MawwihRoom {
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
+    this.state.acceptWebSocket(server);   // v265: سبات — الرسائل والإغلاق عبر webSocketMessage/Close
     this.sockets.set(player.id, server);
     this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.broadcastLobby();
@@ -4645,7 +5021,9 @@ export class MawwihRoom {
         this.broadcastLobby();
       }
     }
-    if (msg.type === 'updateSettings' && playerId === this.room.hostId) {
+    /* v263: الإعدادات في الردهة وحدها — وسط اللعب كان تغيير الفرق يمسح فرق
+       الجميع بلا رجعة (اختيار الفريق للردهة فقط)، والجولات تُقصَّر أو تُمدَّد. */
+    if (msg.type === 'updateSettings' && playerId === this.room.hostId && this.room.phase === 'lobby') {
       // حدود صريحة — كانت أي مصفوفة/رقم يُقبل ويُخزَّن للأبد
       if (Array.isArray(msg.cats)) {
         // أرقام فئات فقط، داخل مدى البنك — قبل كذا كانت تُخزَّن نصوصاً بدون تحقق فتوقف الغرفة
@@ -4686,8 +5064,11 @@ export class MawwihRoom {
        العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
        إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
        الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
-       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
-    if (ws && this.sockets.get(playerId) !== ws) return;
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب.
+       v265: closedSeat (applyHibernation) نزع مرفقه قبل النداء فـ get ترجع null
+       للمقبس نفسه — الحارس يردّ مقبسًا آخر مسجَّلًا فقط. */
+    const cur = this.sockets.get(playerId);
+    if (cur && cur !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -4712,12 +5093,27 @@ export class MawwihRoom {
     if (targetId === this.room.hostId) return;
     const target = this.findPlayer(targetId);
     if (!target) return;
+    /* v264: طرد المختار وقت اختيار الفئة كان لا يبثّ شيئًا — الشاشات تبقى على
+       «(المطرود) يختار الفئة» ولا مخرج إلا «فرض» المضيف. الدور ينتقل لمن بعده
+       الحاضر (advanceChooser قبل الشطب ليبدأ من مقعده)، ويُعاد بثّ الاختيار. */
+    const handOff = this.room.phase === 'picking' && this.chooser() === target;
+    if (handOff) this.advanceChooser();
     this.sendPrivate(targetId, { type: 'kicked' });
     const ws = this.sockets.get(targetId);
-    if (ws) { try { ws.close(); } catch {} this.sockets.delete(targetId); }
+    /* v265: المعرّف يُنزع قبل الإغلاق، فلا يرجع إغلاقه «انقطاعًا» لمقعدٍ شُطب */
+    if (ws) { this.sockets.delete(targetId); try { ws.close(); } catch {} }
     this.room.players = this.room.players.filter(p => p.id !== targetId);
+    /* v263: إجابته وصوته يطلعان معه (كلمن العرش v262) — إجابته الباقية كانت
+       تمنع حاضرًا من كتابة نفس الكذبة، وصوته يمنح نقطة بعد خروجه. */
+    if (this.room.subs) delete this.room.subs[targetId];
+    if (this.room.votes) delete this.room.votes[targetId];
     await this.persist();
     this.broadcastLobby();
+    if (handOff && this.room.phase === 'picking' && this.room.players.length) {
+      const c = this.chooser(), catOptions = this.catOptions();
+      this.broadcastPublic({ type: 'phaseChanged', phase: 'picking', round: this.room.round, rounds: this.room.rounds, chooserId: c.id, chooserName: c.name, choices: catOptions });
+      this.sendPrivate(c.id, { type: 'catChoices', options: catOptions });
+    }
     /* كالانقطاع: المطرود قد يكون آخر من ننتظر إجابته أو تصويته. */
     await this.maybeAdvanceOnDisconnect();
   }
@@ -4726,11 +5122,15 @@ export class MawwihRoom {
   // المنقطع ما يوقف الجولة — بدون هذا تعلّق اللعبة على أول انقطاع
   activePlayers() { return this.room.players.filter(p => p.connected); }
   expected() { return this.activePlayers().length; }
+  /* v263: الاكتمال بمن كتب/صوّت لا بعدد المدخلات. مدخل من انقطع بعد إرساله
+     يبقى، لكنه كان يكمّل العدد فتُغلق المرحلة وحاضرٌ ما زال يكتب. */
+  doneCount(bag) { const b = this.room[bag] || {}; return this.activePlayers().filter(p => Object.prototype.hasOwnProperty.call(b, p.id)).length; }
+  phaseDone(bag) { const exp = this.expected(); return exp > 0 && this.doneCount(bag) >= exp; }
   async maybeAdvanceOnDisconnect() {
     const exp = this.expected();
     if (exp <= 0) return;
-    if (this.room.phase === 'writing' && Object.keys(this.room.subs).length >= exp) await this.startVoting();
-    else if (this.room.phase === 'voting' && Object.keys(this.room.votes).length >= exp) await this.reveal();
+    if (this.room.phase === 'writing' && this.phaseDone('subs')) await this.startVoting();
+    else if (this.room.phase === 'voting' && this.phaseDone('votes')) await this.reveal();
   }
   chooser() {
     // الدور مربوط بهوية اللاعب لا بموضعه — خروج أي لاعب كان يزحزح الدور عشوائيًا
@@ -4875,6 +5275,9 @@ export class MawwihRoom {
     // كان بلا أي حدّ: نص ضخم يُخزَّن ويُبَث للغرفة، وقد يتجاوز سقف التخزين
     const t = cleanText(text, 60);
     if (!t) { this.sendPrivate(playerId, { type: 'answerRejected', message: 'اكتب إجابة أولًا' }); return; }
+    /* v263: إجابة رموز فقط (😂😂) كانت «تُقبل» ثم تختفي: الخيارات تُبنى من
+       norm() الذي يمسح كل ما ليس حرفًا أو رقمًا، فلا تظهر كذبته للتصويت. */
+    if (!norm(t)) { this.sendPrivate(playerId, { type: 'answerRejected', message: 'اكتب إجابة بحروف أو أرقام — الرموز وحدها ما تنفع' }); return; }
     if (norm(t) === norm(this.room.q.ans)) {
       this.sendPrivate(playerId, { type: 'answerRejected', message: 'هذي هي الإجابة الصحيحة — موّه بغيرها 😉' });
       return;
@@ -4889,9 +5292,8 @@ export class MawwihRoom {
     this.room.subs[playerId] = t;
     this.sendPrivate(playerId, { type: 'answerAccepted' });
     await this.persist();
-    const expW = this.expected();
-    this.broadcastPublic({ type: 'writeProgress', submitted: Object.keys(this.room.subs).length, total: expW });
-    if (expW > 0 && Object.keys(this.room.subs).length >= expW) await this.startVoting();
+    this.broadcastPublic({ type: 'writeProgress', submitted: this.doneCount('subs'), total: this.expected() });
+    if (this.phaseDone('subs')) await this.startVoting();
   }
 
   async startVoting() {
@@ -4943,9 +5345,8 @@ export class MawwihRoom {
     }
     this.room.votes[playerId] = key;
     await this.persist();
-    const expV = this.expected();
-    this.broadcastPublic({ type: 'voteProgress', submitted: Object.keys(this.room.votes).length, total: expV });
-    if (expV > 0 && Object.keys(this.room.votes).length >= expV) await this.reveal();
+    this.broadcastPublic({ type: 'voteProgress', submitted: this.doneCount('votes'), total: this.expected() });
+    if (this.phaseDone('votes')) await this.reveal();
   }
 
   async reveal() {
@@ -4978,34 +5379,47 @@ export class MawwihRoom {
     this.room.phase = 'reveal';
     await this.persist();
 
-    const cards = this.room.options.map(o => ({
+    const payload = this.revealPayload();
+    this.broadcastPublic(payload);
+    if (payload.isLast) await this.endGame();
+  }
+
+  /* v264: حمولتا الكشف والنهاية تُبنيان من الحالة (الخيارات والأصوات والنقاط) —
+     reveal/endGame يبثّانها، ومن يحدّث صفحته وقت الكشف أو بعد النهاية يستلمها
+     نفسها. كانت sendRoundStateTo لا ترسل شيئًا للطورين فيبقى على الردهة. */
+  revealPayload() {
+    const voters = {}; (this.room.options || []).forEach(o => { voters[o.k] = []; });
+    for (const [pid, k] of Object.entries(this.room.votes || {})) if (voters[k]) voters[k].push(pid);
+    const cards = (this.room.options || []).map(o => ({
       key: o.k, text: o.text, isTruth: o.k === 'T',
       byNames: o.by.map(id => this.findPlayer(id)?.name).filter(Boolean),
       voterNames: (voters[o.k] || []).map(id => this.findPlayer(id)?.name).filter(Boolean),
     }));
-    const isLast = this.room.round >= this.room.rounds;
-    this.broadcastPublic({
+    return {
       type: 'revealResult', cat: (this.room.q && this.room.q.cat) || '', text: (this.room.q && this.room.q.text) || '', cards,
       gains: this.room.players.map(p => ({ id: p.id, name: p.name, gain: p.gain, score: p.score })),
       teams: this.teamsOn() ? this.teamTotals() : null,
-      isLast,
-    });
-    if (isLast) await this.endGame();
+      isLast: this.room.round >= this.room.rounds,
+    };
+  }
+
+  overPayload() {
+    const titles = this.titlesFor();
+    const teams = this.teamsOn() ? this.teamTotals() : null;
+    if (teams) teams.forEach(t => { t.members.forEach(m => { const ti = titles[m.id]; m.title = ti ? ti.label : null; m.titleDesc = ti ? ti.desc : null; }); });
+    return {
+      type: 'gameOver',
+      players: [...this.room.players].sort((a, b) => b.score - a.score)
+        .map(p => { const ti = titles[p.id]; return { id: p.id, name: p.name, score: p.score, title: ti ? ti.label : null, titleDesc: ti ? ti.desc : null }; }),
+      teams,
+    };
   }
 
   async endGame() {
     this.room.phase = 'over';
     await this.persist();
     await this.recordResults(topBy(this.room.players, p => p.score));
-    const titles = this.titlesFor();
-    const teams = this.teamsOn() ? this.teamTotals() : null;
-    if (teams) teams.forEach(t => { t.members.forEach(m => { const ti = titles[m.id]; m.title = ti ? ti.label : null; m.titleDesc = ti ? ti.desc : null; }); });
-    this.broadcastPublic({
-      type: 'gameOver',
-      players: [...this.room.players].sort((a, b) => b.score - a.score)
-        .map(p => { const ti = titles[p.id]; return { id: p.id, name: p.name, score: p.score, title: ti ? ti.label : null, titleDesc: ti ? ti.desc : null }; }),
-      teams,
-    });
+    this.broadcastPublic(this.overPayload());
   }
 
   sendRoundStateTo(playerId) {
@@ -5016,6 +5430,8 @@ export class MawwihRoom {
       const myOptions = this.optionsFor(playerId);
       this.sendPrivate(playerId, { type: 'phaseChanged', phase: 'voting', cat: this.room.q.cat, text: this.room.q.text, options: myOptions, teams: this.room.teams });
     }
+    else if (this.room.phase === 'reveal' && this.room.options) this.sendPrivate(playerId, this.revealPayload());   // v264
+    else if (this.room.phase === 'over') this.sendPrivate(playerId, this.overPayload());                            // v264
   }
 
   // صمام أمان: المضيف يقدر يفرض حسم المرحلة لو علقت (مثلًا لاعب انقطع وما رجع)
@@ -5026,6 +5442,10 @@ export class MawwihRoom {
       await this.startVoting();
     } else if (this.room.phase === 'voting') {
       await this.reveal();
+    } else if (this.room.phase === 'reveal') {
+      /* v264: الكشف ينتظر «الجولة التالية» من المضيف، و«فرض الحسم» ما كان له فرع هنا
+         (مضيفٌ حدّث صفحته وقت الكشف ما كان يرى الزرّ). يكمل كما يكمل الزرّ. */
+      if (this.room.round >= this.room.rounds) await this.endGame(); else await this.nextRound();
     }
   }
 
@@ -6172,8 +6592,12 @@ export class WalimaRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
+    /* v265: سبات — المقابس عند الرَّنتايم والمعرّف في مرفق المقبس (hibernate أعلى الملف) */
+    this.sockets = hibernate(state);
     this.state.blockConcurrencyWhile(async () => {
+      /* v265: طابور الهمسات ينجو النومة — في مفتاحه الخاص لا في this.room (انظر saveWq) */
+      const wq = await this.state.storage.get('wq');
+      if (wq instanceof Map) this._wq = wq;
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
         players: [], // {id,name,connected,seatToken,role,alibi,target,enemy,sus,statement,submitted}
@@ -6220,9 +6644,10 @@ export class WalimaRoom {
     const name = url.searchParams.get('name');
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('يتطلب WebSocket', { status: 426 });
 
+    /* v265: لا accept() هنا — الرفض يقبل مقبسه عاديًا ويغلقه (نفس الرسالة حرفيًا)،
+       والدخول وحده يُقبل بـ acceptWebSocket قبيل تسجيله. */
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
 
     const token = url.searchParams.get('token');
     let player = this.seatByToken(token);
@@ -6232,9 +6657,12 @@ export class WalimaRoom {
       if (newId !== oldId && !this.room.players.some(p => p.id === newId)) {
         player.id = newId;
         if (this.room.hostId === oldId) this.room.hostId = newId;
+        this.remapId(oldId, newId);
         const stale = this.sockets.get(oldId);
-        if (stale) { try { stale.close(1000, 'takeover'); } catch {} }
+        /* v265: نزع المعرّف قبل الإغلاق — وإلا وصل إغلاقه حاملًا المعرّف القديم
+           فعُدّ انقطاعًا (بثّ حالة زائد وفحص طور) لمقعدٍ رجع صاحبه للتوّ */
         this.sockets.delete(oldId);
+        if (stale) { try { stale.close(1000, 'takeover'); } catch {} }
       }
       /* v222: كان هنا إغلاقٌ ثانٍ للمقبس القديم بلا سبب، يسبق إغلاق «takeover»
          أدناه فيبتلع سببه — فلا يعرف التبويب القديم أنّ مقعده فُتح في مكانٍ آخر،
@@ -6244,6 +6672,7 @@ export class WalimaRoom {
     // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket.
     // بدون هذا يتجاوز المهاجم حدّ allowCreate بالكامل ويفرّخ غرفًا بلا سقف.
     if (!player && !this.room.code) {
+      server.accept();
       server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
       server.close();
       return new Response(null, { status: 101, webSocket: client });
@@ -6271,11 +6700,13 @@ export class WalimaRoom {
          ويأخذ دورًا في «وليمةٍ أخرى»، بدل «الوليمة بدأت» وهي منتهية. */
       const openDoor = this.room.phase === 'lobby' || this.room.phase === 'over';
       if (!openDoor) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الوليمة بدأت، ما تقدر تنضم الآن — ادخل بعد الحكم' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.players.filter(q => !q.kicked).length >= 10) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'المائدة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -6304,20 +6735,38 @@ export class WalimaRoom {
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
+    this.state.acceptWebSocket(server);   // v265: سبات — الرسائل والإغلاق عبر webSocketMessage/Close
     this.sockets.set(player.id, server);
     this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
     /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
        في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
     this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
 
     await this.persist();
     this.sendPrivate(player.id, { type: 'welcome', playerId: player.id, roomCode: this.room.code, seatToken: player.seatToken });
     this.broadcastState();
     if (player.role && this.room.phase !== 'lobby') this.sendPrivate(player.id, this.roleMessageFor(player));
-    this.flushWhispers(player.id);    // همساتٌ وصلت وهو منقطع (v222)
+    await this.flushWhispers(player.id);    // همساتٌ وصلت وهو منقطع (v222)
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /* كل ما هو مفهرس بمعرّف اللاعب ينتقل معه حين يرجع بمعرّف جديد (v262).
+     كانت الأصوات تبقى على المعرّف القديم: صوته القديم يُحسب ثم يُضاف صوتٌ
+     جديد باسمه الجديد (لاعبٌ واحد بثلاثة أصوات)، والأصوات عليه تشير لمعرّفٍ
+     ما عاد أحدًا فتسقط من العدّ — وtableCaught يقرّر فوز أغلب الأدوار. والهمسة
+     المنتظرة كانت تُسلَّم للمعرّف القديم فتضيع وصاحبها احترقت همسته الوحيدة. */
+  remapId(oldId, newId){
+    const v = this.room.votes;
+    if (v) {
+      if (Object.prototype.hasOwnProperty.call(v, oldId)) { v[newId] = v[oldId]; delete v[oldId]; }
+      for (const k of Object.keys(v)) if (v[k] === oldId) v[k] = newId;
+    }
+    if (this._wq && this._wq.has(oldId)) {
+      const q = this._wq.get(oldId);
+      this._wq.delete(oldId);
+      this._wq.set(newId, (this._wq.get(newId) || []).concat(q));
+      this._wqDirty = true;           // v265: يُحفظ مع persist التالية
+    }
   }
 
   /* نسخة وليمة الخاصة — تحتاج نفس حارس المطرود، فهي تحجب المشترك */
@@ -6330,7 +6779,51 @@ export class WalimaRoom {
   /* v220: كانت تحفظ بلا touchRoom — فلا منبّه كنس يُسلَّح أبدًا، وكل غرفة
      وليمة تبقى في التخزين إلى الأبد (نفس عيب BtaqatiRoom في v50 وChatRoom
      في v57). الآن كبقية الغرف: تُمسح بعد ست ساعات بلا أحد. */
-  async persist(){ await this.touchRoom(); await this.state.storage.put('room', this.room); }
+  async persist(){
+    await this.touchRoom(); await this.state.storage.put('room', this.room);
+    if (this._wqDirty) await this.saveWq();
+  }
+  /* v265: طابور الهمسات كان في الذاكرة وحدها، والنومة تمسحها — فهمسةٌ لضيفٍ منقطع
+     تضيع مع أول نومة (بعد ثوانٍ لا بعد نشرة). يُحفظ في مفتاحه 'wq' لا في this.room:
+     نصُّ الهمسة لا يدخل الغرفة ولا ما يُبنى منها (البثّ ونصّ المحقّق) — نفس عهد v212. */
+  async saveWq(){
+    this._wqDirty = false;
+    try { await this.state.storage.put('wq', this._wq || new Map()); } catch {}
+  }
+
+  /* ══════════ منبّه الغرفة (v265) ══════════
+     لا مؤقّت في الذاكرة ينجو النومة. موعدان محفوظان في الغرفة:
+       • graceAt — مهلة رجوع المنقطع (كانت setTimeout في armGrace).
+       • المحقّق العالق — thinkingAt + ٧٥ث (كان يُفكّ مع أول رسالة أو نبضة، والنبضة
+         صار يردّها الرَّنتايم دون إيقاظنا). askAI يُجهض بعد ٤٥ث فالفجوة تضمن ألا
+         يوقظ المنبّهُ مضيفًا ثانيًا والنداء الأول حيّ؛ و_running يحرس النسخة نفسها. */
+  stuckAt(){
+    const r = this.room;
+    return (r && r.phase === 'thinking' && r.thinking) ? (r.thinkingAt || 0) + 75000 : 0;
+  }
+  nextWake(){
+    const r = this.room;
+    if (!r) return 0;
+    let w = 0;
+    const s = this.stuckAt();
+    if (s) w = (this._running && s + 60 <= Date.now()) ? Date.now() + 15000 : s + 60;
+    if (r.graceAt && (!w || r.graceAt < w)) w = r.graceAt;
+    return w;
+  }
+  async onWake(){
+    const r = this.room, now = Date.now();
+    const s = this.stuckAt();
+    if (s && now > s && !this._running) {        // = فرع resumePhase الأول، منتظَرًا
+      r.thinking = false;
+      await this.runHost(!!r.thinkingFinal);
+    }
+    if (r.graceAt && r.graceAt <= now + 20) {    // = ما كان يفعله مؤقّت armGrace
+      r.graceAt = 0;
+      await this.persist();
+      await this.maybeAdvance();
+      this.broadcastState();
+    }
+  }
   sendPrivate(id, payload){
     const ws = this.sockets.get(id);
     if (ws) { try { ws.send(JSON.stringify(payload)); } catch {} }
@@ -6424,10 +6917,14 @@ export class WalimaRoom {
         if (target) {
           this.sendPrivate(tid, { type: 'kicked' });
           const sock = this.sockets.get(tid);
-          if (sock) { try { sock.close(4002, 'kicked'); } catch {} this.sockets.delete(tid); }
+          /* v265: المعرّف يُنزع قبل الإغلاق، فلا يرجع إغلاقه «انقطاعًا» لمقعدٍ شُطب */
+          if (sock) { this.sockets.delete(tid); try { sock.close(4002, 'kicked'); } catch {} }
           this.room.players = this.room.players.filter(x => x.id !== tid);
           await this.persist();
           this.broadcastState();
+          /* v263: طرد الردهة من زرّ المضيف لا يمرّ على kickPlayer، فيُخرَج من
+             دردشة الغرفة هنا — كان يكمل الكتابة فيها من مقبسه المفتوح */
+          await this.chatKick(tid, target.seatToken);
         }
       }
       return;
@@ -6440,7 +6937,7 @@ export class WalimaRoom {
       await this.startGame(msg.rounds);
     }
     if (msg.type === 'leave') { await this.handleLeave(playerId); return; }
-    if (msg.type === 'whisperAck') { this.ackWhisper(playerId, msg.id); return; }
+    if (msg.type === 'whisperAck') { await this.ackWhisper(playerId, msg.id); return; }
     /* v222: الكلمة تحمل رقم جولتها ومباراتها — كلمةٌ علقت في مقبسٍ ميت ثم وصلت
        بعد أن مضت جولتها لا تُسجَّل على الجولة التالية. (الصفحات القديمة لا ترسل
        الرقمين فتمرّ كما كانت.) */
@@ -6460,8 +6957,11 @@ export class WalimaRoom {
        العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
        إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
        الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
-       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
-    if (ws && this.sockets.get(playerId) !== ws) return;
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب.
+       v265: closedSeat (applyHibernation) نزع مرفقه قبل النداء فـ get ترجع null
+       للمقبس نفسه — الحارس يردّ مقبسًا آخر مسجَّلًا فقط. */
+    const cur = this.sockets.get(playerId);
+    if (cur && cur !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) { p.connected = false; if (!p.left) p.goneAt = Date.now(); }
     this.sockets.delete(playerId);
@@ -6500,12 +7000,11 @@ export class WalimaRoom {
     return this.room.players.filter(p => !p.connected && !p.kicked && !p.left && p.goneAt && p.goneAt + G > now
       && !(ph === 'writing' ? p.submitted : (this.room.votes && this.room.votes[p.id]))).map(p => p.name);
   }
-  armGrace(ms){
-    if (this._graceT) { try { clearTimeout(this._graceT); } catch {} }
-    this._graceT = setTimeout(() => {
-      this._graceT = null;
-      this.maybeAdvance().then(() => this.broadcastState()).catch(() => {});
-    }, ms + 60);
+  /* v265: كان setTimeout في الذاكرة يموت مع النومة فتبقى المائدة تنتظر غائبًا. الموعد
+     نفسه (ms + 60) صار graceAt في الغرفة، والمنبّه يؤدّي ما كان يؤدّيه المؤقّت (onWake). */
+  async armGrace(ms){
+    this.room.graceAt = Date.now() + ms + 60;
+    await this.persist();
   }
   onBootGhost(p, now){ p.goneAt = now; }                 // بعد نشرة: الكل «انقطع الآن»
   maybeAdvanceOnDisconnect(){ return this.maybeAdvance(); }
@@ -6599,6 +7098,7 @@ export class WalimaRoom {
     this.room.players.forEach(p => { p.whisperUsed = false; p.goneAt = 0; p.left = false; });
     this.room.gameNo = (this.room.gameNo || 0) + 1;
     this._wq = new Map();             // همساتٌ لم تُؤكَّد من مباراةٍ سابقة لا تعبر
+    this._wqDirty = true;             // v265
     this.room.phase = 'writing';
     await this.persist();
 
@@ -6626,35 +7126,41 @@ export class WalimaRoom {
     if (clean.length < 2) { this.sendPrivate(from.id, { type:'error', message:'اكتب همستك أولاً' }); return; }
     if (to.kicked || to.left) { this.sendPrivate(from.id, { type:'error', message:'هذا الضيف غادر المائدة — اختر غيره' }); return; }
     from.whisperUsed = true;
-    await this.persist();
     /* v222: كانت تُرسَل مرّةً وتُنسى — فهمسةٌ لضيفٍ انقطع لحظتها (أو مقبسُه ميتٌ
        ولم ينكشف بعد) تضيع للأبد وصاحبها احترقت همستُه الوحيدة. الآن تبقى في
        ذاكرة الكائن (لا في this.room ولا في التخزين ولا في أي حالةٍ مبثوثة) حتى
        يؤكّد جوالُ المقصود استلامَها، وتُعاد عليه عند رجوعه. الجوال يُسقط المكرّر
-       بالمعرّف. «تُقال مرّةً وتُسمع مرّة» باقية — لكنها صارت تُسمع فعلًا. */
+       بالمعرّف. «تُقال مرّةً وتُسمع مرّة» باقية — لكنها صارت تُسمع فعلًا.
+       v265: والذاكرة تُمسح مع كل نومة، فالطابور يُحفظ أيضًا في مفتاحه 'wq' — لا في
+       this.room ولا في أي حالةٍ مبثوثة (saveWq). */
     const item = { id: newSeatToken().slice(0, 12), from: from.name, text: clean, sent: 0 };
     if (!this._wq) this._wq = new Map();
     const q = this._wq.get(to.id) || [];
     q.push(item); this._wq.set(to.id, q);
-    this.flushWhispers(to.id);
+    this._wqDirty = true;             // v265: الهمسة تُحفظ مع استهلاكها في كتابةٍ واحدة
+    await this.persist();
+    await this.flushWhispers(to.id);
     this.sendPrivate(from.id, { type: 'whisperSent', to: to.name });
     this.broadcastState();
   }
-  flushWhispers(id){
+  async flushWhispers(id){
     const q = this._wq && this._wq.get(id);
     if (!q || !q.length || !this.sockets.get(id)) return;
     for (const it of q) { it.sent++; this.sendPrivate(id, { type: 'whisper', id: it.id, from: it.from, text: it.text }); }
     /* صفحةٌ قديمة لا تؤكّد: بعد ثلاث محاولات نكفّ، فلا تتكرّر عليه مع كل رجوع */
     const keep = q.filter(it => it.sent < 3);
     if (keep.length) this._wq.set(id, keep); else this._wq.delete(id);
+    await this.saveWq();              // v265: العدّاد ينجو النومة
   }
-  ackWhisper(id, wid){
+  async ackWhisper(id, wid){
     const q = this._wq && this._wq.get(id);
     if (!q || typeof wid !== 'string') return;
     const keep = q.filter(it => it.id !== wid);
+    if (keep.length === q.length) return;   // v265: معرّفٌ لا يطابق شيئًا لا يكلّف كتابة
     if (keep.length) this._wq.set(id, keep); else this._wq.delete(id);
+    await this.saveWq();              // v265
   }
-  dropWhispers(id){ if (this._wq) this._wq.delete(id); }
+  dropWhispers(id){ if (this._wq && this._wq.delete(id)) this._wqDirty = true; }   // v265: يُحفظ مع persist التالية
 
   /* ══════════ تصويت الضيوف ══════════
      يسبق الحكمَ لا يستبدله: الأصواتُ تصل المحقّقَ رأياً يُؤخذ به أو
@@ -6692,7 +7198,7 @@ export class WalimaRoom {
       : ph === 'voting' ? live.every(p => this.room.votes && this.room.votes[p.id]) : false;
     if (!ready) return;
     const wait = this.graceLeft();
-    if (wait > 0) { this.armGrace(wait); return; }      // منقطعٌ قبل ثوانٍ: أمهِله
+    if (wait > 0) { await this.armGrace(wait); return; }      // منقطعٌ قبل ثوانٍ: أمهِله
     if (ph === 'writing') await this.endOfRound();
     else await this.runHost(true);
   }
@@ -6706,11 +7212,11 @@ export class WalimaRoom {
     victim.kicked = true; victim.connected = false;
     victim.seatToken = 'kicked-' + newSeatToken();
     const sock = this.sockets.get(victim.id);
+    this.sockets.delete(victim.id);   // v265: قبل الإغلاق — فلا يرجع إغلاقه «انقطاعًا» (goneAt وبثّ زائد)
     if (sock) {
       try { sock.send(JSON.stringify({ type: 'error', message: 'طردك المضيف من الغرفة' })); } catch {}
       try { sock.close(4002, 'kicked'); } catch {}
     }
-    this.sockets.delete(victim.id);
     this.dropWhispers(victim.id);
     if (this.room.phase === 'lobby' || this.room.phase === 'over') this.room.players = this.room.players.filter(p => p.id !== victim.id);
     await this.persist();
@@ -6722,8 +7228,7 @@ export class WalimaRoom {
      تشغيل الكائن (نشرٌ جديد) وسط الانتظار بقيت الغرفةُ «تفكّر» للأبد.
      تُنادى مع كلِّ رسالةٍ واتصال؛ بعد ٧٥ ثانية نعيد النداء. */
   resumePhase(){
-    if (this.room && this.room.phase === 'thinking' && this.room.thinking
-        && Date.now() - (this.room.thinkingAt || 0) > 75000 && !this._running) {
+    if (this.stuckAt() && Date.now() > this.stuckAt() && !this._running) {
       this.room.thinking = false;
       const final = !!this.room.thinkingFinal;
       this.runHost(final).catch(() => {});
@@ -6731,7 +7236,7 @@ export class WalimaRoom {
     }
     /* مهلة رجوعٍ انقضت ومؤقّتها ضاع (إعادة تشغيل): أيُّ رسالةٍ أو نبضة تحسمها */
     if (this.room && (this.room.phase === 'writing' || this.room.phase === 'voting')
-        && !this._graceT && !this.room.thinking && this.room.players.some(p => !p.connected && p.goneAt)) {
+        && !this.room.graceAt && !this.room.thinking && this.room.players.some(p => !p.connected && p.goneAt)) {
       this.maybeAdvance().catch(() => {});
     }
   }
@@ -6781,7 +7286,7 @@ export class WalimaRoom {
 
   // من لم يتكلّم يُسجَّل صمته — أفضل من تجميد المائدة
   async forceRound(){
-    if (this._graceT) { try { clearTimeout(this._graceT); } catch {} this._graceT = null; }
+    this.room.graceAt = 0;            // v265: كان clearTimeout(_graceT) — المهلة الآن موعدٌ محفوظ
     for (const p of this.room.players) {
       if (p.connected && !p.kicked && !p.submitted) {
         p.submitted = true; p.statement = '';
@@ -7017,14 +7522,18 @@ export class WalimaRoom {
 }
 
 // تفعيل الخنق والتنظيف واستعادة المقعد على كل الغرف
+applyHibernation(MafiaRoom);   // v265: السبات قبل RoomCommon (يلفّ webSocketMessage بسقف الحجم)
 applyRoomCommon(MafiaRoom, 'mafia');
+applyHibernation(GotRoom);
 applyRoomCommon(GotRoom, 'khawana');
+applyHibernation(MawwihRoom);   // v265: قبل applyRoomCommon ليلفّ مُغلِّفُه webSocketMessage
 applyRoomCommon(MawwihRoom, 'mawwih');
 /* فَطِن انتهت — لم تعد لها صفحة ولا مسار ولا مدخل في اللوبي. الصنف
    يبقى مصدَّرًا لأن ربط FATIN_ROOM ما زال في wrangler.toml؛ حذف صنف
    Durable Object يحتاج ترحيلًا بـ`deleted_classes` وإلا فشل النشر.
    وهو الآن غير قابل للوصول من أي مسار، فلا يكلّف شيئًا. */
 applyRoomCommon(FatinRoom, 'fatin');
+applyHibernation(WalimaRoom);   // v265: قبل applyRoomCommon ليلفّ مُغلِّفُه webSocketMessage
 applyRoomCommon(WalimaRoom, 'walima');
 /* مهلة رجوع المنقطع في وليمة (v222). ثابتٌ على الصنف ليصفّره محاكي الجولات. */
 WalimaRoom.GRACE_MS = 20000;
@@ -7337,8 +7846,10 @@ export class DaqashRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
-    this.timer = null;
+    /* v265: سبات — المقابس عند الرَّنتايم والمعرّف في مرفقها، فتنجو النومة.
+       ولا مقبض مؤقّت: مهلة الطور hand.endsAt المحفوظة، والمنبّه يوقظنا لها
+       (nextWake/onWake تحت). */
+    this.sockets = hibernate(state);
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -7428,7 +7939,8 @@ export class DaqashRoom {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* v265: مسارات الرفض الثلاثة تحت تُغلق فورًا فتأخذ accept() العادي (نفس
+       الرسالة حرفيًا)؛ المقعد الناجح وحده يدخل السبات بـ acceptWebSocket. */
 
     const token = url.searchParams.get('token');
     const name = url.searchParams.get('name');
@@ -7451,16 +7963,19 @@ export class DaqashRoom {
     } else {
       // ع-١ · رمز لم تُنشأ له غرفة: لا نُنشئها من اتصال WebSocket
       if (!this.room.code) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'اللعبة بدأت — انتظر الجولة الجاية' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.players.length >= DQ_MAX_PLAYERS) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -7475,17 +7990,18 @@ export class DaqashRoom {
     }
 
     this.noteAccount(url, player);
+    /* v265: السبات يبدأ هنا — قبل أي serializeAttachment (sockets.set). */
+    this.state.acceptWebSocket(server);
     /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
-    /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
-       في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
+    /* عودة لاعب تُحيي مرحلة حالتها المحفوظة بلا مهلة — بلا انتظار أول رسالة. */
     this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
+    /* v265: لا addEventListener — المستمِع في الذاكرة يموت مع أول نومة؛
+       الرسائل تصل webSocketMessage والإغلاق webSocketClose (applyHibernation). */
 
     await this.persist();
     this.sendPrivate(player.id, {
@@ -7503,8 +8019,11 @@ export class DaqashRoom {
        العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
        إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
        الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
-       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
-    if (ws && this.sockets.get(playerId) !== ws) return;
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب.
+       v265: closedSeat نزع مرفق مقبسنا قبل النداء فـ get لا تجده؛ الحارس
+       يردّ فقط لو سُجّل للمقعد مقبسٌ آخر. */
+    const cur = ws ? this.sockets.get(playerId) : null;
+    if (cur && cur !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -7593,6 +8112,8 @@ export class DaqashRoom {
       you: viewerId,
       players,
       now: Date.now(),
+      /* v264: لعبة أنهاها الطرد (بقي منافس واحد) — لا فائز ولا نتيجة مسجّلة */
+      noWinner: r.phase === 'over' && !!r.noWinner,
     };
 
     if (h) {
@@ -7698,16 +8219,23 @@ export class DaqashRoom {
        ويحاول العودة بدل شاشة الطرد. نمهله لحظة ثم نقفل. */
     if (ws) {
       try { ws.send(JSON.stringify({ type: 'kicked' })); } catch {}
+      /* v265: مهلة نقلٍ لا منطق لعب — sockets.delete تحت تنزع مرفقه فورًا فلا
+         يُعنون ولا يُحسب إغلاقه؛ ولو ضاعت بإخلاء فالصفحة تقفله بنفسها عند kicked. */
       setTimeout(() => { try { ws.close(4003, 'kicked'); } catch {} }, 250);
     }
     this.sockets.delete(targetId);
 
-    if (this.room.phase === 'lobby') {
+    /* v263: وبعد نهاية اللعبة كذلك — لا يد جارية تفسد فهارسها، وكان مقعده يُحسب في السقف */
+    if (this.room.phase === 'lobby' || this.room.phase === 'over') {
       this.room.players.splice(i, 1);
       await this.persist();
       this.broadcastState();
       return;
     }
+
+    /* v263: الطرد لا يصير طريقة للفوز — لو ما بقي بعده إلا منافس واحد تنتهي
+       اللعبة عند اليد الجاية بلا تسجيل نتائج (newHand) */
+    if (!p.out && this.room.players.filter(q => !q.kicked && !q.out && q !== p).length < 2) this.room.kickEnd = true;
 
     // التوكن يُبطَل كي لا يعود بإعادة الاتصال
     p.kicked = true;
@@ -7735,17 +8263,18 @@ export class DaqashRoom {
            يمنح الفائز قدره مباشرة قبل ما يصل لتلك الحالة أصلًا. */
         h.turn = h.order.length;
         await this.startOffer();
-      } else if (h.phase === 'offer' && h.dealerIdx === i) {
-        // الموزّع طُرد: يوزَّع بالتساوي بدل انتظار من لن يعود
-        const L = this.live(h);
-        if (L.length) {
-          h.dealerIdx = L[L.length - 1];
-          const o = this.others(h), step = this.room.cfg.min;
-          const each = o.length ? Math.floor(h.pot / o.length / step) * step : 0;
-          const shares = {};
-          o.forEach(k => { shares[this.room.players[k].id] = each; });
-          await this.doOffer(shares);
-        }
+      } else if ((h.phase === 'offer' || h.phase === 'vote')
+                 && (h.dealerIdx === i || this.live(h).length <= 1)) {
+        /* الموزّع طُرد (v263). وقت «الرضا» كان يسقط لفرع التصويت فيحسم
+           resolveVotes عرضه ويدفع لـ live(h) وحده — فتضيع حصّة الموزّع المطوي
+           (القدر كله لو ما وزّع شيئًا). ووقت العرض كان يُقسم آليًا على الباقين
+           بلا الموزّع الجديد: مع حيَّين يأخذ أولهم القدر كله بطرد. الآن قاعدة
+           اللعبة نفسها لموزّعٍ خرج من اليد (startOffer، كالانسحاب): المهمة لآخر
+           حيّ فيعرض من جديد والأصوات تُصفَّر؛ حيٌّ واحد يأخذ القدر (ولو طُرد
+           غير الموزّع وبقي الموزّع وحده — كان ينتظر عرضًا لا أحد يصوّت عليه)؛
+           ولا أحد = تُرَدّ الرهانات. رهان المطرود يبقى في القدر كرهان أي منسحب. */
+        h.votes = this.room.players.map(() => null);
+        await this.startOffer();
       } else if (h.phase === 'vote') {
         // صوته لم يعد متوقَّعًا: قد يكون هو آخر من ننتظره
         h.votes[i] = null;
@@ -7778,9 +8307,13 @@ export class DaqashRoom {
       return;
     }
     this.room.phase = 'playing';
+    this.room.kickEnd = false;
+    this.room.noWinner = false;
+    /* v263: من غادر الردهة قبل البدء يجلس احتياطًا — كان يُوزَّع عليه وقد يصير
+       الموزّع، فتنتظره الطاولة مهلة دوره كل يد. يرجع فيدخل من اليد الجاية. */
     this.room.players.forEach(p => {
       p.chips = this.room.cfg.start;
-      p.out = false; p.sitting = false; p.autoMiss = 0;
+      p.out = false; p.sitting = !p.connected; p.autoMiss = 0;
     });
     this.room.handNo = 0;
     this.room.dealerIdx = 0;
@@ -7811,6 +8344,18 @@ export class DaqashRoom {
     }
 
     r.players.forEach(p => { if (p.chips <= 0) p.out = true; });
+
+    /* v263: طردٌ ترك منافسًا واحدًا (kickPlayer): تنتهي اللعبة هنا بلا تسجيل
+       نتائج — كان الباقي يُسجَّل فائزًا بطرد خصومه */
+    if (r.kickEnd) {
+      r.kickEnd = false;
+      r.noWinner = true;      // v264: تقرؤه طبقة الصفحة فلا تقول «كسبت» للباقي
+      r.phase = 'over';
+      r.hand = null;
+      await this.persist();
+      this.broadcastState();
+      return;
+    }
 
     // بلغ الهدف: اللعبة تنتهي هنا بدل ما تستمر بلا نهاية
     if (r.cfg.target > 0 && r.handNo > 0) {
@@ -7888,7 +8433,7 @@ export class DaqashRoom {
     };
     this.log('الموزّع: ' + r.players[d].name);
     await this.persist();
-    this.armTurn();
+    await this.armTurn();
     this.broadcastState();
   }
 
@@ -7917,16 +8462,38 @@ export class DaqashRoom {
   }
 
   // ═══════════ المؤقّت ═══════════
-  /* الـ DO يبقى حيًّا ما دامت هناك اتصالات مفتوحة، فـ setTimeout كافٍ.
-     ومع ذلك نتحقق من endsAt عند كل رسالة، حتى لو نام المؤقّت. */
-  setPhaseTimer(ms, fn) {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(async () => {
-      this.timer = null;
-      try { await fn(); } catch (e) {}
-    }, ms);
+  /* v265: مع السبات يُخلى الكائن في كل طور صامت، وsetTimeout كان يموت معه
+     فتتجمّد اليد. المهلة hand.endsAt محفوظة أصلًا، والمؤقّت القديم كان يفجّر
+     onTimeout(no, seq) عند endsAt + 400 — وذاك نفسه موعد المنبّه الآن: nextWake
+     تعطيه لـ RoomCommon.alarm، وonWake تنادي onTimeout بحرّاسها كما هي، بالرقمين
+     الحاليّين (المنبّه واحد، والمهلة تُعاد مع كل تقدّم فلا يبقى موعدٌ قديم). */
+  nextWake() {
+    const r = this.room, h = r && r.hand;
+    if (!h || !h.endsAt || r.phase === 'lobby' || r.phase === 'over') return 0;
+    /* طاولةٌ بلا بشريٍّ متصل تتوقف ولا تلعب نفسها حتى over ولا تسجّل نتائج لأحد
+       (قاعدة البلوت v264): المنبّه يسقط على التنظيف، وأول راجعٍ يسلّحه بحفظه
+       (persist ← touchRoom) فتنطلق المهلة الفائتة مرة واحدة. */
+    if (!r.players.some(p => p && !p.isBot && !p.kicked && p.connected)) return 0;
+    if (this._stuck === h.no + ':' + h.endsAt) return 0;
+    return h.endsAt + 400;
   }
-  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
+
+  async onWake() {
+    const h = this.room.hand;
+    if (!h) return;
+    const key = h.no + ':' + h.endsAt;
+    try { await this.onTimeout(h.no, h.seq); }
+    finally {
+      /* مهلةٌ فاتت ولم تحرّك شيئًا (حالة شاذة أو استثناء) لا يعاد تفجيرها كل
+         ٢٠ms بلا نهاية — المؤقّت القديم كان يفرغ مرة واحدة كذلك. */
+      const k = this.room.hand;
+      if (k && k.no + ':' + k.endsAt === key) this._stuck = key;
+    }
+  }
+
+  /* لا مؤقّت في الذاكرة يُلغى: الموعد يُشتقّ من الحالة عند كل حفظ.
+     أُبقي الاسم لمواضع ندائه (والاختبارات). */
+  clearPhaseTimer() {}
 
   /* ── إحياء المرحلة بعد إعادة تشغيل الكائن ──
      `setTimeout` يعيش في ذاكرة الـ Durable Object وحدها. وكل نشرة
@@ -7937,12 +8504,12 @@ export class DaqashRoom {
      الآن: أي رسالة أو اتصال جديد يعيد تسليح المؤقّت من المهلة
      المحفوظة (أو يفجّره فورًا لو انقضت). التسليح لا الاستدعاء
      المباشر: فيمرّ من نفس المسار وتنطبق كل حراسه. */
+  /* v265: المنبّه ينجو النومة والنشرة، ومهلةٌ فاتت يفجّرها هو في موعدها. فالإحياء
+     بقي للحالة المحفوظة بلا مهلة: تُمنح دورًا كاملًا وتُحفظ فيتسلّح المنبّه منها. */
   resumePhase() {
-    if (this.timer) return;
     let due = null;
     try { due = this.pendingPhase(); } catch { return; }
-    if (!due || typeof due.fn !== 'function') return;
-    this.setPhaseTimer(Math.max(0, Number(due.ms) || 0), due.fn);
+    if (due && due.fresh) this.persist().catch(() => {});
   }
 
   pendingPhase() {
@@ -7955,7 +8522,7 @@ export class DaqashRoom {
     if (!h.endsAt) {
       const full = (this.room.cfg && this.room.cfg.turnSec ? this.room.cfg.turnSec : 25) * 1000;
       h.endsAt = Date.now() + full;
-      return { ms: full + 400, fn: () => this.onTimeout(no, seq) };
+      return { ms: full + 400, fn: () => this.onTimeout(no, seq), fresh: true };
     }
     return { ms: h.endsAt - Date.now() + 400, fn: () => this.onTimeout(no, seq) };
   }
@@ -7965,13 +8532,12 @@ export class DaqashRoom {
     if (!h) return;
     const ms = this.room.cfg.turnSec * 1000;
     h.endsAt = Date.now() + ms;
-    const snapNo = h.no, snapSeq = h.seq;
-    this.setPhaseTimer(ms + 400, () => this.onTimeout(snapNo, snapSeq));
     /* المهلة كانت تُضبط بعد `persist()` دائمًا، فما تصل التخزين أبدًا:
        المحفوظ يبقى endsAt=0. فحتى لو نجت الحالة من إعادة التشغيل، لا
-       يبقى في التخزين ما يُعرف منه متى ينتهي الدور. الحفظ هنا بلا
-       انتظار — الكتابة الفعلية على كل حركة قائمة أصلًا. */
-    try { this.persist(); } catch {}
+       يبقى في التخزين ما يُعرف منه متى ينتهي الدور.
+       v265: والحفظ صار منتظَرًا في كل مواضع النداء: منه يُشتقّ المنبّه
+       (persist ← touchRoom ← nextWake)، فضياعه ضياع الموعد لا تأخّره. */
+    return this.persist();
   }
 
   async onTimeout(handNo, seq) {
@@ -8134,7 +8700,7 @@ export class DaqashRoom {
        نتخطّى المطويين، وإن بقي حيٌّ واحد ننهي المزاد فورًا. */
     while (h.turn < h.order.length && h.folded[h.order[h.turn]]) h.turn++;
     if (this.live(h).length <= 1) h.turn = h.order.length;
-    if (h.turn < h.order.length) { this.armTurn(); return; }
+    if (h.turn < h.order.length) { await this.armTurn(); return; }
     await this.startOffer();
   }
 
@@ -8170,7 +8736,7 @@ export class DaqashRoom {
     }
     h.phase = 'offer';
     this.bump();
-    this.armTurn();
+    await this.armTurn();
   }
 
   async actOffer(playerId, msg) {
@@ -8229,7 +8795,7 @@ export class DaqashRoom {
     h.votesOpen = false;
     this.log(this.room.players[h.dealerIdx].name + ' عرض التوزيع');
     this.bump();
-    this.armTurn();
+    await this.armTurn();
   }
 
   // ═══════════ التصويت ═══════════
@@ -8257,6 +8823,15 @@ export class DaqashRoom {
   async resolveVotes() {
     const h = this.room.hand;
     if (h.phase !== 'vote') return;
+    /* v263: عرض موزّعٍ خرج من اليد لا يُحسم — live(h) لا يشمله فتضيع حصّته.
+       (حالة محفوظة قبل v263؛ الطرد الآن يعيد العرض بنفسه) */
+    if (h.folded[h.dealerIdx]) {
+      h.votes = this.room.players.map(() => null);
+      await this.startOffer();
+      await this.persist();
+      this.broadcastState();
+      return;
+    }
     this.clearPhaseTimer();
     const cfg = this.room.cfg;
     const o = this.others(h);
@@ -8400,8 +8975,7 @@ export class DaqashRoom {
   armRevealTimer() {
     const h = this.room.hand;
     h.endsAt = Date.now() + DQ_REVEAL_MS;
-    const snapNo = h.no, snapSeq = h.seq;
-    this.setPhaseTimer(DQ_REVEAL_MS + 400, () => this.onTimeout(snapNo, snapSeq));
+    /* v265: لا مؤقّت — كل نداءٍ هنا يليه persist، ومنه يتسلّح المنبّه */
   }
 
   async nextHand() {
@@ -8415,6 +8989,7 @@ export class DaqashRoom {
     this.broadcastState();
   }
 }
+applyHibernation(DaqashRoom);   // v265: webSocketMessage/Close/Error + حارس الهوية
 applyRoomCommon(DaqashRoom, 'daqash');
 
 // ══════════════════════ لودو الخداع (LudoRoom) ══════════════════════
@@ -8426,6 +9001,13 @@ const LUDO_ROLL_LOCK_MS = 90 * 1000;      // بعدها تُعتبر الرمي�
 const LUDO_CARDS = ['freeze', 'shield', 'push', 'swap'];   // مطابقة CARDS في ludo/index.html
 const LUDO_SKINS = ['classic', 'disc', 'gem', 'hex'];      // مطابقة SKINS في ludo/index.html
 const LUDO_BY_ACTIONS = new Set(['pick', 'reveal', 'veto', 'card', 'skin', 'trade', 'undo']);
+/* v263: سقف السجل لكل مقعد لا للغرفة وحدها. السجل كان يُقفل الغرفة للأبد عند
+   ٤٠٠٠ حركة، وحركةٌ رخيصة مكرّرة (شكل الحجر مثلًا) من مقعدٍ واحد تبلغه في
+   دقائق. أطول مباراة في محاكاة محرّك الصفحة (٣٠٠ مباراة لكل عدد، حركات
+   عشوائية وكروت): ~١٩٠٠ حركة كلها، وأكثر مقعدٍ ~٥٠٠. ألفٌ لكل مقعد ضعفُ
+   ذلك، والسقف العام = مجموع المقاعد، فلا يبلغه مقعدٌ واحد مهما كرّر. */
+const LUDO_SEAT_ACTIONS = 1000;
+const LUDO_SKIN_MAX = 20;           // تغييرات شكل الحجر المسجّلة لكل مقعد (الصفحة تسمح بها في الإعداد وحده)
 
 // عدد صحيح داخل مدى، أو null
 function ludoInt(v, min, max) {
@@ -8543,6 +9125,8 @@ export class LudoRoom {
     const J = LudoRoom.json;
     let body = {};
     if (request.method === 'POST') { try { body = await request.json(); } catch { body = {}; } }
+    /* v264: جسم null كان يرمي عند body.token/body.name ⇒ 500 */
+    if (!body || typeof body !== 'object') return LudoRoom.json({ error: 'طلب غير صالح' }, 400);
     const d = this.d;
     const path = url.pathname.replace(/^.*\/room\/[A-Z0-9]{4,8}/i, '') || url.pathname;
 
@@ -8664,6 +9248,17 @@ export class LudoRoom {
       if (!a) return J({ error: 'حركة غير صالحة' }, 400);
       // الحركات المرتبطة بصاحبها لا تُقبل إلا منه هو
       if (LUDO_BY_ACTIONS.has(a.t) && a.by !== mySeat) return J({ error: 'مقعد غير مطابق' }, 403);
+      /* v263: ما لا يغيّر شيئًا عند أي جهاز لا يدخل السجل: كرت بدايةٍ ثانٍ
+         (المحرّك يطبّق الأول وحده)، وشكلٌ هو نفسه الحالي، وما فوق سقف الأشكال.
+         يُردّ «تمّ» كي لا تظهر للاعب رسالة خطأ. */
+      if (a.t === 'pick' && d.actions.some(x => x.t === 'pick' && x.by === mySeat)) {
+        return J({ ok: true, n: d.actions.length, liesLeft: null, dup: true });
+      }
+      if (a.t === 'skin') {
+        let cur = 'classic', cnt = 0;
+        for (const x of d.actions) if (x.t === 'skin' && x.by === mySeat) { cur = x.skin; cnt++; }
+        if (cur === a.skin || cnt >= LUDO_SKIN_MAX) return J({ ok: true, n: d.actions.length, liesLeft: null, dup: true });
+      }
       if (a.t === 'roll' && mySeat !== d.seat) return J({ error: 'ارمِ أول' }, 400);
       if (a.t === 'declare') {
         if (mySeat !== d.seat) return J({ error: 'ما هو دورك' }, 403);
@@ -8671,9 +9266,25 @@ export class LudoRoom {
         // كذبة ثانية ويضيف حركة ثانية إلى السجل
         if (d.declared) return J({ error: 'أعلنت رقمك' }, 409);
       }
-      if ((a.t === 'nomove' || a.t === 'commit') && d.seat != null && mySeat !== d.seat) {
-        return J({ error: 'ما هو دورك' }, 403);
+      /* «مرّر الدور» و«ثبّت» يُنهيان رميةً معلّقة لصاحبها وحده (v262). بلا رمية
+         معلّقة كانا يُقبلان من أي مقعد: ضغطتان سريعتان على «مرّر الدور» تصلان
+         الخادم، فتُسجَّل الثانية بعد أن مسحت الأولى القفل، وكل جهاز يطبّقها على
+         صاحب الدور التالي فيطير دوره. تكرارها من صاحب الرمية نفسه يُردّ «تمّ»
+         بلا تسجيل (إعادة إرسال عادية على شبكة بطيئة)، وغيره يُرفض. */
+      if (a.t === 'nomove' || a.t === 'commit') {
+        if (d.seat == null) {
+          if (d.lastEnd && d.lastEnd.seat === mySeat && d.lastEnd.t === a.t) {
+            return J({ ok: true, n: d.actions.length, liesLeft: null, dup: true });
+          }
+          return J({ error: 'ما هو دورك' }, 403);
+        }
+        if (mySeat !== d.seat) return J({ error: 'ما هو دورك' }, 403);
       }
+      /* v263: السقف قبل أي تغيير في الحالة — مقعدٌ بلغ حصّته يُردّ وحده، والبقية
+         يكملون (كان: ٤٠٠١ حركة من أي مقعد = كل الحركات مرفوضة للأبد) */
+      if (!Array.isArray(d.seatN)) d.seatN = [];
+      if ((d.seatN[mySeat] | 0) >= LUDO_SEAT_ACTIONS) return J({ error: 'مقعدك تجاوز حدّ الحركات في هذي المباراة' }, 409);
+      if (d.actions.length >= LUDO_SEAT_ACTIONS * LUDO_MAX_PLAYERS) return J({ error: 'الجولة طويلة جدًا' }, 409);
       if (a.t === 'reveal') {
         if (d.secret == null) return J({ error: 'ما فيه رمية' }, 400);
         a.real = d.secret;              // الحقيقة من الخادم لا من العميل
@@ -8687,11 +9298,12 @@ export class LudoRoom {
         if (lying) d.lies[mySeat] -= 1;
         liesLeft = d.lies[mySeat];
       }
-      if (d.actions.length > 4000) return J({ error: 'الجولة طويلة جدًا' }, 409);
       d.actions.push(a);
+      d.seatN[mySeat] = (d.seatN[mySeat] | 0) + 1;
       // 'nomove' كذلك يُنهي الرمية — بدونها بقي القفل مغلقًا على اللاعب التالي
       if (a.t === 'declare') d.declared = true;
       if (a.t === 'commit' || a.t === 'reveal' || a.t === 'veto' || a.t === 'nomove') {
+        d.lastEnd = { seat: d.seat, t: a.t };   // لتمييز إعادة الإرسال عن محاولة إنهاء دور غيرك
         d.secret = null; d.seat = null; d.rollAt = 0; d.declared = false;
       }
       await this.save();
@@ -8752,8 +9364,9 @@ export class DakhilRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
-    this.timer = null;
+    /* v265: سبات — المقابس عند الرَّنتايم لا في Map تُمسح مع أول نومة، والنبضة
+       يردّها الرَّنتايم نفسه. ولا مقبض مؤقّت: المواعيد في الغرفة (nextWake). */
+    this.sockets = hibernate(state);
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -8783,38 +9396,44 @@ export class DakhilRoom {
   idxOf(id) { return this.room.players.findIndex(p => p.id === id); }
   activePlayers() { return this.room.players.filter(p => p.connected); }
 
-  setPhaseTimer(ms, fn) {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(async () => {
-      this.timer = null;
-      try { await fn(); } catch (e) {}
-    }, ms);
+  /* ── v265: المواعيد في الغرفة، والمنبّه يحسمها ──
+     كان مؤقّت النقاش setTimeout في الذاكرة: يموت مع كل نومة ونشرة، والسبات
+     يُنيم الغرفة في صمت النقاش نفسه. موعدان محفوظان في الغرفة: نهاية مؤقّت
+     النقاش (round.endsAt — والصفحة تعدّ منه) ونهاية مهلة الرجوع بعد نشرة
+     (ghostAt + BOOT_GRACE_MS). persist يسلّح المنبّه على أقربهما
+     (touchRoom ← wakeTime ← nextWake)، وRoomCommon.alarm ينادي onWake حين يستحق. */
+  nextWake() {
+    const r = this.room;
+    if (!r) return 0;
+    const d = this.pendingPhase();
+    const g = r.ghostAt > 0 ? r.ghostAt + BOOT_GRACE_MS : 0;
+    return d && g ? Math.min(d, g) : (d || g);
   }
-  clearPhaseTimer() { if (this.timer) { clearTimeout(this.timer); this.timer = null; } }
+  async onWake() {
+    const r = this.room, now = Date.now() + 20;     // سماحية RoomCommon.alarm نفسها
+    /* مهلة الرجوع: لو لم يحسم الفحصُ شيئًا يُحفظ مسحُها — وإلا عاد الموعد الفائت
+       من التخزين بعد النومة وسلّح منبّهًا بلا عمل */
+    if (r.ghostAt > 0 && r.ghostAt + BOOT_GRACE_MS <= now && !(await this.endGrace())) await this.persist();
+    const d = this.pendingPhase();
+    if (d && d <= now) await this.startVote();     // ما كان يفعله مؤقّت النقاش حرفًا
+  }
 
   /* ── إحياء المرحلة بعد إعادة تشغيل الكائن ──
-     `setTimeout` يعيش في ذاكرة الـ Durable Object وحدها. وكل نشرة
-     جديدة لـ worker.js تُعيد تشغيل كل الكائنات، وكذلك إخلاؤها من
-     الذاكرة — فيضيع المؤقّت بينما تنجو الحالة في التخزين. النتيجة قبل
-     هذا الإصلاح: الجولة تتجمّد على طورها للأبد، وكل حركة تُرفض لأن
-     وقتها «انتهى»، ولا شيء يحرّكها — الغرفة تبقى ميتة ست ساعات.
-     الآن: أي رسالة أو اتصال جديد يعيد تسليح المؤقّت من المهلة
-     المحفوظة (أو يفجّره فورًا لو انقضت). التسليح لا الاستدعاء
-     المباشر: فيمرّ من نفس المسار وتنطبق كل حراسه. */
+     كان يعيد تسليح مؤقّتٍ ضاع مع النشرة أو الإخلاء (فتتجمّد الجولة على طورها
+     ست ساعات). v265: المنبّه لا يضيع، فبقي من الإحياء شبكة أمان لموعدٍ فات قبل
+     أن يصل منبّهه: يُحسم الآن بمسار المنبّه نفسه وحراسه. */
   resumePhase() {
-    if (this.timer) return;
-    let due = null;
-    try { due = this.pendingPhase(); } catch { return; }
-    if (!due || typeof due.fn !== 'function') return;
-    this.setPhaseTimer(Math.max(0, Number(due.ms) || 0), due.fn);
+    const w = this.nextWake();
+    if (w > 0 && w <= Date.now()) return this.onWake().catch(() => {});
   }
 
+  /* موعد نهاية النقاش أو 0 */
   pendingPhase() {
     const rd = this.room && this.room.round;
     /* الموقوف بيد المضيف ليس ضائعًا — إحياؤه يسرق منه الإيقاف */
-    if (!rd || rd.paused || !rd.endsAt) return null;
-    if (this.room.phase !== 'discuss') return null;
-    return { ms: rd.endsAt - Date.now(), fn: () => this.startVote() };
+    if (!rd || rd.paused || !rd.endsAt) return 0;
+    if (this.room.phase !== 'discuss') return 0;
+    return rd.endsAt;
   }
 
   async handleCreate(request) {
@@ -8833,6 +9452,7 @@ export class DakhilRoom {
     const hostId = crypto.randomUUID();
     const hostToken = newSeatToken();
     this.room.hostId = hostId;
+    this.room.customBy = this.room.cfg.useCustom ? hostId : null;   // كاتب الكلمة المخصّصة
     this.room.players = [this.newSeat(hostId, name, hostToken)];
     await this.persist();
     return Response.json({ roomCode: this.room.code, playerId: hostId, seatToken: hostToken });
@@ -8858,7 +9478,8 @@ export class DakhilRoom {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* v265: سبات — مسارات الرفض تحت تقبل بـ accept() العادي (رسالتها كما هي) قبل
+       أي acceptWebSocket: مقبس سباتٍ يُغلق قبل رجوع 101 لا يصل إغلاقه (RoomCommon.refuse) */
 
     const token = url.searchParams.get('token');
     const name = url.searchParams.get('name');
@@ -8872,16 +9493,20 @@ export class DakhilRoom {
       player.connected = true;
     } else {
       if (!this.room.code) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.phase !== 'lobby' && this.room.phase !== 'results') {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الجولة شغّالة — انتظر لين تخلص' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
-      if (this.room.players.length >= DK_MAX_PLAYERS) {
+      /* v263: مقعد المطرود وسط الجولة يبقى حتى الجولة الجاية — لا يُحسب في السقف */
+      if (this.room.players.filter(p => !p.kicked).length >= DK_MAX_PLAYERS) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -8896,17 +9521,19 @@ export class DakhilRoom {
     }
 
     this.noteAccount(url, player);
+    /* عودة لاعب تُحيي مرحلة فات موعدها — بلا انتظار أول رسالة. v265: قبل قبول
+       المقبس وبانتظارها: بثّ الحسم يصل الحاضرين، والراجع يستلم welcome ثم الحالة
+       المحسومة كما كان (لا حالةً قبل welcome). */
+    await this.resumePhase();
+    this.state.acceptWebSocket(server);
     /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
     this.hostAlive();                 // ردهة بلا مضيف متصل تأخذ مضيفًا الآن
-    /* عودة لاعب تُحيي مرحلة تجمّدت بضياع المؤقّت — بلا انتظار أول رسالة.
-       في الغرف بلا مؤقّت هذي دالة فارغة من RoomCommon. */
-    this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
+    /* v265: لا addEventListener — الرسائل والإغلاق تصل webSocketMessage/webSocketClose
+       (applyHibernation) بمعرّف المرفق، والمستمِع في الذاكرة كان يموت مع أول نومة. */
 
     await this.persist();
     this.sendPrivate(player.id, {
@@ -8915,7 +9542,12 @@ export class DakhilRoom {
       roomCode: this.room.code,
       seatToken: player.seatToken,
     });
-    this.broadcastState();
+    /* v263: مرحلةٌ لا تنتظر إلا منقطعين (خرج الكل ثم رجع واحد، أو انقضت مهلة
+       النشرة والغرفة فاضية) تُحسم بالراجع. داخل مهلة الرجوع بعد نشرة لا: أول
+       الراجعين وحده لا «يكمّل» التصويت — يحسمها maybeAdvanceOnDisconnect بعدها. */
+    const g = this.room.ghostAt;      // v265: محفوظة في الغرفة (كانت this._ghostAt تضيع مع النومة)
+    const graceOver = !(g > 0) || Date.now() - g >= BOOT_GRACE_MS;
+    if (!(graceOver && await this.maybeAdvance())) this.broadcastState();
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -8924,8 +9556,11 @@ export class DakhilRoom {
        العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
        إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
        الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
-       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
-    if (ws && this.sockets.get(playerId) !== ws) return;
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب.
+       v265: closedSeat (applyHibernation) فحص الهوية ونزع المرفق قبل النداء، فلا
+       مقبس مسجَّل الآن للمعرّف — الحارس يردّ فقط لو سُجّل له مقبس آخر. */
+    const cur = this.sockets.get(playerId);
+    if (ws && cur && cur !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -8963,8 +9598,11 @@ export class DakhilRoom {
     const r = this.room;
     const rd = r.round;
     const over = r.phase === 'results';
+    /* v263: المطرود لا يظهر حتى ينقفل التصويت — كان يبقى «منقطعًا» في القائمة
+       فيبدو الطرد كأنه ما صار، ويُصوَّت عليه. بعدها يظهر (الكشف والنتائج بدوره). */
+    const hideKicked = r.phase === 'reveal' || r.phase === 'discuss' || r.phase === 'vote';
 
-    const players = r.players.map(p => {
+    const players = r.players.filter(p => !(hideKicked && p.kicked)).map(p => {
       const base = {
         id: p.id, name: p.name, connected: p.connected,
         isHost: p.id === r.hostId, score: p.score, g: p.g || 'm',
@@ -8987,7 +9625,10 @@ export class DakhilRoom {
       type: 'state',
       phase: r.phase,
       code: r.code,
-      cfg: r.cfg,
+      /* الكلمة المخصّصة سرّ الجولة (v262): كانت cfg تُبثّ كما هي لكل لاعب،
+         فيستلم الدخيل الكلمة داخل cfg.customWord بينما me.word محجوبة عنه —
+         وتظهر أيضًا في ردّ ping. لا يراها إلا كاتبها. */
+      cfg: viewerId === (r.customBy || r.hostId) ? r.cfg : Object.assign({}, r.cfg, { customWord: '' }),
       cats: DK_CATS,
       hostId: r.hostId,
       you: viewerId,
@@ -9073,7 +9714,7 @@ export class DakhilRoom {
   // ═══════════ الرسائل ═══════════
   async onMessage(playerId, evt) {
     if (!this.allowMsg(playerId)) return;
-    this.resumePhase();          // مؤقّت ضائع بعد إعادة تشغيل؟ أعِده الآن
+    await this.resumePhase();    // v265: موعدٌ فات قبل منبّهه؟ يُحسم قبل الرسالة كما كان المؤقّت
     let msg;
     try { msg = JSON.parse(evt.data); } catch { return; }
     if (!msg || typeof msg !== 'object') return;
@@ -9083,8 +9724,12 @@ export class DakhilRoom {
 
     switch (msg.type) {
       case 'updateName':
-        if (typeof msg.name === 'string' && msg.name.trim()) {
-          p.name = cleanName(msg.name);
+        /* v264: كالدخول تمامًا — في الردهة وشاشة النتائج وحدهما (الجولة الشغّالة تقفل
+           الأسماء كما تقفل الدخول: عليها يصوّت الناس)، والاسم يُنظَّف ويُفرَّد عن بقية
+           المقاعد («نورة ٢»). كان يقبل أي اسم في أي طور: نسخة من اسم غيرك وسط التصويت. */
+        if ((this.room.phase === 'lobby' || this.room.phase === 'results')
+            && typeof msg.name === 'string' && msg.name.trim()) {
+          p.name = uniqueName({ players: this.room.players.filter(x => x !== p) }, msg.name);
           await this.persist(); this.broadcastState();
         }
         break;
@@ -9092,6 +9737,8 @@ export class DakhilRoom {
       case 'updateSettings':
         if (isHost && (this.room.phase === 'lobby' || this.room.phase === 'results')) {
           this.room.cfg = sanitizeDakhilConfig(msg.cfg);
+          /* من كتب الكلمة يعرفها: لا يُختار دخيلًا، ولا يراها غيره (v262) */
+          this.room.customBy = this.room.cfg.useCustom ? playerId : null;
           const mx = this.maxDakhil();
           if (this.room.cfg.dakhilCount > mx) this.room.cfg.dakhilCount = mx;
           await this.persist(); this.broadcastState();
@@ -9099,18 +9746,10 @@ export class DakhilRoom {
         break;
 
       case 'kick':
+        /* v263: نفس kickPlayer (الردهة وشاشة النتائج = شطب كما كان) — فيخرج
+           المطرود من دردشة الغرفة أيضًا بغلاف applyRoomCommon */
         if (isHost && (this.room.phase === 'lobby' || this.room.phase === 'results')) {
-          const i = this.idxOf(msg.targetId);
-          if (i > -1 && this.room.players[i].id !== this.room.hostId) {
-            const ws = this.sockets.get(msg.targetId);
-            if (ws) {
-              try { ws.send(JSON.stringify({ type: 'kicked', message: 'المضيف طلّعك من الغرفة' })); } catch {}
-              try { ws.close(); } catch {}
-            }
-            this.sockets.delete(msg.targetId);
-            this.room.players.splice(i, 1);
-            await this.persist(); this.broadcastState();
-          }
+          await this.kickPlayer(String(msg.targetId || ''));
         }
         break;
 
@@ -9147,8 +9786,7 @@ export class DakhilRoom {
           rd.remain = null;
           rd.paused = false;
           rd.endsAt = Date.now() + rd.total * 1000;
-          this.setPhaseTimer(rd.total * 1000, () => this.startVote());
-          await this.persist(); this.broadcastState();
+          await this.persist(); this.broadcastState();   // v265: persist يسلّح المنبّه على endsAt
         }
         break;
 
@@ -9161,12 +9799,10 @@ export class DakhilRoom {
             rd.paused = false;
             rd.endsAt = Date.now() + (rd.remain || 0) * 1000;
             rd.remain = null;
-            this.setPhaseTimer(Math.max(0, rd.endsAt - Date.now()), () => this.startVote());
           } else {
             rd.paused = true;
             rd.remain = Math.max(0, Math.round((rd.endsAt - Date.now()) / 1000));
             rd.endsAt = null;
-            this.clearPhaseTimer();
           }
           await this.persist(); this.broadcastState();
         }
@@ -9244,8 +9880,8 @@ export class DakhilRoom {
   }
 
   async startRound() {
-    this.clearPhaseTimer();
     const r = this.room;
+    r.players = r.players.filter(p => !p.kicked);   // v263: مطرود الجولة الماضية يُشطب الآن
     const seats = this.activePlayers();
     if (seats.length < DK_MIN_PLAYERS) {
       this.send(r.hostId, { type: 'error', message: 'محتاج ٣ لاعبين متصلين على الأقل' });
@@ -9267,7 +9903,12 @@ export class DakhilRoom {
       ? Math.min(r.cfg.dakhilCount, maxD)
       : 1 + randInt(maxD);
 
-    const order = shuffle(seats.map(p => p.id));
+    let order = shuffle(seats.map(p => p.id));
+    /* كاتب الكلمة المخصّصة يعرفها، فلو صار دخيلًا انكشفت الجولة قبل أن تبدأ
+       (v262). يُؤخَّر لآخر الترتيب، والدخلاء من أوّله وعددهم ≤ n-1، فلا يقع
+       فيهم أبدًا. (المخادع يعرف الكلمة أصلًا، فلا بأس أن يكونه.) */
+    const writer = r.cfg.useCustom ? (r.customBy || r.hostId) : null;
+    if (writer && order.includes(writer)) order = order.filter(id => id !== writer).concat([writer]);
     const dakhil = order.slice(0, count);
     const mukhadi = r.cfg.mukhadiOn ? (order[count] || null) : null;
 
@@ -9295,7 +9936,6 @@ export class DakhilRoom {
 
   async startVote() {
     if (this.room.phase !== 'discuss') return;  // حارس حسم مزدوج
-    this.clearPhaseTimer();
     const rd = this.room.round;
     rd.endsAt = null; rd.remain = null; rd.paused = false;
     this.room.phase = 'vote';
@@ -9314,12 +9954,13 @@ export class DakhilRoom {
     const r = this.room, rd = r.round;
     if (!rd) return false;
     const pool = DAKHIL_BANK[rd.catKey] || [];
-    return !!(r.cfg.guessOn && !rd.custom && rd.dakhil.length > 0 && pool.length > 1);
+    /* v263: دخيلٌ مطرود لا يخمّن — ولا تُفتح له شاشة تخمين */
+    const left = rd.dakhil.filter(id => { const p = this.findPlayer(id); return p && !p.kicked; });
+    return !!(r.cfg.guessOn && !rd.custom && left.length > 0 && pool.length > 1);
   }
 
   async startGuessOrResults() {
     if (this.room.phase !== 'vote') return;
-    this.clearPhaseTimer();
     const r = this.room;
     // شاشة كشف الدخيل بين التصويت والتخمين — مثل الوضع المحلي
     if (r.round.dakhil.length > 0) {
@@ -9341,7 +9982,9 @@ export class DakhilRoom {
       rd.guesses = {};
       r.phase = 'guess';
       await this.persist();
-      this.broadcastState();
+      /* v263: دخيلٌ منقطع لحظة فتح التخمين كان يُنتظر بلا حسم — لا أحد ينادي
+         maybeAdvance حتى يرجع أو يضغط المضيف «فرض» */
+      if (!(await this.maybeAdvance())) this.broadcastState();
     } else {
       await this.finishRound();
     }
@@ -9349,7 +9992,6 @@ export class DakhilRoom {
 
   async finishRound() {
     if (this.room.phase === 'results') return;   // حارس حسم مزدوج
-    this.clearPhaseTimer();
     const r = this.room, rd = r.round;
     const targets = rd.dakhil.concat(rd.mukhadi ? [rd.mukhadi] : []);
     const isTarget = id => targets.includes(id);
@@ -9404,7 +10046,8 @@ export class DakhilRoom {
     });
     rd.gains = gains;
     r.phase = 'results';
-    await this.recordResults(topBy(r.players, x => x.score));
+    /* v263: المطرود لا يُعلن فائزًا (يبقى في القائمة حتى الجولة الجاية) */
+    await this.recordResults(topBy(r.players.filter(p => !p.kicked), x => x.score));
     await this.persist();
     this.broadcastState();
   }
@@ -9482,7 +10125,81 @@ export class DakhilRoom {
     if (r.phase === 'expose') return this.afterExpose();
     if (r.phase === 'guess') return this.finishRound();
   }
+
+  /* ── الطرد (v263) ──
+     كانت الغرفة بلا دالة طرد، فيمرّ /kick على الطرد العام: يحذف مقبس المطرود
+     قبل وصول إغلاقه فيتجاهل onClose الحدث — لا maybeAdvance، وطرد آخر من
+     ننتظره يوقف المرحلة. ورسالته 'error' لا 'kicked'، فتعيد صفحته الاتصال بتوكن
+     ميت فيدخل الردهة مقعدًا جديدًا. الآن: في الردهة وبين الجولات يُشطب مقعده؛
+     ووسط الجولة يبقى معلَّمًا kicked حتى الجولة الجاية (أدوارها ونتائجها بمعرّفه)،
+     ويُمسح صوته وتخمينه ولا يُنتظر. والطرد ما يصير طريقة للفوز: جولة بقي فيها
+     أقل من ٣، أو طار دخيلها قبل حسم التصويت، تُلغى وترجع للردهة بلا نقاط. */
+  async kickPlayer(targetId) {
+    const r = this.room;
+    if (!r || !targetId || targetId === r.hostId) return;
+    const i = this.idxOf(targetId);
+    if (i < 0) return;
+    const v = r.players[i];
+    const sock = this.sockets.get(targetId);
+    this.sockets.delete(targetId);
+    if (sock) {
+      try { sock.send(JSON.stringify({ type: 'kicked', message: 'المضيف طلّعك من الغرفة' })); } catch {}
+      try { sock.close(4002, 'kicked'); } catch {}
+    }
+    const rd = r.round;
+    if (!rd || r.phase === 'lobby' || r.phase === 'results') {
+      r.players.splice(i, 1);
+      await this.persist();
+      this.broadcastState();
+      return;
+    }
+    v.kicked = true; v.connected = false;
+    v.seatToken = 'kicked-' + newSeatToken();
+    delete rd.votes[targetId]; delete rd.guesses[targetId]; delete rd.options[targetId];
+    rd.seen = rd.seen.filter(id => id !== targetId);
+    const left = rd.seatIds.filter(id => { const q = this.findPlayer(id); return q && !q.kicked; });
+    const early = r.phase === 'reveal' || r.phase === 'discuss' || r.phase === 'vote';
+    if (left.length < DK_MIN_PLAYERS) return this.cancelRound(v.name + ' طُرد — ما بقي عدد يكفي، انلغت الجولة');
+    if (early && !rd.dakhil.some(id => left.includes(id))) return this.cancelRound(v.name + ' طُرد وكان الدخيل — انلغت الجولة');
+    await this.persist();
+    if (!(await this.maybeAdvance())) this.broadcastState();
+  }
+
+  /* جولة فقدت نصابها بالطرد: ترجع للردهة بلا نقاط ولا نتائج (v263) */
+  async cancelRound(why) {
+    const r = this.room;
+    r.round = null;
+    r.phase = 'lobby';
+    r.players = r.players.filter(p => !p.kicked);
+    this.migrateHostIfNeeded();
+    await this.persist();
+    this.broadcastState();
+    this.broadcast({ type: 'error', message: why });
+  }
+
+  /* ── بعد نشرة (v263) ──
+     كنس الإقلاع (bootSweep) يعلّم من لم يرجع منقطعًا ثم ينادي maybeAdvanceOnDisconnect
+     بعد مهلة الرجوع — كانت الغرفة بلاها فتبقى المرحلة على من لن يرجع إلا بـ«فرض».
+     v265: تلك المهلة setTimeout في ذاكرة النسخة، والنسخة تُخلى في السبات قبل ٣٠ ث.
+     بدايتها صارت في الغرفة (ghostAt) ونهايتها على المنبّه (nextWake/onWake).
+     ويُحفظ الكنس فورًا: لو كان المنبّه أوّل ما أيقظ الغرفة بعد النشرة (لا حفظ
+     بعده) لأعاد كلُّ إيقاظٍ بعد نومةٍ الكنسَ نفسه ودفع المهلة ٣٠ ث أخرى بلا نهاية. */
+  onBootGhost(p, now) {
+    this.room.ghostAt = now;
+    try { const q = this.state.storage.put('room', this.room); if (q && q.catch) q.catch(() => {}); } catch {}
+  }
+  /* نهاية المهلة: فحصٌ واحد للمرحلة. يرجّع true لو حسم (وحفظ). */
+  async endGrace() {
+    if (!(this.room.ghostAt > 0)) return false;
+    this.room.ghostAt = 0;
+    return this.maybeAdvance();
+  }
+  /* مؤقّت bootSweep المشترك ما زال يُسلَّح ما دامت هذي موجودة، ويسبق المنبّه لو
+     بقيت النسخة حيّة؛ أيّهما سبق حسم والثاني لا يجد مهلة. بلا حفظ هنا: لا يُحيي
+     غرفةً مسحها كنس الخمول وهو ينتظر. */
+  maybeAdvanceOnDisconnect() { return this.endGrace(); }
 }
+applyHibernation(DakhilRoom);
 applyRoomCommon(DakhilRoom, 'dakhil');
 
 /* ═══════════════════ دردشة الغرف ═══════════════════
@@ -9669,8 +10386,9 @@ export class KirmRoom {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.sockets = new Map();
-    this.timer = null;
+    /* v265: سبات — المقابس عند الرَّنتايم لا في Map تُمسح مع أول نومة، والنبضة
+       يردّها الرَّنتايم نفسه. ولا مقبض مؤقّت: مهلة الدور turnEndsAt (nextWake). */
+    this.sockets = hibernate(state);
     this.state.blockConcurrencyWhile(async () => {
       this.room = (await this.state.storage.get('room')) || {
         code: null, hostId: null, phase: 'lobby',
@@ -9703,19 +10421,35 @@ export class KirmRoom {
   /* ── مهلة الدور ──
      بلا مهلة، لاعب ينسحب بلا قطع اتصال يجمّد الغرفة للأبد. والمؤقّت
      يعيش في ذاكرة الكائن وحده، فأي نشرة تمسحه — لذلك `resumePhase`
-     يعيد تسليحه من `turnEndsAt` المحفوظ. */
-  setTurnTimer(ms) {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(async () => {
-      this.timer = null;
-      try { await this.turnTimeout(); } catch {}
-    }, Math.max(0, ms));
-  }
-  resumePhase() {
-    if (this.timer) return;
+     يعيد تسليحه من `turnEndsAt` المحفوظ.
+     v265: والسبات يُخلي الكائن في صمت الدور نفسه، فصار الموعد turnEndsAt المحفوظ
+     (والصفحة تعدّ منه) على المنبّه: persist يسلّحه (touchRoom ← wakeTime ←
+     nextWake)، وRoomCommon.alarm ينادي onWake ← turnTimeout حين يستحق.
+     طاولةٌ لا حاضر عليها لا مهلة لها: كل مهلةٍ تحفظ وتجدّد lastSeen وتسلّح
+     التالية بعد ٦٠ ث، فمباراةٌ هجرها الجميع كانت ستوقظ نفسها كل دقيقة إلى الأبد
+     ولا يصلها كنس الخمول. أول راجعٍ يحسم الموعد الفائت (resumePhase) — كما كان
+     الإحياء يفعل بعد مؤقّتٍ ضائع. */
+  nextWake() {
     const r = this.room;
-    if ((r.phase !== 'aim' && r.phase !== 'placing') || !r.turnEndsAt) return;
-    this.setTurnTimer(r.turnEndsAt - Date.now());
+    if (!r || (r.phase !== 'aim' && r.phase !== 'placing') || !(r.turnEndsAt > 0)) return 0;
+    if (!r.players.some(p => p && p.connected && !p.kicked)) return 0;
+    return r.turnEndsAt;
+  }
+  async onWake() {
+    const due = this.nextWake();
+    if (!due || due > Date.now() + 20) return;       // سماحية RoomCommon.alarm نفسها
+    try { await this.turnTimeout(); }                // ما كان يفعله المؤقّت حرفًا
+    finally {
+      /* موعدٌ فائت لا يبقى مسلَّحًا: لو رمت المهلة أو لم تتقدّم لأطلق المنبّهُ
+         نفسه كل ٢٠ م.ث. يُؤجَّل دورةً كاملة بدلًا من ذلك. */
+      if (this.nextWake() === due) { this.room.turnEndsAt = Date.now() + KIRM_TURN_MS; await this.persist(); }
+    }
+  }
+  /* المنبّه لا يضيع، فبقي من الإحياء شبكة أمان لموعدٍ فات قبل أن يصل منبّهه:
+     يُحسم الآن بمسار المنبّه نفسه. */
+  resumePhase() {
+    const w = this.nextWake();
+    if (w > 0 && w <= Date.now()) return this.onWake().catch(() => {});
   }
   async turnTimeout() {
     const r = this.room;
@@ -9731,8 +10465,7 @@ export class KirmRoom {
     this.broadcastState();
   }
   armTurn() {
-    this.room.turnEndsAt = Date.now() + KIRM_TURN_MS;
-    this.setTurnTimer(KIRM_TURN_MS);
+    this.room.turnEndsAt = Date.now() + KIRM_TURN_MS;   // v265: المنبّه يُسلَّح في persist التالي
   }
 
   async handleCreate(request) {
@@ -9776,7 +10509,8 @@ export class KirmRoom {
     }
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    /* v265: سبات — مسارات الرفض تحت تقبل بـ accept() العادي (رسالتها كما هي) قبل
+       أي acceptWebSocket: مقبس سباتٍ يُغلق قبل رجوع 101 لا يصل إغلاقه (RoomCommon.refuse) */
 
     const token = url.searchParams.get('token');
     const name = url.searchParams.get('name');
@@ -9789,16 +10523,19 @@ export class KirmRoom {
       player.connected = true;
     } else {
       if (!this.room.code) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'ما فيه غرفة بهذا الرمز' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'المباراة شغّالة — انتظر لين تخلص' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
       if (this.room.players.length >= KIRM_MAX_PLAYERS) {
+        server.accept();
         server.send(JSON.stringify({ type: 'error', message: 'الغرفة ممتلئة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
@@ -9813,14 +10550,17 @@ export class KirmRoom {
     }
 
     this.noteAccount(url, player);
+    /* v265: موعدٌ فات قبل منبّهه يُحسم قبل قبول المقبس وبانتظاره: بثّ الحسم يصل
+       الحاضرين، والراجع يستلم welcome ثم الحالة المحسومة (لا حالةً قبل welcome). */
+    await this.resumePhase();
+    this.state.acceptWebSocket(server);
     /* استلام المقعد: أي مقبس أقدم لنفس اللاعب يُغلق فورًا. بلا هذا يبقى
        المقبس القديم حيًّا معلّقًا لا يقرأه أحد حتى تقطعه الشبكة. */
     const stale0 = this.sockets.get(player.id);
     if (stale0 && stale0 !== server) { try { stale0.close(1000, 'takeover'); } catch {} }
     this.sockets.set(player.id, server);
-    this.resumePhase();
-    server.addEventListener('message', evt => this.onMessage(player.id, evt));
-    server.addEventListener('close', () => this.onClose(player.id, server));
+    /* v265: لا addEventListener — الرسائل والإغلاق تصل webSocketMessage/webSocketClose
+       (applyHibernation) بمعرّف المرفق، والمستمِع في الذاكرة كان يموت مع أول نومة. */
 
     /* ردهة بلا مضيف متصل: المضيف قفل التبويب وهو وحده فبقي hostId له،
        ومن يدخل بعده كان يجد «بانتظار المضيف يبدأ…» إلى الأبد. */
@@ -9849,8 +10589,11 @@ export class KirmRoom {
        العميل يفتح سوكِتًا جديدًا، الخادم يغلق القديم، ثم يصل حدث
        إغلاق القديم فيحذف مقعد الاتصال الجديد. النتيجة لاعب داخل
        الغرفة بسوكِت غير مسجَّل: لا يستقبل شيئًا وشاشته متجمّدة.
-       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب. */
-    if (ws && this.sockets.get(playerId) !== ws) return;
+       نتجاهل إغلاق سوكِت لم يعد هو المسجَّل لهذا اللاعب.
+       v265: closedSeat (applyHibernation) فحص الهوية ونزع المرفق قبل النداء، فلا
+       مقبس مسجَّل الآن للمعرّف — الحارس يردّ فقط لو سُجّل له مقبس آخر. */
+    const cur = this.sockets.get(playerId);
+    if (ws && cur && cur !== ws) return;
     const p = this.findPlayer(playerId);
     if (p) p.connected = false;
     this.sockets.delete(playerId);
@@ -9913,6 +10656,7 @@ export class KirmRoom {
         id: p.id, name: p.name, connected: p.connected,
         isHost: p.id === r.hostId, side: p.side, color: p.color,
         pts: p.pts, roundPts: p.roundPts, due: p.due,
+        kicked: !!p.kicked,          // v263: يبقى في المصفوفة (الفهارس) لكنه خارج الترتيب
       })),
       bodies: r.bodies.map(b => ({ i: b.id, t: b.type, a: b.alive ? 1 : 0,
                                    x: Math.round(b.x * 100) / 100, y: Math.round(b.y * 100) / 100 })),
@@ -9959,10 +10703,12 @@ const KirmLogic = {
     r.promise = 0;
     r.msg = '';
     r.turn = (r.round - 1) % r.players.length;
+    if (!this.present(r.turn)) this.nextTurn();   // v263: لا تبدأ الجولة على غائب (٦٠ ث)
     r.players.forEach(p => { p.roundPts = 0; p.due = 0; p.potOwn = 0; });
     if (r.opt.traps) {
       r.place = { i: 0, left: KIRM_TRAPS_PER_PLAYER };
       r.phase = 'placing';
+      this.skipAbsentPlacers();
     } else {
       r.place = null;
       r.phase = 'aim';
@@ -10079,12 +10825,25 @@ const KirmLogic = {
     const r = this.room;
     r.place.i++;
     r.place.left = KIRM_TRAPS_PER_PLAYER;
-    if (r.place.i >= r.players.length) {
+    this.skipAbsentPlacers();
+    if (!r.place) this.placeStriker();
+    this.armTurn();
+  },
+  /* ── v263: الوضع والدور لا ينتظران غائبًا ولا مطرودًا ──
+     كان المنقطع يُتخطّى لحظة انقطاعه فقط؛ من كان غائبًا أصلًا (أو طُرد) حين
+     وصله الدور انتظرته الطاولة مهلته كاملة (٦٠ ث) — لكلّ مقعدٍ كذلك. */
+  present(i) {
+    const p = this.room.players[i];
+    return !!(p && p.connected && !p.kicked);
+  },
+  skipAbsentPlacers() {
+    const r = this.room;
+    while (r.place && r.place.i < r.players.length && !this.present(r.place.i)) r.place.i++;
+    if (r.place && r.place.i >= r.players.length) {
       r.place = null;
       r.phase = 'aim';
-      this.placeStriker();
+      if (!this.present(r.turn)) this.nextTurn();
     }
-    this.armTurn();
   },
 
   // ── الضربة ──
@@ -10140,8 +10899,7 @@ const KirmLogic = {
     if (res.roundOver) {
       if (r.round >= r.rounds) {
         r.phase = 'over';
-        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
-        r.turnEndsAt = 0;
+        r.turnEndsAt = 0;          // v265: لا مهلة دور ⇒ يسقط المنبّه على كنس الخمول
         await this.finish();
       } else {
         this.startRound();
@@ -10309,14 +11067,24 @@ const KirmLogic = {
     v.kicked = true; v.connected = false;
     v.seatToken = 'kicked-' + newSeatToken();
     const sock = this.sockets.get(targetId);
+    /* v265: نزع المعرّف قبل الإغلاق — المقبس المُغلَق يخرج من getWebSockets فلا يجده
+       delete بعده، فيبقى مرفقه ويصل إغلاقه onClose: حفظٌ وبثّ حالةٍ مكرّر لكل طرد */
+    this.sockets.delete(targetId);
     if (sock) {
       try { sock.send(JSON.stringify({ type: 'error', message: 'طردك المضيف من الغرفة' })); } catch {}
       try { sock.close(4002, 'kicked'); } catch {}
     }
-    this.sockets.delete(targetId);
     if (r.phase === 'lobby' || r.phase === 'over') {
       const i = r.players.indexOf(v);
       if (i >= 0) r.players.splice(i, 1);
+    } else if (r.players.filter(p => !p.kicked).length < 2) {
+      /* v263: الطرد لا يصير طريقة للفوز — ما بقي خصم ⇒ المباراة تنلغي وترجع
+         للردهة بلا فائز ولا نتائج (كان المضيف يكمل لحاله ويُسجَّل فائزًا) */
+      this.toLobby();
+      await this.persist();
+      this.broadcastState();
+      this.broadcast({ type: 'toast', message: v.name + ' طُرد وما بقي خصم — انلغت المباراة بلا فائز' });
+      return;
     } else if (r.phase === 'aim' && this.cur() && this.cur().id === targetId) {
       r.msg = v.name + ' طُرد — انتقل الدور';
       this.nextTurn();
@@ -10362,12 +11130,23 @@ const KirmLogic = {
      الفائز يقرره الخادم من النقاط المتراكمة، لا من ادّعاء أي عميل. */
   async finish() {
     const r = this.room;
+    /* v263: المطرود يبقى في المصفوفة حتى الردهة (الفهارس)، لكنه ما يُعلن فائزًا */
+    const inPlay = r.players.filter(p => !p.kicked);
     let best = -Infinity;
-    for (const p of r.players) if (p.pts > best) best = p.pts;
-    const winners = r.players.filter(p => p.pts === best).map(p => p.id);
+    for (const p of inPlay) if (p.pts > best) best = p.pts;
+    const winners = inPlay.filter(p => p.pts === best).map(p => p.id);
     r.msg = 'انتهت المباراة';
     try { await this.recordResults(winners); } catch {}
-    this.broadcast({ type: 'over', winners, players: r.players.map(p => ({ id: p.id, name: p.name, pts: p.pts })) });
+    this.broadcast({ type: 'over', winners, players: inPlay.map(p => ({ id: p.id, name: p.name, pts: p.pts })) });
+  },
+  /* الرجوع للردهة (v263): بلا مقاعد الغائبين والمطرودين — كانت «مرة ثانية» تبقيها
+     فتُحسب في سقف الأربعة («الغرفة ممتلئة» والحاضرون اثنان). مقعد المضيف يبقى
+     ولو كان مقبسه منقطعًا لحظتها (الطرد يأتي من لوحة الغرفة عبر HTTP). */
+  toLobby() {
+    const r = this.room;
+    r.phase = 'lobby'; r.round = 0; r.turnEndsAt = 0; r.place = null;   // v265: turnEndsAt=0 يُسقط منبّه الدور
+    r.players = r.players.filter(p => !p.kicked && (p.connected || p.id === r.hostId));
+    r.players.forEach(p => { p.pts = 0; p.roundPts = 0; p.due = 0; });
   },
 
   async onMessage(playerId, evt) {
@@ -10375,7 +11154,7 @@ const KirmLogic = {
     let m;
     try { m = JSON.parse(evt.data); } catch { return; }
     if (!m || typeof m.type !== 'string') return;
-    this.resumePhase();
+    await this.resumePhase();    // v265: موعدٌ فات قبل منبّهه؟ يُحسم قبل الرسالة كما كان المؤقّت
     if (m.type === 'start') return this.onStart(playerId);
     if (m.type === 'shot') return this.onShot(playerId, m);
     if (m.type === 'trap') return this.onTrap(playerId, m);
@@ -10383,14 +11162,14 @@ const KirmLogic = {
     if (m.type === 'again') {
       const r = this.room;
       if (playerId !== r.hostId || r.phase !== 'over') return;
-      r.phase = 'lobby'; r.round = 0;
-      r.players.forEach(p => { p.pts = 0; p.roundPts = 0; p.due = 0; });
+      this.toLobby();
       await this.persist();
       this.broadcastState();
     }
   },
 };
 Object.assign(KirmRoom.prototype, KirmLogic);
+applyHibernation(KirmRoom);
 applyRoomCommon(KirmRoom, 'kirm');
 
 export class ChatRoom {
@@ -10406,7 +11185,65 @@ export class ChatRoom {
       this.log = (await this.state.storage.get('log')) || [];
       this.seq = (await this.state.storage.get('seq')) || 0;
       this.seen = (await this.state.storage.get('seen')) || 0;
+      /* v263: سجلّ كل مقعد (حدّ الإغراق + علم الطرد) بمفتاح من توكنه — كان
+         الحدّ في مرفق المقبس، فكل مقبس جديد يبدأ بعدّاد صفر */
+      this.rl = (await this.state.storage.get('rl')) || new Map();
     });
+  }
+
+  /* v263: مفتاح المقعد = بصمة توكنه لا التوكن نفسه. المعرّف يتبدّل عند الرجوع
+     في بعض الغرف (playerId جديد بنفس التوكن)، والتوكن ثابت للمقعد. */
+  static async seatKey(token) {
+    const t = String(token || '');
+    if (!t) return '';
+    const d = new Uint8Array(await crypto.subtle.digest('SHA-256', te.encode('ya7-chat-seat:' + t)));
+    let s = '';
+    for (let i = 0; i < 16; i++) s += (d[i] < 16 ? '0' : '') + d[i].toString(16);
+    return s;
+  }
+
+  /* v263: غرفة اللعب تبلّغ بالطرد (RoomCommon.chatKick). لا يرمي أبدًا. */
+  static async kickSeat(env, game, code, seatId, token) {
+    try {
+      if (!env || !env.CHAT_ROOM) return;
+      const key = await ChatRoom.seatKey(token);
+      const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(game + ':' + String(code).toUpperCase()));
+      await stub.fetch(new Request('https://chat/kick', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seat: String(seatId || ''), key }),
+      }));
+    } catch {}
+  }
+
+  /* المطرود: مقابسه تُغلق، ومفتاحه يُعلَّم فيُردّ مقبسٌ فتحه قبل الطرد بلحظة
+     (بين فحص المقعد في الراوتر وقبوله هنا). لا يصل من الخارج: الراوتر لا
+     يمرّر للدردشة إلا /ws. */
+  async onKick(request) {
+    let b = {};
+    try { b = (await request.json()) || {}; } catch {}
+    const seat = String(b.seat || ''), key = String(b.key || '');
+    const socks = this.state.getWebSockets();
+    let n = 0;
+    for (const ws of socks) {
+      const a = ws.deserializeAttachment() || {};
+      if ((seat && a.seat === seat) || (key && a.key === key)) { try { ws.close(4002, 'kicked'); } catch {} n++; }
+    }
+    /* دردشة لم يُستعمل فيها شيء لا يُنشأ لها تخزين */
+    if (key && (socks.length || this.log.length)) {
+      this.rl.set(key, Object.assign({}, this.rl.get(key), { kicked: Date.now() }));
+      try { await this.state.storage.put('rl', this.pruneRl(Date.now())); } catch {}
+      await this.touch();
+    }
+    return Response.json({ ok: true, closed: n });
+  }
+
+  /* سجلٌّ انقضت نافذته يُحذف؛ علم الطرد يبقى بعمر الدردشة */
+  pruneRl(now) {
+    for (const [k, v] of this.rl) {
+      if (v.kicked ? now - v.kicked > CHAT_TTL_MS
+        : (now - (v.win || 0) > 60000 && now - (v.last || 0) > CHAT_GAP_MS)) this.rl.delete(k);
+    }
+    return this.rl;
   }
 
   /* المنبّه يُضبط عند كل نشاط، ولا يحذف إلا لو خمدت الغرفة فعلًا */
@@ -10422,31 +11259,35 @@ export class ChatRoom {
     const idle = Date.now() - (this.seen || 0);
     if (idle >= CHAT_TTL_MS && this.state.getWebSockets().length === 0) {
       await this.state.storage.deleteAll();
-      this.log = []; this.seq = 0; this.seen = 0;
+      this.log = []; this.seq = 0; this.seen = 0; this.rl = new Map();
     } else {
       try { await this.state.storage.setAlarm(Date.now() + CHAT_TTL_MS); } catch {}
     }
   }
 
   async fetch(request) {
+    if (request.method === 'POST' && new URL(request.url).pathname === '/kick') return this.onKick(request);
     if ((request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') {
       return new Response('expected-websocket', { status: 426 });
     }
     /* الاسم واليوزر والمقعد كلها من الووركر بعد تحقّقه، عبر ترويسات لا
        عبر رابط العميل. serializeAttachment يبقى عبر السبات — بخلاف أي
        حالة في الذاكرة، فهي تُمسح عند أول نومة. */
-    let name = '', user = '', seat = '';
+    let name = '', user = '', seat = '', key = '';
     try { name = decodeURIComponent(request.headers.get('X-Ya7-Name') || ''); } catch {}
     try { user = decodeURIComponent(request.headers.get('X-Ya7-User') || ''); } catch {}
     try { seat = decodeURIComponent(request.headers.get('X-Ya7-Seat') || ''); } catch {}
+    key = String(request.headers.get('X-Ya7-Key') || '').slice(0, 64);
+    const held = key ? this.rl.get(key) : null;
+    if (held && held.kicked) return new Response('kicked', { status: 403 });   // v263
 
     /* سوكِت واحد لكل مقعد: بلا هذا يفتح صاحب مقعد واحد أربعين اتصالًا
        فيملأ الغرفة ويردّ البقية بـ chat-full. وهو كذلك يقفل الاتصال
        الشبح بعد تحديث الصفحة بدل ما يتراكم. */
-    if (seat) {
+    if (seat || key) {
       for (const old of this.state.getWebSockets()) {
         const a = old.deserializeAttachment();
-        if (a && a.seat === seat) { try { old.close(1000, 'replaced'); } catch {} }
+        if (a && ((seat && a.seat === seat) || (key && a.key === key))) { try { old.close(1000, 'replaced'); } catch {} }
       }
     }
     if (this.state.getWebSockets().length >= CHAT_SOCKETS) {
@@ -10459,6 +11300,7 @@ export class ChatRoom {
       name: cleanName(name),
       user: String(user).slice(0, 20),
       seat: String(seat).slice(0, 64),
+      key,
       last: 0, win: 0, n: 0,
     });
 
@@ -10476,16 +11318,23 @@ export class ChatRoom {
     const a = ws.deserializeAttachment() || {};
     const now = Date.now();
 
-    /* كبح على مستوى المقعد لا الغرفة: لاعب واحد ما يقدر يسكّت البقية */
-    if (now - (a.last || 0) < CHAT_GAP_MS) return;
-    if (now - (a.win || 0) > 60000) { a.win = now; a.n = 0; }
-    if (++a.n > CHAT_BURST) { a.last = now; ws.serializeAttachment(a); return; }
+    /* كبح على مستوى المقعد لا الغرفة: لاعب واحد ما يقدر يسكّت البقية.
+       v263: العدّاد في سجلّ المقعد (this.rl) لا في مرفق المقبس — كان فتح
+       مقبس جديد يصفّره. مقبسٌ بلا مفتاح (قبل v263) يبقى على مرفقه. */
+    const k = String(a.key || '');
+    const held = k ? this.rl.get(k) : null;
+    if (held && held.kicked) { try { ws.close(4002, 'kicked'); } catch {} return; }
+    const r = k ? Object.assign({ last: 0, win: 0, n: 0 }, held) : a;
+    const save = () => { if (k) this.rl.set(k, r); else ws.serializeAttachment(a); };
+    if (now - (r.last || 0) < CHAT_GAP_MS) return;
+    if (now - (r.win || 0) > 60000) { r.win = now; r.n = 0; }
+    if (++r.n > CHAT_BURST) { r.last = now; save(); return; }
 
     const text = cleanText(m.x, CHAT_LEN);
     if (!text) return;
 
-    a.last = now;
-    ws.serializeAttachment(a);
+    r.last = now;
+    save();
 
     const msg = {
       i: ++this.seq,
@@ -10500,7 +11349,7 @@ export class ChatRoom {
     /* الحفظ ضروري: الكائن يُطرد من الذاكرة عند السبات، فبلا كتابة
        يفقد الداخلُ لاحقًا كل ما قيل قبل دقيقة. */
     this.seen = now;
-    await this.state.storage.put({ log: this.log, seq: this.seq, seen: now });
+    await this.state.storage.put({ log: this.log, seq: this.seq, seen: now, rl: this.pruneRl(now) });
     try { await this.state.storage.setAlarm(now + CHAT_TTL_MS); } catch {}
 
     const out = JSON.stringify({ t: 'msg', m: msg });
@@ -10688,6 +11537,9 @@ async function routeRequest(request, env, ctx) {
                     SUM(CASE WHEN v < 0 THEN 1 ELSE 0 END) AS down
                FROM ratings GROUP BY game`).all();
           for (const x of ((r && r.results) || [])) {
+            /* v264: صفوف ما قبلها باسم constructor/__proto__ لا تُعرض (و__proto__
+               كانت تبدّل نموذج items نفسه بدل أن تكون مفتاحًا) */
+            if (!GAME_NAMES[x.game]) continue;
             items[x.game] = { up: Number(x.up) || 0, down: Number(x.down) || 0 };
           }
         } catch (e) {
@@ -10767,6 +11619,9 @@ async function routeRequest(request, env, ctx) {
       /* معرّف المقعد يُستعمل داخل الكائن لمنع أكثر من سوكِت للمقعد نفسه.
          ليس سرًّا — معرّفات اللاعبين تُبَث في اللوبي أصلًا. */
       h.set('X-Ya7-Seat', encodeURIComponent(String(seatInfo.id || '')));
+      /* v263: بصمة توكن المقعد — مفتاح حدّ الإغراق وعلم الطرد داخل الكائن
+         (المعرّف يتبدّل بالرجوع في بعض الغرف، والتوكن لا) */
+      h.set('X-Ya7-Key', await ChatRoom.seatKey(url.searchParams.get('seat')));
       const stub = env.CHAT_ROOM.get(env.CHAT_ROOM.idFromName(game + ':' + code));
       return stub.fetch(new Request(url.origin + '/ws', { method: 'GET', headers: h }));
     }
@@ -10830,7 +11685,7 @@ async function routeRequest(request, env, ctx) {
 
     // ── لوحة صدارة الأركيد (v172) ──
     if (url.pathname.startsWith('/lb/')) {
-      return handleLeaderboard(request, env, url);
+      return handleLeaderboard(request, env, url, ctx);
     }
 
     // ── الحسابات: يوزر + رمز استرجاع (D1) ──
@@ -10862,6 +11717,7 @@ async function routeRequest(request, env, ctx) {
         if (!allowCreate(ip)) return tooManyRooms(ip, origin);
         let body;
         try { body = await request.json(); } catch { return withCors(new Response('bad-json', { status: 400 }), origin); }
+        if (!body || typeof body !== 'object') return withCors(new Response('bad-json', { status: 400 }), origin);   // v264
         for (let attempt = 0; attempt < 6; attempt++) {
           const code = newRoomCode();
           const stub = env.LUDO_ROOM.get(env.LUDO_ROOM.idFromName(code));
@@ -10914,9 +11770,10 @@ async function routeRequest(request, env, ctx) {
           clipMs: v.clipMs || 0, textMax: v.textMax || TARI_ANS_MAX,
           needsOpts: !!v.needsOpts, needsTones: !!v.needsTones, needsAlts: !!v.needsAlts,
         }])),
+        /* v263: «من ذاكرتك» بلا جوابها — لا الأصل ولا المغلوطتان (tariPublicText) */
         bank: TARI_BANK.map((p, i) => ({
-          id: p.id || (p.kind + ':' + i), kind: p.kind, text: p.text,
-          opts: p.opts || null, tones: p.tones || null, alts: p.alts || null,
+          id: p.id || (p.kind + ':' + i), kind: p.kind, text: tariPublicText(p),
+          opts: p.opts || null, tones: p.tones || null, alts: null,
         })),
         limits: { add: TARI_ADD_MAX, text: TARI_TEXT_MAX, opt: TARI_OPT_MAX, opts: TARI_OPTS_MAX },
       }), {
@@ -11072,9 +11929,12 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v255';   // v255 = سدّ سرقة مقعد بالاسم بلا jid: مقعدٌ يحمل jid (حال كل لاعبٍ طبيعيّ) كان يُستعاد بطلبٍ بلا jid — في اللعب (reclaimByName، يصيب طاريك) وفي الردهة (reclaimSeat، كل الألعاب). الحارس صار يرفض أي مقعدٍ ذي jid ما لم يطابق jid الطلب. قبله:   // v229 = «رد يا سامي» في GAME_NAMES (حتى يقبل /account/rate و/rate/notes تقييمها من بطاقة الرئيسية) — لا شيء غيره. قبله:   // v222 = وليمة: مهلة رجوع للمنقطع · كلمةٌ تحمل رقم جولتها · همسةٌ لا تضيع · استرداد المقعد بالاسم وسط اللعب · الدخول بين مباراتين · خروجٌ مقصود · سبب takeover يصل · ردٌّ فارغ من المزوّد = المحقّق الاحتياطي · مطابقة الأسماء القصيرة. قبله:   // v220 = v220 = فحص الاتصال الشامل: كنس الإقلاع (أشباح «متصل» بعد النشرة في ١١ غرفة) · وليمة تُكنس · رمز غلط لا يفتح غرفة وهمية في الشفرة/المربعات/الحلبة · رفض البلياردو/البلوت قبل قبول المقبس. قبله:   // v219 = طاريك: ٩٠ جملة كتابية جديدة · «توقّع الأغلبية» (إجابات جاهزة) أُزيل نهائيًا. قبله:   // v218 = مطاردة الحواري: صاحب الحساب يستردّ مقعده المنقطع من أي جهاز · لهجة الغرفة يختارها المضيف · الغرفة تنجو من إعادة التشغيل · المنقطع لا يعلّق الطور · رمزٌ غلط لا يفتح غرفة وهمية. قبله:   // v216 = طاريك: الكشف لا يُعاد بعد إعادة التشغيل (نقاط مرتين) · النبضة توقظ بطاقة التعريف. قبله:   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
+const WORKER_VERSION = 'v265';   // v265 = استرجاع السبات للغرف السبع (مافيا، لمن العرش، موّه، وليمة، داقش، الدخيل، الكيرم) — ضاع برفع ١١ سبتمبر: acceptWebSocket وواجهة مقابس فوق getWebSockets، والنبضة يردّها الرَّنتايم، ومؤقّتات الأطوار على المنبّه (nextWake/onWake)، وحالة الغراب ومهلة رجوع وليمة وطابور همساتها محفوظة، والطاولة المهجورة تقف. قبله:   // v264 = الدفعة المنخفضة من فحص v261: مافيا — حدّ عدد المافيا وفعل المطرود الليلي والإعداد يُدمج · لمن العرش — إحياء ميليساندرا، انحياز بيليش بعد قتيلين، فوز كراستر يُسجَّل، الغراب يتبع المعرّف · موّه — طرد المختار وإعادة الكشف لمن يحدّث · البلوت — الغرفة الفاضية تقف والأرقام محروسة · سلالم — سقف مقاعد شاشة النهاية · الدخيل — تغيير الاسم · داقش — نهاية الطرد بلا فائز · الشفرة — تلميح من اللوحة مرفوض والمباراة تنجو من النشرة · المربعات/الحلبة — رسالة بعد النشرة · المطاردة — أسماء أحياء كأسماء خصائص الكائن · طاريك — بلاغ حساب محذوف · لوحة التحكم — الحدّ قبل المقارنة · أسماء الألعاب بلا نموذج أولي · سقف وكنس للأركيد · الإشعارات لخدمات الدفع وحدها · سقف الأصدقاء للطرفين · محارف C1 · جسم null. قبله:   // v263 = الدفعة المتوسطة من فحص v261: اكتمال المرحلة بمن تصرّف لا بعدد المدخلات (مافيا/لمن العرش/موّه) · إنسانٌ باسم بوت لا يأخذ مقعده · الدخيل: طردٌ في كل طور، والتقدّم بعد النشرة · داقش: القدر لا يضيع بطرد الموزّع والغائب لا يُوزَّع عليه · الكيرم: الغائب والمطرود لا يُنتظران ولا يفوزان · البلياردو: لا تجمّد بعد النشرة، و«ابدأ» وplace محروسان · المطرود بلا نتيجة ولا فوز بالطرد، ويخرج من دردشة الغرفة، وحدّ الدردشة للمقعد · خمّن من؟: عدّاد الخدعة لكل مشاهد · الرجوع لا يأخذ اسم غيرك (الشفرة/المطاردة/المربعات/الحلبة) · طاريك: طرد السلسلة، بنك «من ذاكرتك»، ومعرّفات مجهولة فعلًا · المربعات/الحلبة: نتيجة واحدة للجولة بحدّ أدنى · لودو: حصّة حركات لكل مقعد · الحظر لا يرفعه المحظور · السقف العام للتسجيل والاسترجاع بعد التحقق · حذف الحساب يمسح البلاغات، وبصمة بدل عنوان IP في الأركيد. قبله:   // v262 = الست العالية من فحص v261: لمن العرش — طرد المتّهم لا يجمّد الغرفة (وفرض الحسم ينقذ العالقة) · خمّن من؟ — طرد صاحب الدور وبداية الجولة على مقعدٍ غائب · الشفرة — مخرج للمضيف من مباراة قائدها غاب وشاشة نهاية بلا طريق مسدود · لودو — «مرّر» المكرّر لا يطيّر دور التالي · الدخيل — الكلمة المخصّصة لا توصل للدخيل وكاتبها لا يُختار دخيلًا · وليمة — الأصوات والهمسات تتبع المعرّف الجديد. قبله:   // v255 = سدّ سرقة مقعد بالاسم بلا jid: مقعدٌ يحمل jid (حال كل لاعبٍ طبيعيّ) كان يُستعاد بطلبٍ بلا jid — في اللعب (reclaimByName، يصيب طاريك) وفي الردهة (reclaimSeat، كل الألعاب). الحارس صار يرفض أي مقعدٍ ذي jid ما لم يطابق jid الطلب. قبله:   // v229 = «رد يا سامي» في GAME_NAMES (حتى يقبل /account/rate و/rate/notes تقييمها من بطاقة الرئيسية) — لا شيء غيره. قبله:   // v222 = وليمة: مهلة رجوع للمنقطع · كلمةٌ تحمل رقم جولتها · همسةٌ لا تضيع · استرداد المقعد بالاسم وسط اللعب · الدخول بين مباراتين · خروجٌ مقصود · سبب takeover يصل · ردٌّ فارغ من المزوّد = المحقّق الاحتياطي · مطابقة الأسماء القصيرة. قبله:   // v220 = v220 = فحص الاتصال الشامل: كنس الإقلاع (أشباح «متصل» بعد النشرة في ١١ غرفة) · وليمة تُكنس · رمز غلط لا يفتح غرفة وهمية في الشفرة/المربعات/الحلبة · رفض البلياردو/البلوت قبل قبول المقبس. قبله:   // v219 = طاريك: ٩٠ جملة كتابية جديدة · «توقّع الأغلبية» (إجابات جاهزة) أُزيل نهائيًا. قبله:   // v218 = مطاردة الحواري: صاحب الحساب يستردّ مقعده المنقطع من أي جهاز · لهجة الغرفة يختارها المضيف · الغرفة تنجو من إعادة التشغيل · المنقطع لا يعلّق الطور · رمزٌ غلط لا يفتح غرفة وهمية. قبله:   // v216 = طاريك: الكشف لا يُعاد بعد إعادة التشغيل (نقاط مرتين) · النبضة توقظ بطاقة التعريف. قبله:   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
 
+/* v264: بلا نموذج أولي (__proto__: null) — كانت كائنًا عاديًا، فـconstructor
+   وtoString و__proto__ «ألعابٌ» تمرّ من كل فحص LOBBY_GAMES[x] / GAME_NAMES[x]. */
 const LOBBY_GAMES = {
+  __proto__: null,
   mafia:   { name: 'مافيا',        path: '/mafia/' },
   baloot:  { name: 'بلوت',         path: '/baloot/' },
   kirm:    { name: 'الكِيرَم',      path: '/kirm/' },
@@ -11083,7 +11943,7 @@ const LOBBY_GAMES = {
   daqash:  { name: 'داقش',         path: '/daqash/' },
   dakhil:  { name: 'مين الدخيل',   path: '/dakhil/' },
   walima:  { name: 'وَليمة',        path: '/walima/' },
-  ludo:    { name: 'لودو الخداع', path: '/ludo/' },
+  ludo:    { name: 'لودو الكروت', path: '/ludo/' },
   btaqati: { name: 'خمّن من؟',      path: '/btaqati/' },
   bilyardo:{ name: 'بلياردو',       path: '/bilyardo/' },
   mutarada:{ name: 'مطاردة الحواري', path: '/mutarada/' },
@@ -11110,7 +11970,7 @@ function cleanNote(raw) {
   if (raw == null) return '';
   return String(raw)
     .replace(/[<>&"'`\\]/g, '')
-    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')   // v264: ومحارف C1 (U+0080–U+009F) كذلك
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -11118,9 +11978,10 @@ function cleanNote(raw) {
 }
 
 const GAME_NAMES = {
+  __proto__: null,   // v264: انظر LOBBY_GAMES
   baloot: 'بلوت',
   mafia: 'مافيا', khawana: 'لمن العرش؟', mawwih: 'مَوِّه', daqash: 'داقش',
-  dakhil: 'مين الدخيل', walima: 'وَليمة', ludo: 'لودو الخداع', btaqati: 'خمّن من؟',
+  dakhil: 'مين الدخيل', walima: 'وَليمة', ludo: 'لودو الكروت', btaqati: 'خمّن من؟',
   kirm: 'الكِيرَم', shifra: 'الشفرة', mutarada: 'المطاردة',
   fatin: 'فَطِن', liar: 'الكذّاب', kalimat: 'كلمات', fateel: 'فتيل',
   throne: 'عرش الذئب', westeros: 'ويستروس', island: 'الجزيرة',
@@ -11172,16 +12033,30 @@ export class BilliardRoom {
     this.room.lastSeen = Date.now();
     try {
       await this.state.storage.put('room', this.room);
-      await this.state.storage.setAlarm(Date.now() + ROOM_TTL_MS);
+      await this.state.storage.setAlarm(this.wakeAt());
     } catch {}
   }
+  /* v263: صاحب الدور شبحُ نشرةٍ في مهلة رجوعه ⇒ المنبّه يوقظنا عند انقضائها
+     (السبات لا يُبقي مؤقّتًا في الذاكرة)، وإلا فمنبّه التنظيف المعتاد. */
+  wakeAt() {
+    const now = Date.now(), r = this.room, S = r && r.S;
+    const p = S && r.phase === 'play' && S.phase !== 'over' ? (r.players || [])[S.turn] : null;
+    const g = p && p.connected === false && !p.kicked && p.goneAt > 0 ? p.goneAt + BOOT_GRACE_MS : 0;
+    return g > now ? g : now + ROOM_TTL_MS;
+  }
   async alarm() {
+    /* v263: انقضت مهلة رجوع صاحب الدور بعد النشرة ⇒ الدور لحاضر */
+    if (this.room && this.skipDisconnected()) {
+      await this.persist();
+      this.broadcast({ type: 'state', state: this.room.S });
+      return;
+    }
     const idle = Date.now() - ((this.room && this.room.lastSeen) || 0);
     if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
       await this.state.storage.deleteAll();
       this.room = null;
     } else {
-      try { await this.state.storage.setAlarm(Date.now() + ROOM_TTL_MS); } catch {}
+      try { await this.state.storage.setAlarm(this.room ? this.wakeAt() : Date.now() + ROOM_TTL_MS); } catch {}
     }
   }
   wsOf(id) {
@@ -11277,6 +12152,7 @@ export class BilliardRoom {
 
     if (me) {
       me.connected = true;
+      me.goneAt = 0;                   // v263: رجع — لا مهلة تنتظره
       /* كان هنا `me.kicked = false` — أي أن المطرود يمسح طرده بنفسه
          بمجرّد إعادة الاتصال. seatByToken صار يرفض المطرود أصلًا،
          فما يوصل هنا إلا صاحب مقعد سليم. */
@@ -11300,6 +12176,10 @@ export class BilliardRoom {
     }
     server.serializeAttachment({ id: me.id, sid: me.sid });
     this.migrateHost();
+    /* v263: الدور ما يقف على غائب عند الرجوع أيضًا — بعد نشرةٍ أو بعد أن
+       انقطع الكل، أول الراجعين كان يجد الدور على مقعدٍ لا صاحب له فتتجمّد
+       الطاولة (لا مؤقّت دور في البلياردو). شبح النشرة له مهلة رجوعه. */
+    const moved = this.skipDisconnected();
     await this.persist();
 
     this.send(server, {
@@ -11314,6 +12194,7 @@ export class BilliardRoom {
       state: this.room.S || null,
     });
     this.pushSeats();
+    if (moved) this.broadcast({ type: 'state', state: this.room.S }, me.id);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -11330,8 +12211,24 @@ export class BilliardRoom {
     }
     const i = list.indexOf(v);
     if (i >= 0 && this.room.phase === 'lobby') list.splice(i, 1);
+    /* v263: الطرد ما يصير طريقة للفوز — كان المضيف يطرد خصمه الوحيد ويكمل
+       لحاله حتى يُسجَّل له الفوز. ما بقي إلا لاعب واحد ⇒ نهاية بلا فائز
+       ولا نتائج. وإلا فالدور ينتقل الآن (كان ينتظر حدث إغلاق مقبسه). */
+    let moved = false;
+    if (this.room.phase === 'play' && this.room.S) {
+      if (list.filter(p => !p.kicked).length <= 1) {
+        this.room.phase = 'over';
+        this.room.S.phase = 'over';
+        await this.persist();
+        this.pushSeats();
+        this.broadcast({ type: 'over', seat: null, winner: '', reason: v.name + ' طُرد — ما بقي خصم، والمباراة انتهت بلا فائز' });
+        return;
+      }
+      moved = this.skipDisconnected();
+    }
     await this.persist();
     this.pushSeats();
+    if (moved) this.broadcast({ type: 'state', state: this.room.S });
   }
 
   /* ── الرسائل (نمط السبات) ── */
@@ -11350,6 +12247,11 @@ export class BilliardRoom {
 
     if (m.type === 'start') {
       if (!isHost) return this.send(ws, { type: 'error', message: 'المضيف وحده يبدأ' });
+      /* v263: «ابدأ» في الردهة أو بعد نهاية المباراة فقط — كانت وسط اللعب
+         تمسح الطاولة وتبدأ مباراة جديدة فوق الجارية */
+      if (this.room.phase !== 'lobby' && this.room.phase !== 'over') {
+        return this.send(ws, { type: 'error', message: 'المباراة جارية' });
+      }
       // احتياط ثانٍ: لا تبدأ بمقعد منقطع ولو أفلت من مسار الإغلاق
       this.room.players = this.room.players.filter(q => q.connected !== false);
       const n = this.room.players.length;
@@ -11388,7 +12290,11 @@ export class BilliardRoom {
     /* وضع الكرة البيضاء بعد خطأ */
     if (m.type === 'place') {
       if (S.turn !== seat || S.phase !== 'inhand') return;
-      if (!Ya7Billiard.placeCue(S, +m.x, +m.y)) {
+      /* v263: رقمان حقيقيان داخل الطاولة — كان {type:'place'} بلا x/y يضع
+         البيضاء على NaN (clamp يمرّر NaN)، فتصير كل الكرات NaN مع أول ضربة */
+      const W = Ya7Billiard.WORLD;
+      if (!Number.isFinite(m.x) || !Number.isFinite(m.y) || m.x < W.L || m.x > W.R || m.y < W.T || m.y > W.B
+          || !Ya7Billiard.placeCue(S, m.x, m.y)) {
         return this.send(ws, { type: 'error', message: 'مكان غير صالح' });
       }
       Ya7Billiard.endPlacement(S);
@@ -11428,7 +12334,12 @@ export class BilliardRoom {
     const S = this.room.S;
     if (!S || this.room.phase !== 'play' || S.phase === 'over') return false;
     const list = this.room.players || [];
-    const live = s => { const p = list[s]; return !!p && p.connected !== false; };
+    /* v263: شبح النشرة (goneAt من bootSweep) يُنتظر مهلة الرجوع قبل تخطّيه —
+       بعد النشرة يرجع الكل بترتيب عشوائي، فأول الراجعين لا يأخذ دور غيره.
+       المنبّه (wakeAt) يوقظ الغرفة عند انقضاء المهلة. */
+    const now = Date.now();
+    const live = s => { const p = list[s]; return !!p && (p.connected !== false
+      || (!p.kicked && p.goneAt > 0 && now - p.goneAt < BOOT_GRACE_MS)); };
     let any = false;
     for (let s = 0; s < S.players; s++) if (live(s)) { any = true; break; }
     if (!any) return false;                       // الكل منقطع: لا تعبث بالدور
@@ -11439,6 +12350,8 @@ export class BilliardRoom {
     }
     return moved;
   }
+  /* v263: bootSweep يعلّم من لم يرجع بعد النشرة — ساعة غيابه بداية مهلته */
+  onBootGhost(p, now) { p.goneAt = now; }
 
   async webSocketClose(ws) {
     if (!this.room) return;
@@ -11621,7 +12534,7 @@ function reclaimSeat(room, sockets, rawName, jid) {
      ya7-seat-token.js ويحفظه في sessionStorage، فيصمد عبر التحديث
      وإعادة الاتصال ولا يُسرَّب بين تبويبين. */
   if (jid && /^[a-f0-9]{32}$/i.test(jid)) {
-    const mine = room.players.find(p => p.jid && p.jid === jid);
+    const mine = room.players.find(p => !p.isBot && p.jid && p.jid === jid);
     if (mine) {
       const old = sockets.get(mine.id);
       if (old) { try { old.close(); } catch {} sockets.delete(mine.id); }
@@ -11632,7 +12545,10 @@ function reclaimSeat(room, sockets, rawName, jid) {
 
   const n = cleanName(rawName);
   if (!n) return null;
-  const seat = room.players.find(p => cleanName(p.name) === n);
+  /* v263: مقعد البوت ليس مقعد أحد — البوت بلا مقبس دائمًا، فإنسانٌ اسمه كاسم
+     البوت (فهد، سارة…) كان يُعطى مقعده: الخادم يلعب عنه، ونتائجه لا تُسجَّل،
+     وإزالة البوت تتركه بمقبس مفتوح بلا مقعد. يأخذ مقعدًا باسم مميّز بدلًا منه. */
+  const seat = room.players.find(p => !p.isBot && cleanName(p.name) === n);
   if (!seat) return null;
   /* ═══ الاسم ليس سرًّا — فلا يفتح مقعدًا ذا هوية ثابتة ═══
      الاستعادة بالاسم كانت آخر حلّ لسباق الضغط المزدوج: أول سوكِت يُفتح
@@ -11754,7 +12670,7 @@ export class BtaqatiRoom {
   newPlayer(id, name, token) {
     return {
       id, name: cleanName(name), connected: false, seatToken: token || newSeatToken(),
-      points: 0, roundsWon: 0, dead: false, armed: false, deceitLeft: 1,
+      points: 0, roundsWon: 0, dead: false, armed: false, deceitLeft: 1, deceitPub: 1,
       qCount: 0, real: -1, ghostIdx: -1, blackIdx: -1,
       stats: { q: 0, cw: 0, cl: 0, caught: 0, wrong: 0, black: 0, fastest: null },
     };
@@ -11857,19 +12773,31 @@ export class BtaqatiRoom {
 
   broadcastState() {
     const r = this.room;
-    this.broadcastPublic({
+    const base = {
       type: 'state',
       phase: r.phase, code: r.code, hostId: r.hostId,
       cfg: r.cfg, board: r.board, roundNo: r.roundNo,
       turn: r.turn, target: r.target, pending: r.pending,
       note: r.note, lastEvent: r.lastEvent, winner: r.winner,
-      players: r.players.map(p => ({
+    };
+    /* v263: الحالة لكل مشاهد على حدة — كان deceitLeft المبثوث ينقص لحظة
+       تجهيز الخدعة فيعرف الكل أنها جاهزة. صاحبها يرى عدّاده الحقيقي، والبقية
+       ما هو معلوم: لا ينقص إلا لو انكشفت بالتحدي (deceitSeen). */
+    for (const [id, ws] of this.sockets) {
+      const players = r.players.map(p => ({
         id: p.id, name: p.name, connected: p.connected,
         points: p.points, roundsWon: p.roundsWon, dead: p.dead,
-        deceitLeft: p.deceitLeft, qCount: p.qCount,
+        deceitLeft: p.id === id ? p.deceitLeft : this.deceitSeen(p), qCount: p.qCount,
         // armed لا يُبَث أبدًا: لو عرفه الخصم انهار الخداع والتحدي معًا
-      })),
-    });
+      }));
+      try { ws.send(JSON.stringify(Object.assign({}, base, { players }))); } catch {}
+    }
+  }
+  /* عدّاد الخدعة كما يراه الخصوم. خدعةٌ استُهلكت بجوابٍ بلا تحدٍّ تبقى مخفية:
+     لو نقص العدّاد بعد الجواب لعرف السائل أن الجواب مقلوب. (deceitPub غائب
+     في غرفة حُفظت قبل v263 — نرجّعه من المجهَّزة.) */
+  deceitSeen(p) {
+    return typeof p.deceitPub === 'number' ? p.deceitPub : p.deceitLeft + (p.armed ? 1 : 0);
   }
 
   alive() { return this.room.players.filter(p => !p.dead); }
@@ -11896,11 +12824,10 @@ export class BtaqatiRoom {
         if (typeof tid !== 'string' || tid === r.hostId) return;  // المضيف ما يطرد نفسه
         const target = r.players.find(x => x.id === tid);
         if (!target) return;
-        this.sendPrivate(tid, { type: 'kicked' });
-        const sock = this.sockets.get(tid);
-        if (sock) { try { sock.close(); } catch {} this.sockets.delete(tid); }
-        r.players = r.players.filter(x => x.id !== tid);
-        break;
+        /* v263: نفس مسار الطرد العام (kickPlayer) — فيخرج من دردشة الغرفة
+           أيضًا، ويُدوَّر توكنه */
+        await this.kickPlayer(tid);
+        return;
       }
 
       case 'start': {
@@ -11933,6 +12860,11 @@ export class BtaqatiRoom {
         // صاحب الدور أرسل سؤاله شفهيًا، والخصم صار مطالبًا بالجواب
         if (r.phase !== 'play' || me !== r.turn || r.pending) return;
         if (r.target === me || r.players[r.target].dead) return;
+        /* خصمٌ منقطع ما يقدر يجاوب، والسؤال المعلّق بلا مؤقّت (v262) */
+        if (r.players[r.target].connected === false) {
+          this.sendPrivate(playerId, { type: 'error', message: r.players[r.target].name + ' منقطع — اسأل غيره' });
+          return;
+        }
         if (this.qLeft(r.players[me]) <= 0) {
           this.sendPrivate(playerId, { type: 'error', message: 'خلصت أسئلتك — لازم تخمّن' });
           return;
@@ -11979,6 +12911,7 @@ export class BtaqatiRoom {
         asker.qCount++; asker.stats.q++;
         if (opp.armed) {
           opp.armed = false;
+          opp.deceitPub = opp.deceitLeft;        // v263: انكشفت — صارت معلومة للكل
           asker.points += 20; asker.stats.cw++; opp.stats.caught++;
           r.lastEvent = { kind: 'challengeWin', asker: me, target: t };
           r.note = 'كشفته! كان يخادع — والدور باقي له';
@@ -12004,11 +12937,18 @@ export class BtaqatiRoom {
 
       case 'nextRound':
         if (!isHost || r.phase !== 'round') return;
+        if (r.players.filter(q => !q.kicked && q.connected !== false).length < BT_MIN_PLAYERS) {
+          this.sendPrivate(playerId, { type: 'error', message: 'تحتاج لاعبين حاضرين على الأقل' });
+          return;
+        }
         this.startRound(false);
         break;
 
       case 'rematch':
         if (!isHost || r.phase !== 'over') return;
+        /* الردهة لا تحمل إلا الحاضرين (onClose يشيل المنقطع فيها): المطرود
+           والغائب ما يرجعون معنا إلى لعبة جديدة (v262). */
+        r.players = r.players.filter(q => !q.kicked && q.connected !== false);
         for (const q of r.players) { q.points = 0; q.roundsWon = 0; }
         r.roundNo = 1;
         r.phase = 'lobby'; r.winner = null; r.note = ''; r.lastEvent = null;
@@ -12029,7 +12969,8 @@ export class BtaqatiRoom {
     const n = r.board.length;
     const used = new Set();
     for (const p of r.players) {
-      p.dead = false; p.armed = false; p.qCount = 0; p.deceitLeft = 1;
+      p.dead = !!p.kicked;   // المطرود خارج كل جولة قادمة
+      p.armed = false; p.qCount = 0; p.deceitLeft = 1; p.deceitPub = 1;
       p.real = randInt(n);
       // الشبح/السوداء لا تساوي بطاقة اللاعب نفسه
       let g = randInt(n); let guard = 0;
@@ -12038,9 +12979,12 @@ export class BtaqatiRoom {
       p.blackIdx = r.cfg.ghostMode === 'hidden' ? g : -1;
       used.add(p.real);
     }
-    r.turn = 0;
-    r.target = r.players.length > 1 ? 1 : 0;
-    r.pending = null;
+    /* أول دور لأول مقعد حاضر (v262): كان r.turn = 0 دائمًا، فلو انقطع صاحب
+       المقعد الأول أو طُرد بدأت الجولة عليه وتجمّدت للأبد — لا مؤقّت في
+       «خمّن من؟» ولا زرّ تخطٍّ. nextTurn من المقعد الأخير = أول حاضر. */
+    r.turn = r.players.length - 1;
+    r.target = r.turn;
+    this.nextTurn();
     r.note = '';
     r.lastEvent = { kind: 'roundStart', roundNo: r.roundNo };
     r.phase = 'play';
@@ -12056,20 +13000,80 @@ export class BtaqatiRoom {
     let found = false;
     for (let k = 1; k <= n; k++) {
       const i = (r.turn + k) % n;
-      if (!r.players[i].dead && r.players[i].connected !== false) { r.turn = i; found = true; break; }
+      if (!r.players[i].dead && !r.players[i].kicked && r.players[i].connected !== false) { r.turn = i; found = true; break; }
     }
     if (!found) for (let k = 1; k <= n; k++) {
       const i = (r.turn + k) % n;
       if (!r.players[i].dead) { r.turn = i; break; }
     }
-    // الهدف الافتراضي: أول حيّ غير صاحب الدور
-    if (r.players[r.target].dead || r.target === r.turn) {
-      for (let k = 1; k <= n; k++) {
-        const i = (r.turn + k) % n;
-        if (!r.players[i].dead) { r.target = i; break; }
+    this.retarget();
+    r.pending = null;
+  }
+
+  /* الهدف الافتراضي: أول حيّ حاضر غير صاحب الدور، وإلا أول حيّ غيره.
+     المنقطع لا يُسأل (ما يقدر يجاوب)، لكن يبقى هدفًا لو ما فيه غيره. */
+  retarget() {
+    const r = this.room;
+    const n = r.players.length;
+    const cur = r.players[r.target];
+    if (cur && !cur.dead && r.target !== r.turn && cur.connected !== false) return;
+    let pick = -1;
+    for (let k = 1; k <= n && pick < 0; k++) {
+      const i = (r.turn + k) % n;
+      if (i !== r.turn && !r.players[i].dead && r.players[i].connected !== false) pick = i;
+    }
+    for (let k = 1; k <= n && pick < 0; k++) {
+      const i = (r.turn + k) % n;
+      if (i !== r.turn && !r.players[i].dead) pick = i;
+    }
+    if (pick >= 0) r.target = pick;
+  }
+
+  /* طرد اللاعب (v262). كانت الغرفة بلا دالة طرد، فتمرّ على الطرد العام في
+     applyRoomCommon: يحذف مقبس المطرود من الخريطة قبل وصول إغلاقه، فيتجاهل
+     onClose الحدث (حارس الهوية) ولا ينتقل الدور ولا يُمسح السؤال المعلّق —
+     وطرد صاحب الدور = لعبة واقفة للأبد. الطرد هنا خروجٌ كامل: المطرود ميت
+     لبقية المباراة، لا يأخذ دورًا ولا يُسأل. ولو ما بقي إلا حيّ واحد تنتهي
+     الجولة بلا فائز: الطرد ما يصير طريقة للفوز. */
+  async kickPlayer(targetId) {
+    const r = this.room;
+    if (!r || targetId === r.hostId) return;
+    const i = this.idx(targetId);
+    if (i < 0) return;
+    const v = r.players[i];
+    v.kicked = true; v.connected = false; v.dead = true; v.armed = false;
+    v.seatToken = 'kicked-' + newSeatToken();
+    const sock = this.sockets.get(targetId);
+    this.sockets.delete(targetId);
+    if (sock) {
+      try { sock.send(JSON.stringify({ type: 'kicked' })); } catch {}
+      try { sock.close(4002, 'kicked'); } catch {}
+    }
+    if (r.phase === 'lobby') {
+      r.players.splice(i, 1);
+    } else if (r.phase === 'play') {
+      if (r.pending && (r.pending.asker === i || r.pending.target === i)) r.pending = null;
+      if (this.alive().length <= 1) {
+        r.pending = null;
+        r.lastEvent = { kind: 'abandoned', by: i };
+        r.note = v.name + ' طُرد — ما بقي أحد يُسأل، والجولة انتهت بلا فائز';
+        if (r.roundNo >= r.cfg.rounds) {
+          let best = -1;
+          r.players.forEach((q, j) => { if (!q.kicked && (best < 0 || q.points > r.players[best].points)) best = j; });
+          r.winner = best < 0 ? 0 : best;
+          r.phase = 'over';
+        } else {
+          r.phase = 'round';
+        }
+      } else if (r.turn === i) {
+        this.nextTurn();
+        r.note = v.name + ' طُرد — انتقل الدور';
+      } else {
+        this.retarget();
       }
     }
-    r.pending = null;
+    await this.persist();
+    this.broadcastState();
   }
 
   async resolveAccuse(me, t, pick) {
@@ -12108,8 +13112,11 @@ export class BtaqatiRoom {
     r.lastEvent = Object.assign({ winner: winnerIdx, gained: 100 + speed }, event || {});
     r.pending = null;
     if (r.roundNo >= r.cfg.rounds) {
-      let best = 0;
-      r.players.forEach((p, i) => { if (p.points > r.players[best].points) best = i; });
+      /* v263: المطرود لا يُتوَّج بنقاطه القديمة — كان يفوز بالمباراة لو سبقت
+         نقاطُه قبل طرده، فيذهب الفوز لغائب وتُسجَّل خسارة لمن أكملها */
+      let best = -1;
+      r.players.forEach((p, i) => { if (!p.kicked && (best < 0 || p.points > r.players[best].points)) best = i; });
+      if (best < 0) best = winnerIdx;
       r.winner = best;
       r.phase = 'over';
       await this.recordResults([r.players[best].id]);
@@ -12532,6 +13539,20 @@ async function admGlobalBlocked(env, ip) {
   } catch { return false; }
 }
 
+/* v264: حدّ العنوان (عشر محاولات فاشلة كل عشر دقائق) يُسأل قبل المقارنة
+   مثل الإغلاق العام. كان يُعدّ بعدها فقط: التخمين الحادي عشر وما بعده
+   يُقيَّم ويُردّ «rate» شكلًا، والصحيح منها يدخل — فالحدّ الفعلي للعنوان
+   كان سقف adm: (٢٤٠) لا عشرًا. */
+const ADM_IP_FAILS = 10;
+const ADM_IP_WINDOW = 10 * 60 * 1000;
+async function admIpBlocked(env, ip) {
+  try {
+    const row = await env.DB.prepare('SELECT n, reset_at FROM rate_limits WHERE k = ?1')
+      .bind('admf:' + ip).first();
+    return !!(row && row.reset_at >= Date.now() && row.n >= ADM_IP_FAILS);
+  } catch { return false; }
+}
+
 async function rateLimit(env, key, limit, windowMs, failClosed = false) {
   const now = Date.now();
   try {
@@ -12569,6 +13590,17 @@ async function maybeCleanup(env, ctx) {
       await env.DB.prepare('DELETE FROM rate_limits WHERE reset_at < ?1').bind(now).run();
       await env.DB.prepare('DELETE FROM username_holds WHERE until < ?1').bind(now).run();
       await env.DB.prepare('DELETE FROM invites WHERE expires_at < ?1').bind(now).run();
+    } catch {}
+    /* v263: مقاطع البلاغات وسجلّ الغرف كانا يُكنسان عند وصول بلاغ أو إنشاء غرفة
+       فقط — بلا بلاغٍ جديد يبقى المقطع شهورًا والشروط تقول ثلاثين يومًا بالأكثر.
+       كلٌّ في try خاصته: الجدولان يُنشآن عند أول استعمال وقد لا يوجدان بعد. */
+    try {
+      await env.DB.prepare('DELETE FROM mod_clip_reports WHERE created_at < ?1')
+        .bind(now - MOD_REPORT_TTL_MS).run();
+    } catch {}
+    try {
+      await env.DB.prepare('DELETE FROM mod_rooms WHERE created_at < ?1')
+        .bind(now - MOD_ROOM_TTL_MS).run();
     } catch {}
   })();
   if (ctx && ctx.waitUntil) ctx.waitUntil(job); else await job;
@@ -12624,6 +13656,10 @@ const ACCOUNT_TABLES = [
   'DELETE FROM ratings        WHERE device_id = ?1',
   'DELETE FROM game_stats     WHERE device_id = ?1',
   'DELETE FROM push_subs      WHERE device_id = ?1',
+  /* v263: مقاطع البلاغات الصوتية (طاريك) كانت تبقى بعد الحذف — صوت صاحب
+     الحساب واسمه في صفٍّ لا يربطه بشيء. الربط بالحساب في target_did (صاحب
+     المقطع) وby_did (المُبلِّغ)، والاثنان يُمسحان كما تُمسح البلاغات فوق. */
+  'DELETE FROM mod_clip_reports WHERE target_did = ?1 OR by_did = ?1',
   /* مفاتيح الخانق تحمل معرّف الجهاز (del: out: rep: fr*: …) وتبقى بعد
      الحذف حتى تنتهي نافذتها. المطابقة على ما بعد أول ':' مطابقة تامة لا
      LIKE: معرّف الجهاز يحوي '_' وهو محرف بدل في LIKE، فكان يشطب صفوف
@@ -12741,6 +13777,24 @@ const LB_GAMES = new Set(['ghazw']);
 const LB_TTL_MS = 3 * 60 * 60 * 1000;
 const LB_NAME_MAX = 14;
 const LB_SCORE_MAX = 10000000;
+/* v264: الجدول كان بلا سقف ولا حذف — ٤٠ نتيجة/ساعة لكل عنوان بأسماء مختلفة،
+   والصفوف تبقى للأبد (والترتيب والعدّ مسحٌ كامل يكبر معها). الآن: سقف عام
+   للكتابات، ونُبقي أفضل LB_KEEP لكل لعبة (اللوحة تعرض ٥٠ بالأكثر) ويُكنس
+   الباقي بنفس أسلوب maybeCleanup: ٢٪ من الرفعات، في الخلفية. */
+const LB_KEEP = 1000;
+const LB_GLOBAL_WRITES = 3000;   // في الساعة للموقع كله
+async function lbMaybePrune(env, game, ctx) {
+  if (Math.random() > 0.02) return;
+  const job = (async () => {
+    try {
+      await env.DB.prepare(
+        `DELETE FROM arcade_scores WHERE game = ?1 AND rowid NOT IN (
+           SELECT rowid FROM arcade_scores WHERE game = ?1 ORDER BY score DESC, at ASC LIMIT ?2)`
+      ).bind(game, LB_KEEP).run();
+    } catch {}
+  })();
+  if (ctx && ctx.waitUntil) ctx.waitUntil(job); else await job;
+}
 let _lbSchema = null;
 function lbSchema(env) {
   if (!_lbSchema) _lbSchema = env.DB.prepare(
@@ -12751,8 +13805,22 @@ function lbSchema(env) {
        at    INTEGER NOT NULL,
        ipk   TEXT,
        PRIMARY KEY (game, name)
-     )`).run().catch(e => { _lbSchema = null; throw e; });
+     )`).run()
+    /* v263: الصفوف القديمة تحمل العنوان خامًا — لا شيء يقرأ ipk، فيُمسح منها
+       مرة لكل نسخة. الجديد بصمة مفتاحية (h:) لا عنوان. تعثّره لا يوقف اللوحة. */
+    .then(async () => {
+      try {
+        await env.DB.prepare(
+          "UPDATE arcade_scores SET ipk = NULL WHERE ipk IS NOT NULL AND ipk NOT LIKE 'h:%'").run();
+      } catch {}
+    })
+    .catch(e => { _lbSchema = null; throw e; });
   return _lbSchema;
+}
+/* بصمة العنوان: HMAC بسرّ الخادم — العنوان نفسه لا يُخزَّن ولا يُستخرج منها
+   بلا السر، ويبقى تمييز النتائج الآتية من المصدر نفسه ممكنًا في اللوحة. */
+async function lbIpTag(env, ip) {
+  return 'h:' + (await hmac(env.ACCOUNT_SECRET, 'ipk:' + ip)).slice(0, 22);
 }
 async function hmacHex(secret, msg) {
   const key = await crypto.subtle.importKey('raw', te.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
@@ -12764,13 +13832,13 @@ async function hmacHex(secret, msg) {
 function lbCleanName(raw) {
   return String(raw == null ? '' : raw)
     .replace(/[<>&"'`\\]/g, '')
-    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')   // v264: ومحارف C1 (U+0080–U+009F) كذلك
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, LB_NAME_MAX);
 }
-async function handleLeaderboard(request, env, url) {
+async function handleLeaderboard(request, env, url, ctx) {
   const sub = url.pathname.slice('/lb'.length);
   if (!env.DB || !env.ACCOUNT_SECRET) return fail(request, 'binding-missing', null, 501);
   const ip = clientKey(request);
@@ -12817,16 +13885,19 @@ async function handleLeaderboard(request, env, url) {
       /* يفشل مقفلًا: مسار كتابة، والجلسة المستهلكة لا تُقبل مرتين */
       if (!await rateLimit(env, 'lbs:' + parts[2], 1, LB_TTL_MS, true)) return fail(request, 'used');
       if (!await rateLimit(env, 'lbw:' + ip, 40, 60 * 60 * 1000, true)) return fail(request, 'rate', 'نتائج كثيرة، جرّب بعدين');
+      if (!await rateLimit(env, 'lbw:global', LB_GLOBAL_WRITES, 60 * 60 * 1000, true))
+        return fail(request, 'rate', 'ضغط عالي على لوحة الصدارة، جرّب بعدين');   // v264
       await lbSchema(env);
       await env.DB.prepare(
         `INSERT INTO arcade_scores (game, name, score, at, ipk) VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(game, name) DO UPDATE SET
            score = CASE WHEN excluded.score > arcade_scores.score THEN excluded.score ELSE arcade_scores.score END,
            at    = CASE WHEN excluded.score > arcade_scores.score THEN excluded.at    ELSE arcade_scores.at    END`
-      ).bind(game, name, score, Date.now(), String(ip).slice(0, 48)).run();
+      ).bind(game, name, score, Date.now(), await lbIpTag(env, ip)).run();
       const rank = await env.DB.prepare(
         'SELECT COUNT(*) AS n FROM arcade_scores WHERE game = ?1 AND score > ?2'
       ).bind(game, score).first();
+      await lbMaybePrune(env, game, ctx);   // v264
       return J(request, { ok: true, rank: ((rank && rank.n) || 0) + 1 });
     }
     return fail(request, 'unknown', null, 404);
@@ -12895,13 +13966,16 @@ async function handleAccountInner(request, env, url, ctx) {
        بعد سطور، فالمرور هنا يعني عمل ضائع في أسوأ لحظة. */
     if (!await rateLimit(env, 'reg:' + ip, 6, 60 * 60 * 1000, true))
       return fail(request, 'rate');
-    if (!await rateLimit(env, 'reg:global', 300, 60 * 60 * 1000, true))
-      return fail(request, 'rate');
 
     const v = await checkUsername(env, body.username);
     if (!v.ok) return fail(request, 'taken', v.ar);
     if (await isUsernameTaken(env, v.norm, null, now))
       return fail(request, 'taken');
+    /* v263: السقف العام بعد التحقق لا قبله — كان يعدّ حتى الجسم الفارغ، فبضع
+       عشرات من العناوين ترسل طلبات فارغة وتقفل التسجيل على الموقع كله ساعة.
+       الآن لا يعدّ إلا طلبًا سيُنشئ حسابًا فعلًا (حدّ الـIP فوق يعدّ كل شيء). */
+    if (!await rateLimit(env, 'reg:global', 300, 60 * 60 * 1000, true))
+      return fail(request, 'rate');
 
     const deviceId = makeDeviceId();
     const displayName = sanitizeDisplayName(body.display_name) || v.username;
@@ -12951,12 +14025,15 @@ async function handleAccountInner(request, env, url, ctx) {
   if (path === 'recover') {
     if (!await rateLimit(env, 'rec:' + ip, 8, 60 * 60 * 1000, true))
       return fail(request, 'rate');
-    // سقف عالمي: حدّ الـIP وحده تتجاوزه شبكة بوتات بآلاف العناوين
-    if (!await rateLimit(env, 'rec:global', 500, 60 * 60 * 1000, true))
-      return fail(request, 'rate');
 
     const raw = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-    if (raw.length !== ACC.CODE_LEN) return fail(request, 'bad-code');
+    if (raw.length !== ACC.CODE_LEN || [...raw].some(ch => !ACC.CODE_ALPHABET.includes(ch)))
+      return fail(request, 'bad-code');
+    // سقف عالمي: حدّ الـIP وحده تتجاوزه شبكة بوتات بآلاف العناوين
+    /* v263: يُعدّ بعد فحص الشكل — رمزٌ فارغ أو مشوّه لا يخمّن شيئًا، وكان
+       يستهلك السقف فيقفل الاسترجاع على الموقع كله ساعة. */
+    if (!await rateLimit(env, 'rec:global', 500, 60 * 60 * 1000, true))
+      return fail(request, 'rate');
 
     const lookup = await blindIndex(env.ACCOUNT_CODE_KEY, raw);
     const row = await env.DB.prepare('SELECT * FROM players WHERE code_lookup = ?1')
@@ -13250,7 +14327,7 @@ async function handleAccountInner(request, env, url, ctx) {
     const endpoint = String(s.endpoint || '').slice(0, 500);
     const p256dh = String((s.keys || {}).p256dh || '');
     const auth = String((s.keys || {}).auth || '');
-    if (!/^https:\/\//.test(endpoint) || !p256dh || !auth)
+    if (!pushEndpointOk(endpoint) || !p256dh || !auth)   // v264: خدمات الدفع وحدها
       return fail(request, 'bad-sub');
     /* مفتاحا الاشتراك لهما طول ثابت في المعيار (p256dh نقطة غير مضغوطة
        ٦٥ بايت، auth ١٦ بايت). ما لا يطابق لا يُشفَّر له شيء أصلًا،
@@ -13310,6 +14387,8 @@ async function handleAccountInner(request, env, url, ctx) {
       return J(request, { ok: true, state: 'sent' });
     if (row) {
       /* هو أرسل لي أولًا وأنا أضفته الآن — نية متبادلة، فالقبول فوري */
+      const full = await friendCapHit(env, me.device_id, other.device_id);   // v264
+      if (full) return fail(request, 'limit', full);
       await env.DB.prepare(
         "UPDATE friends SET status='accepted', updated_at=?3 WHERE a=?1 AND b=?2"
       ).bind(a, b, now).run();
@@ -13323,6 +14402,10 @@ async function handleAccountInner(request, env, url, ctx) {
     ).bind(me.device_id).first();
     if ((mine && mine.n || 0) >= ACC.MAX_FRIENDS)
       return fail(request, 'limit', 'وصلت الحد الأقصى للأصدقاء');
+    /* v264: والمستقبِل كذلك — كان السقف على المرسل وحده، فالحساب يتجاوز ١٥٠
+       بقبول ما يصله */
+    if (await friendCount(env, other.device_id) >= ACC.MAX_FRIENDS)
+      return fail(request, 'limit', 'هذا الحساب وصل الحد الأقصى للأصدقاء');
     const out = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM friends WHERE requested_by=?1 AND status='pending'"
     ).bind(me.device_id).first();
@@ -13348,11 +14431,15 @@ async function handleAccountInner(request, env, url, ctx) {
     if (!other || other === me.device_id) return fail(request, 'not-found', 'ما فيه حساب بهذا الاسم');
     const [a, b] = pairKey(me.device_id, other);
     /* نفس الصف: الحظر يمحو الصداقة أو الطلب ويحلّ محلّهما.
-       requested_by هنا = الحاظر، وبه نعرف من يقدر يرفع الحظر. */
+       requested_by هنا = الحاظر، وبه نعرف من يقدر يرفع الحظر.
+       v263: حظرُ الطرف الآخر لا يُستبدل — كان المحظور «يحظر بالمقابل» فيصير
+       هو صاحب الصف، ثم يرفعه عن نفسه بـunblock. الصف يبقى لأول حاظر، والرد
+       نفسه في الحالتين فلا يعرف المحظور أنه محظور. */
     await env.DB.prepare(
       `INSERT INTO friends (a,b,status,requested_by,created_at,updated_at)
        VALUES (?1,?2,'blocked',?3,?4,?4)
-       ON CONFLICT(a,b) DO UPDATE SET status='blocked', requested_by=?3, updated_at=?4`
+       ON CONFLICT(a,b) DO UPDATE SET status='blocked', requested_by=?3, updated_at=?4
+       WHERE friends.status <> 'blocked' OR friends.requested_by = ?3`
     ).bind(a, b, me.device_id, now).run();
     return J(request, { ok: true, state: 'blocked' });
   }
@@ -13380,6 +14467,8 @@ async function handleAccountInner(request, env, url, ctx) {
     const other = await deviceByUsername(env, body.username);
     if (!other) return fail(request, 'not-found', 'ما فيه حساب بهذا الاسم');
     const [a, b] = pairKey(me.device_id, other);
+    const full = await friendCapHit(env, me.device_id, other);   // v264: السقف للطرفين
+    if (full) return fail(request, 'limit', full);
     /* الشرط requested_by <> me يمنع أن يقبل أحد طلبه بنفسه */
     const r = await env.DB.prepare(
       "UPDATE friends SET status='accepted', updated_at=?3 WHERE a=?1 AND b=?2 AND status='pending' AND requested_by <> ?4"
@@ -13398,7 +14487,11 @@ async function handleAccountInner(request, env, url, ctx) {
     const other = await deviceByUsername(env, body.username);
     if (!other) return J(request, { ok: true });
     const [a, b] = pairKey(me.device_id, other);
-    await env.DB.prepare('DELETE FROM friends WHERE a = ?1 AND b = ?2').bind(a, b).run();
+    /* v263: كان يمسح أي صف — ومنه حظرٌ وضعه الطرف الآخر، فيمسح المحظور حظره
+       ويرسل طلبًا من جديد. حظر الغير لا يُلمس من هنا (والرد نفسه، بلا كشف). */
+    await env.DB.prepare(
+      "DELETE FROM friends WHERE a = ?1 AND b = ?2 AND (status <> 'blocked' OR requested_by = ?3)"
+    ).bind(a, b, me.device_id).run();
     return J(request, { ok: true });
   }
 
@@ -13551,6 +14644,7 @@ async function handleAccountInner(request, env, url, ctx) {
 /* أسباب البلاغ قائمة مغلقة: العميل يرسل المفتاح فقط، والنص من هنا —
    فلا يصل للوحة نصّ حرّ من الشبكة في حقل السبب. */
 const REPORT_REASONS = {
+  __proto__: null,   // v264: وإلا مرّ reason='constructor' سببًا للبلاغ
   abuse:   'ألفاظ أو إساءة',
   cheat:   'غش أو تلاعب',
   impersonate: 'انتحال شخصية',
@@ -13560,6 +14654,20 @@ const REPORT_REASONS = {
 };
 
 /* ─────────────────────────── الأصدقاء: أدوات ─────────────────────────── */
+
+/* v264: سقف ACC.MAX_FRIENDS يُفحص للطرفين عند كل صداقة جديدة (القبول، والإضافة
+   المتبادلة) — كان على مرسل الطلب وحده. يرجع رسالة الرفض أو null. */
+async function friendCount(env, did) {
+  const r = await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM friends WHERE (a=?1 OR b=?1) AND status='accepted'"
+  ).bind(did).first();
+  return (r && r.n) || 0;
+}
+async function friendCapHit(env, me, other) {
+  if (await friendCount(env, me) >= ACC.MAX_FRIENDS) return 'وصلت الحد الأقصى للأصدقاء';
+  if (await friendCount(env, other) >= ACC.MAX_FRIENDS) return 'هذا الحساب وصل الحد الأقصى للأصدقاء';
+  return null;
+}
 
 /* مفتاح ثابت للعلاقة مهما كان من بدأها — صفّ واحد لكل زوج لا صفّان */
 function pairKey(x, y) { return x < y ? [x, y] : [y, x]; }
@@ -13688,6 +14796,8 @@ async function handleReports(request, env, url) {
     return Response.json({ ok: false, error: 'siege',
       ar: 'الباب مغلق مؤقتًا: محاولات تخمين كثيرة الآن. ادخل من جهاز دخلتَ منه سابقًا، أو انتظر عشر دقائق.' },
       { status: 429 });
+  if (await admIpBlocked(env, ip))   // v264: حدّ العنوان قبل المقارنة لا بعدها
+    return Response.json({ ok: false, error: 'rate' }, { status: 429 });
   /* خانق المحاولات الفاشلة — كان في /admin/panel وحده، فصار تخمين
      نفس التوكن أرخص ٢٤ مرة من هذا الباب. نفس السقف بالضبط. */
   /* النوع أولًا: String(['tok']) === 'tok'، فمصفوفة تحمل التوكن كانت
@@ -13696,7 +14806,7 @@ async function handleReports(request, env, url) {
   if (typeof body.key !== 'string' ||
       !timingSafeEqual(body.key, String(env.ADMIN_TOKEN))) {
     await rateLimit(env, 'admfg:all', ADM_GLOBAL_FAILS, ADM_GLOBAL_WINDOW, true);
-    if (!await rateLimit(env, 'admf:' + ip, 10, 10 * 60 * 1000, true))
+    if (!await rateLimit(env, 'admf:' + ip, ADM_IP_FAILS, ADM_IP_WINDOW, true))
       return Response.json({ ok: false, error: 'rate' }, { status: 429 });
     return Response.json({ ok: false, error: 'auth' }, { status: 401 });
   }
@@ -13782,13 +14892,15 @@ async function handleAdminPanel(request, env, url) {
     return Response.json({ ok: false, error: 'siege',
       ar: 'الباب مغلق مؤقتًا: محاولات تخمين كثيرة الآن. ادخل من جهاز دخلتَ منه سابقًا، أو انتظر عشر دقائق.' },
       { status: 429 });
+  if (await admIpBlocked(env, ip))   // v264: حدّ العنوان قبل المقارنة لا بعدها
+    return Response.json({ ok: false, error: 'rate' }, { status: 429 });
   /* النوع أولًا: String(['tok']) === 'tok'، فمصفوفة تحمل التوكن كانت
      تمرّ. ليست تجاوزًا (لا بدّ من معرفة التوكن) لكنها ارتباك أنواع —
      ومقارنةُ سرٍّ لا تُبنى على تحويلٍ ضمني. */
   if (typeof body.key !== 'string' ||
       !timingSafeEqual(body.key, String(env.ADMIN_TOKEN))) {
     await rateLimit(env, 'admfg:all', ADM_GLOBAL_FAILS, ADM_GLOBAL_WINDOW, true);
-    if (!await rateLimit(env, 'admf:' + ip, 10, 10 * 60 * 1000, true))
+    if (!await rateLimit(env, 'admf:' + ip, ADM_IP_FAILS, ADM_IP_WINDOW, true))
       return Response.json({ ok: false, error: 'rate' }, { status: 429 });
     return Response.json({ ok: false, error: 'auth' }, { status: 401 });
   }
@@ -15141,6 +16253,8 @@ export class BalootRoom {
     }
     server.serializeAttachment({ id: me.id, sid: me.sid });
     this.migrateHost();
+    /* v264: أول راجعٍ لطاولة وقفت (غاب البشر كلهم) يعيد الإيقاع — والدور من رجوعه */
+    if (this.room.phase === 'play' && this.room.G && !this.room.tick) { const G0 = this.g(); if (G0) this.schedule(G0); }
     await this.persist();
 
     this.send(server, {
@@ -15226,11 +16340,20 @@ export class BalootRoom {
     }
   }
 
+  /* v264: هل بقي إنسان متصل؟ (المطرود صار بوتًا، والبوت لا يُحسب) */
+  humanHere() {
+    return (this.room.players || []).some(p => !p.isBot && !p.kicked && p.connected !== false);
+  }
+
   /* ── إيقاع اللعب: من الدور عليه الآن، ومتى نتدخّل ── */
   schedule(G) {
     const R = this.room;
     R.tick = 0; R.deadline = 0;
     if (!G) return;
+    /* v264: غاب البشر كلهم ⇒ الطاولة تقف: لا منبّه لعب (يبقى منبّه التنظيف وحده)،
+       ولا تلعب البوتات مباراةً لا أحد فيها وتسجّل نتيجتها. أول راجعٍ يعيد الإيقاع
+       من لحظة رجوعه (fetch). كانت تكمل حتى النهاية بمنبّه كل ٨٠٠ مللي ثانية. */
+    if (!this.humanHere()) return;
     if (G.phase === 'thrown') { R.tick = Date.now() + 900; return; }
     if (G.phase === 'handEnd') { R.tick = Date.now() + BAL_END_MS; R.deadline = R.tick; return; }
     if (G.phase === 'declare') {
@@ -15256,6 +16379,9 @@ export class BalootRoom {
     const G = this.g();
     if (!G) return;
     const R = this.room;
+    /* v264: منبّهٌ ضُبط والناس حاضرون ثم غابوا كلهم (أو نشرة ولم يرجع أحد —
+       bootSweep صحّح رايتهم): نقف بلا حركة */
+    if (!this.humanHere()) { this.schedule(G); await this.persist(); return; }
 
     if (G.phase === 'thrown') { G.nextHand(); R.ready = {}; R.lastTrick = null; }
     else if (G.phase === 'declare') {
@@ -15309,6 +16435,8 @@ export class BalootRoom {
     const winTeam = G.score[0] > G.score[1] ? 0 : 1;
     const ids = (this.room.players || []).filter((p, i) => (i & 1) === winTeam).map(p => p.id);
     await this.persist();
+    /* v264: مباراة انتهت ولا إنسان حاضر لا تُسجَّل (الوقوف أعلاه يمنعها أصلًا) */
+    if (!this.humanHere()) return;
     try { await this.recordResults(ids); } catch {}
   }
 
@@ -15372,8 +16500,10 @@ export class BalootRoom {
       if (t !== 'pass' && t !== 'sun' && t !== 'hokum') return;
       const act = { t };
       if (t === 'hokum' && m.act.suit != null) {
-        const s = +m.act.suit;
-        if (!(s >= 0 && s <= 3)) return;
+        /* v264: عدد صحيح ٠–٣ بلا تحويل — كان +suit يقبل 1.5 («1»، true…) فيُشترى
+           حكمٌ على سنٍّ لا وجود له وتُحسب اليد بلا حكم */
+        const s = m.act.suit;
+        if (!Number.isInteger(s) || s < 0 || s > 3) return;
         act.suit = s;
       }
       try { G.bidAction(seat, act); }
@@ -15381,13 +16511,17 @@ export class BalootRoom {
     } else if (m.type === 'play') {
       if (G.phase !== 'play') return;
       if (G.turn !== seat) return this.send(ws, { type: 'error', message: 'ليس دورك' });
-      const card = +m.card;
-      if (!(card >= 0 && card <= 31)) return;
+      /* v264: كذلك الورقة — كان +card يجعل null و«5» و[5] أوراقًا */
+      const card = m.card;
+      if (!Number.isInteger(card) || card < 0 || card > 31) return;
       try { this.applyPlay(G, seat, card); }
       catch (e) { return this.send(ws, { type: 'error', message: 'ورقة غير قانونية' }); }
     } else if (m.type === 'declare') {
       if (G.phase !== 'declare') return;
-      const raw = Array.isArray(m.idx) ? m.idx.slice(0, 8).map(Number).filter(n => Number.isInteger(n) && n >= 0 && n < 8) : [];
+      /* v264: فهارس صحيحة ٠–٧ وإلا تُرفض الرسالة كلها بلا أثر — كان Number(null)=0
+         يعلن مشروعًا، وأي قيمة غير مصفوفة تُحسب «لا أعلن» فتقفل إعلانه */
+      if (!Array.isArray(m.idx) || m.idx.length > 8 || !m.idx.every(n => Number.isInteger(n) && n >= 0 && n < 8)) return;
+      const raw = m.idx.slice();
       try { G.declare(seat, raw); }
       catch (e) { return this.send(ws, { type: 'error', message: String(e.message || 'تعذّر الإعلان') }); }
     } else if (m.type === 'ready') {
@@ -15435,9 +16569,11 @@ export class BalootRoom {
     this.migrateHost();
     await this.persist();
     this.pushAll();
-    /* دوره وهو غائب: قصّر المهلة فلا تتجمّد الطاولة على المنقطع */
+    /* دوره وهو غائب: قصّر المهلة فلا تتجمّد الطاولة على المنقطع.
+       v264: وآخر إنسان خرج ⇒ schedule بلا بشر توقف منبّه اللعب */
     const G = this.g();
-    if (G && (G.phase === 'bid' || G.phase === 'play') && (this.room.players || [])[G.turn] === p) {
+    const mine = G && (G.phase === 'bid' || G.phase === 'play') && (this.room.players || [])[G.turn] === p;
+    if (G && (mine || (this.room.phase === 'play' && !this.humanHere()))) {
       this.schedule(G);
       await this.persist();
     }
@@ -15626,7 +16762,11 @@ export class SalalemRoom {
      فلو حُسب لصار ثلاثة أشباح يقفلون الغرفة في وجه صاحبٍ جاي. */
   present() {
     const over = this.room.phase === 'over';
-    return (this.room.players || []).filter(p => !p.kicked && !p.left && !(over && p.connected === false));
+    /* v264: ومن دخل شاشة النهاية بعد المباراة (خارج مقاعدها، i >= G.n) مقعده للجولة
+       الجاية كمقعد الردهة: يُحسب ولو انقطع، ويأخذه داخلٌ حاضر إن امتلأت (fetch).
+       كان لا يُحسب ولا يُشطب — فكل دخول وخروج يزيد القائمة بلا حدّ. */
+    const n = over && this.room.G ? this.room.G.n : 0;
+    return (this.room.players || []).filter((p, i) => !p.kicked && !p.left && !(over && p.connected === false && i < n));
   }
 
   /* ── الإنشاء والاتصال ── */
@@ -15671,11 +16811,14 @@ export class SalalemRoom {
       if (this.room.phase === 'play') {
         return this.refuse('المباراة بدأت — انتظر الجولة القادمة', 'started');
       }
-      if (this.present().length >= SAL_MAX && this.room.phase === 'lobby') {
-        /* مقعد محفوظ لمنقطع (غير المضيف) لا يقفل الغرفة في وجه داخلٍ حاضر */
-        const ghost = this.room.players.filter(p => p.connected === false && p.id !== this.room.hostId)
+      if (this.present().length >= SAL_MAX && this.room.phase !== 'play') {
+        /* مقعد محفوظ لمنقطع (غير المضيف) لا يقفل الغرفة في وجه داخلٍ حاضر.
+           v264: وفي شاشة النهاية كذلك — من دخلوا بعدها وحدهم (مقاعد المباراة للعرض) */
+        const n0 = this.room.phase === 'over' && this.room.G ? this.room.G.n : 0;
+        const ghost = this.room.players.filter((p, i) => i >= n0 && p.connected === false && !p.kicked && !p.left && p.id !== this.room.hostId)
           .sort((a, b) => (a.goneAt || 0) - (b.goneAt || 0))[0];
-        if (ghost) this.room.players.splice(this.room.players.indexOf(ghost), 1);
+        /* لا نُخلي مقعدًا لا يفتح مكانًا: بعد النهاية قد يزيد الحاضرون عن السقف براجعين */
+        if (ghost && this.present().length - 1 < SAL_MAX) this.room.players.splice(this.room.players.indexOf(ghost), 1);
       }
       if (this.present().length >= SAL_MAX) {
         return this.refuse('الغرفة ممتلئة', 'full');
@@ -15926,6 +17069,8 @@ export class SalalemRoom {
       this.scheduleLobby();
       return;
     }
+    /* v264: داخلٌ بعد النهاية (ليس من مقاعد المباراة) يُشطب كالردهة — كان يبقى بعلمه */
+    if (R.phase === 'over' && G && i >= G.n) { R.players.splice(i, 1); return; }
     if (!G || i < 0 || i >= G.n) return;
     G.out[i] = true;
     if (R.phase !== 'play') return;
@@ -16058,6 +17203,7 @@ export class SalalemRoom {
       p.goneAt = Date.now();
       this.scheduleLobby();
     }
+    if (this.room.phase === 'over') p.goneAt = Date.now();   // v264: أقدم منقطع يُخلي مقعده أولًا
     this.migrateHost();
     /* غياب صاحب الدور يقصّر مهلته، وغياب الجميع يوقف المنبّه */
     if (this.room.phase === 'play') this.schedule();
@@ -16085,6 +17231,50 @@ export class ShifraRoom {
     this.g = null;                  // حالة اللعبة
     this.turnTimer = null;
     this._rate = new Map();         // خنق الرسائل لكل لاعب
+    /* v264: المباراة تنجو من النشرة — نمط المطاردة (v218) نفسه. كانت this.g في
+       الذاكرة وحدها، فأي نشرةٍ وسط المباراة ترجع الكل لردهةٍ فاضية بلا كلمة:
+       اللوح والدور والتلميح والفرق راحت، وأوّل العائدين «مضيف غرفة جديدة». الآن
+       تُقرأ الغرفة من التخزين عند الإقلاع، ويُكتب كل تغيّر يُبَثّ. */
+    if (state && state.storage && typeof state.blockConcurrencyWhile === 'function') {
+      state.blockConcurrencyWhile(async () => {
+        try {
+          const g = await state.storage.get('g');
+          if (g && Array.isArray(g.players)) {
+            /* المقابس ماتت مع الذاكرة: لا أحد متصل حتى يعود بنفسه. */
+            for (const p of g.players) { p.connected = false; p.sid = 0; if (!p.left) p.left = Date.now(); }
+            this.g = g;
+            const k = await state.storage.get('kicked');
+            if (Array.isArray(k)) this.kicked = new Set(k);
+            this.resumeTimer();
+          }
+        } catch {}
+      });
+    }
+  }
+
+  /* v264: الكتابة — الغرفة كاملة في مفتاح واحد، ومهلة كنسٍ تُجدَّد (غرفةٌ بلا أحد
+     ست ساعات تُمسح من القرص). نسخة HuntRoom.persist/alarm. */
+  async persist() {
+    if (!this.g || !this.state || !this.state.storage) return;
+    try {
+      this.g.lastSeen = Date.now();
+      await this.state.storage.put('g', this.g);
+      await this.state.storage.put('kicked', [...this.kicked]);
+      if (!this._alarmAt || Date.now() - this._alarmAt > 10 * 60 * 1000) {
+        this._alarmAt = Date.now();
+        await this.state.storage.setAlarm(Date.now() + ROOM_TTL_MS);
+      }
+    } catch {}
+  }
+
+  async alarm() {
+    const idle = Date.now() - ((this.g && this.g.lastSeen) || 0);
+    if (idle >= ROOM_TTL_MS && this.sockets.size === 0) {
+      try { await this.state.storage.deleteAll(); } catch {}
+      this.g = null; this.kicked = new Set();
+    } else {
+      try { await this.state.storage.setAlarm(Date.now() + ROOM_TTL_MS); } catch {}
+    }
   }
 
   /* خنق الرسائل — نسخة RoomCommon.allowMsg نفسها (لا تعتمد على this.room) */
@@ -16133,7 +17323,8 @@ export class ShifraRoom {
        أحد. الآن لا يُنشئها إلا طلب الإنشاء الصريح (new=1) — أو صفحةٌ تحمل
        مقعدًا في هذا الرمز (pid+tok): هذي الغرفة بلا تخزين، فالنشرة تمسحها،
        ومن كانوا فيها يرجعون بمقاعدهم القديمة فيجتمعون في ردهتها من جديد
-       بدل أن يُقال لكلٍّ منهم «ما فيه غرفة» وهم كانوا فيها قبل ثوانٍ. */
+       بدل أن يُقال لكلٍّ منهم «ما فيه غرفة» وهم كانوا فيها قبل ثوانٍ.
+       (v264: صارت تُحفظ وتنجو من النشرة — فهذا الباب لغرفةٍ كنسها المنبّه.) */
     if (!this.g && url.searchParams.get('new') !== '1' && !(pid && tok)) {
       ws.send(JSON.stringify({ t: 'err', fatal: true, code: 'nosuchroom',
         m: 'ما فيه غرفة بهذا الكود — تأكّد منه أو اطلبه من المضيف. (لو كنت تنشئ غرفة: حدّث الصفحة وجرّب)' }));
@@ -16162,7 +17353,10 @@ export class ShifraRoom {
       p.connected = true;
       p.quit = false;
       p.left = 0;
-      p.name = name || p.name;
+      /* v263: الرجوع لا يمنح اسم لاعبٍ آخر — قاعدة طاريك نفسها: الاسم الجديد
+         يُنظَّف ويُفرَّد عن بقية المقاعد كما في الدخول الجديد. كان
+         «p.name = name || p.name» يسمح لأي عائد أن يأخذ اسم غيره وسط اللعب. */
+      if (url.searchParams.get('name')) p.name = uniqueName({ players: this.g.players.filter(x => x !== p) }, name);
       if (cid) p.cid = cid;
       if (did) p.did = String(did).slice(0, 64);
     } else {
@@ -16285,8 +17479,23 @@ export class ShifraRoom {
         if (!isHost) return;
         if (g.phase !== "lobby" && g.phase !== "end") return;
         const err = this.validate();
-        if (err) throw new Error(err);
+        if (err) {
+          /* من شاشة النهاية ما فيه اختيار فريق: الداخل الجديد بلا فريق، والقائد
+             الغائب باقٍ في مقعده — فكان «جولة جديدة» يرجع خطأً لا يظهر في تلك
+             الشاشة ولا يُحلّ أبدًا (v262). نرجع للردهة، وفيها يُحلّ كل شيء. */
+          if (g.phase === "end") this.toLobby();
+          throw new Error(err);
+        }
         this.newRound();
+        return;
+      }
+      case "abort": {
+        /* مخرج المضيف من مباراة لا تكمل (v262): قائد الفريق صاحب الدور غاب، أو
+           ما بقي من فريقه من يخمّن. التلميح بلا مؤقّت، و«ابدأ» و«اطرد» ممنوعان
+           وسط اللعب — فكانت المباراة تقف للأبد بلا أي مخرج. متاح وقت العلوق
+           وحده: ليس زرّ هروبٍ من خسارة. */
+        if (!isHost || g.phase !== "play" || !this.stuck()) return;
+        this.toLobby(`أنهى المضيف المباراة — ${this.stuck()}`);
         return;
       }
       case "invade": {
@@ -16320,6 +17529,10 @@ export class ShifraRoom {
         const num = m.num === -1 ? -1 : Math.max(1, Math.min(9, m.num | 0));
         let text = cleanText(m.text, 40);
         if (!text) return;
+        /* v264: التلميح ما يكون كلمةً من اللوحة — كان يُقبل «كبسة» والكلمة «كبسة»
+           على اللوحة. الفحص على النصّ كما كُتب (كل كلماته) قبل القصّ لكلمة واحدة. */
+        const clash = shifraClash(text, g.board);
+        if (clash) throw new Error(`«${clash}» كلمة على اللوحة — التلميح لازم يكون كلمة غيرها.`);
         if (!g.settings.emojiMode && /\s/.test(text)) text = text.split(/\s+/)[0];
         g.hint = { text, num };
         g.guessesLeft = num === -1 ? 99 : num + 1;
@@ -16367,15 +17580,22 @@ export class ShifraRoom {
 
   validate() {
     const g = this.g;
-    const R = g.players.filter(p => p.team === "red");
-    const B = g.players.filter(p => p.team === "blue");
-    if (!R.some(p => p.spymaster) || !B.some(p => p.spymaster)) return "كل فريق يحتاج قائدًا.";
+    /* الحاضرون وحدهم يُحسبون (v262): قائدٌ غائب كان يمرّ فتبدأ المباراة وتقف
+       عند أول دور لفريقه، وفريقٌ مكتمل بالعدد وأحد لاعبَيه غائب لا يجد من يخمّن. */
+    for (const t of ["red", "blue"]) {
+      const sm = g.players.find(p => p.team === t && p.spymaster);
+      if (!sm) return "كل فريق يحتاج قائدًا.";
+      if (!sm.connected) return `قائد الفريق ${shifraAr(t)} منقطع — اختاروا قائدًا غيره.`;
+    }
+    const here = g.players.filter(p => p.connected);
+    const R = here.filter(p => p.team === "red");
+    const B = here.filter(p => p.team === "blue");
     const need = g.settings.informerMode ? 3 : 2;
     if (R.length < need || B.length < need)
       return g.settings.informerMode
         ? "نمط المخبر يحتاج ٣ لاعبين في كل فريق."
         : "كل فريق يحتاج لاعبَين على الأقل.";
-    if (g.players.some(p => !p.team)) return "فيه لاعب ما اختار فريقًا.";
+    if (here.some(p => !p.team)) return "فيه لاعب ما اختار فريقًا.";
     let total = 0; g.settings.cats.forEach(c => total += SHIFRA_POOLS[c].length);
     if (total < 25) return "الفئات المختارة ما فيها ٢٥ كلمة.";
     return null;
@@ -16492,6 +17712,37 @@ export class ShifraRoom {
     this.endTurn();
   }
 
+  /* سبب علوق المباراة إن كانت عالقة، وإلا نصّ فارغ. لا مؤقّت للتلميح، فقائدٌ
+     غائب والدور على فريقه = لا أحد يقدر يحرّكها غير المضيف. */
+  stuck() {
+    const g = this.g;
+    if (!g || g.phase !== "play") return "";
+    const team = g.players.filter(p => p.team === g.turn);
+    if (!g.hint) {
+      const sm = team.find(p => p.spymaster);
+      if (!sm || !sm.connected) return `قائد الفريق ${shifraAr(g.turn)} منقطع`;
+    } else if (!team.some(p => !p.spymaster && p.connected)) {
+      return `ما بقي من الفريق ${shifraAr(g.turn)} من يخمّن`;
+    }
+    return "";
+  }
+
+  /* رجوع للردهة بلا نتيجة: اللوح يُمسح (لا مفاتيح في الردهة)، والفرق
+     والقادة باقون، والكنس يشيل الغائبين بمهلة الردهة المعتادة. */
+  toLobby(note) {
+    const g = this.g;
+    this.clearTimer();
+    g.phase = "lobby";
+    g.board = []; g.assassinIdx = -1;
+    g.hint = null; g.guessesLeft = 0; g.turnEndsAt = 0;
+    g.invading = false; g.winner = null; g.endReason = "";
+    g.informers = { red: null, blue: null }; g.leak = { red: null, blue: null };
+    g.leaked = { red: 0, blue: 0 };
+    if (note) g.log.unshift(note);
+    seatSweep(g, this.sockets);
+    this.hostCheck();
+  }
+
   endTurn() {
     const g = this.g;
     this.clearTimer();
@@ -16522,6 +17773,15 @@ export class ShifraRoom {
     }, g.settings.timerLen * 1000 + 200);
   }
   clearTimer() { if (this.turnTimer) clearTimeout(this.turnTimer); this.turnTimer = null; this.g.turnEndsAt = 0; }
+  /* v264: بعد الاسترجاع — مؤقّت الدور مات مع الذاكرة وموعده محفوظ في turnEndsAt:
+     يُكمل ما بقي منه (وإن فات موعده ينتهي الدور حالًا) بدل دورٍ بلا نهاية. */
+  resumeTimer() {
+    const g = this.g;
+    if (!g || g.phase !== "play" || !g.hint || !g.turnEndsAt || this.turnTimer) return;
+    this.turnTimer = setTimeout(() => {
+      if (this.g && this.g.phase === "play" && this.g.hint) { this.endTurn(); this.broadcast(); }
+    }, Math.max(0, g.turnEndsAt - Date.now()) + 200);
+  }
 
   /* -------------------- البث (كل لاعب يشوف نسخته) -------------------- */
   viewFor(pid) {
@@ -16548,6 +17808,7 @@ export class ShifraRoom {
       hint: g.hint, guessesLeft: g.guessesLeft, turnEndsAt: g.turnEndsAt,
       tokens: g.tokens, invading: g.invading,
       log: g.log.slice(0, 6),
+      stuck: this.stuck(),
       winner: g.winner, endReason: g.endReason,
       me: me ? { id: me.id, name: me.name, team: me.team, spymaster: me.spymaster } : null
     };
@@ -16580,6 +17841,8 @@ export class ShifraRoom {
     for (const [pid, ws] of this.sockets) {
       try { ws.send(JSON.stringify(this.viewFor(pid))); } catch { this.sockets.delete(pid); }
     }
+    /* v264: كل ما يُبَثّ تغيّرٌ يستحق الحفظ — لا ننتظره */
+    this.persist();
   }
 }
 
@@ -16591,6 +17854,28 @@ export class ShifraRoom {
    الملف في أعلاه: كل ما يقرّر دورًا أو كرتًا يمرّ من randInt. */
 function shifraShuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = randInt(i + 1);[a[i], a[j]] = [a[j], a[i]]; } return a; }
 function shifraAr(t) { return t === "red" ? "الأحمر" : "الأزرق"; }
+
+/* v264: مقارنة التلميح بكلمات اللوحة بعد تطبيع الكتابة: التشكيل والتطويل، صور
+   الألف والهمزة (أ إ آ ٱ ؤ ئ ء)، ى/ي، ة/ه، و«ال» في أول الكلمة. كلمةً كلمة —
+   فتلميحٌ من كلمتين إحداهما على اللوحة مرفوضٌ كذلك، و«جبال» ليست «جبل». */
+const SHIFRA_MARKS = /[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED\u0640]/g;
+function shifraNorm(w) {
+  let s = String(w || '').toLowerCase().replace(SHIFRA_MARKS, '')
+    .replace(/[أإآٱ]/g, 'ا').replace(/ؤ/g, 'و').replace(/ئ/g, 'ي').replace(/ء/g, '')
+    .replace(/[ىی]/g, 'ي').replace(/ة/g, 'ه');
+  if (s.length > 3 && s.startsWith('ال')) s = s.slice(2);
+  return s;
+}
+/* أول كلمة من اللوحة يحويها التلميح، أو نصّ فارغ */
+function shifraClash(text, board) {
+  const words = String(text || '').replace(SHIFRA_MARKS, '').split(/[^\p{L}\p{N}]+/u).map(shifraNorm).filter(Boolean);
+  if (!words.length) return '';
+  for (const c of board || []) {
+    const n = c && shifraNorm(c.word);
+    if (n && words.includes(n)) return c.word;
+  }
+  return '';
+}
 
 /* ═════════════ عقد المقعد المشترك (لغرف نمط this.g) ═════════════
    يخدم المطاردة والشفرة وأي لعبة قادمة تحفظ حالتها في this.g.
@@ -16884,7 +18169,10 @@ export class HuntRoom {
       p.connected = true;
       p.quit = false;
       p.left = 0;
-      p.name = name || p.name;
+      /* v263: الرجوع لا يمنح اسم لاعبٍ آخر — قاعدة طاريك نفسها: الاسم الجديد
+         يُنظَّف ويُفرَّد عن بقية المقاعد كما في الدخول الجديد. كان
+         «p.name = name || p.name» يسمح لأي عائد أن يأخذ اسم غيره وسط اللعب. */
+      if (url.searchParams.get('name')) p.name = uniqueName({ players: this.g.players.filter(x => x !== p) }, name);
       if (cid) p.cid = cid;
       if (did) p.did = String(did).slice(0, 64);
     } else {
@@ -17083,7 +18371,8 @@ export class HuntRoom {
         /* الفخّ للسفّاح وحده ومرّة واحدة في المباراة. ويُزرع في المكان
            الذي تنتهي فيه ليلته هو — لا في مكان يختاره من بعيد. */
         let trap = null;
-        if (me.role === 'killer' && !me.trapUsed && typeof m.trap === 'string' && HUNT_TRAPS[m.trap]) trap = m.trap;
+        /* v264: نوع الفخّ خاصيةٌ في HUNT_TRAPS نفسها لا في أصلها (toString…) */
+        if (me.role === 'killer' && !me.trapUsed && typeof m.trap === 'string' && huntOwn(HUNT_TRAPS, m.trap)) trap = m.trap;
         me.trap = trap;
         if (trap) me.intent = false;      // زرع فخًّا الليلة = لا ينفّذ بيده
         me.submitted = true;
@@ -17182,7 +18471,7 @@ export class HuntRoom {
     for (const n of clean) adj[n] = [];
     const raw = (m.adj && typeof m.adj === 'object') ? m.adj : {};
     for (const a of clean) {
-      const list = Array.isArray(raw[a]) ? raw[a] : [];
+      const list = huntOwn(raw, a) && Array.isArray(raw[a]) ? raw[a] : [];
       for (const b of list) {
         const s = safeKey(cleanText(b, 24));
         if (!s || s === a || !Object.prototype.hasOwnProperty.call(adj, s)) continue;
@@ -17231,25 +18520,29 @@ export class HuntRoom {
 
   moveOpts(p) {
     const g = this.g;
-    if (!p.dist || !g.adj[p.dist]) return p.dist ? [p.dist] : [];
+    if (!p.dist || !huntOwn(g.adj, p.dist)) return p.dist ? [p.dist] : [];
     return p.stuck ? [p.dist] : [p.dist].concat(g.adj[p.dist]);
   }
 
   /* -------------------- حلّ الليلة (نفس منطق نسخة الجهاز الواحد) -------- */
   resolveNight() {
     const g = this.g;
-    const occ = {};
+    /* v264: من في كل مكان — Map لا كائن عادي. حيٌّ اسمه toString (أو valueOf…)
+       في خريطةٍ يرسلها المضيف كان يلقى occ.toString دالّةَ الأصل، فيرمي ‎.push
+       استثناءً في كل حلّ — ولا «ثبّت» ولا «تجاوز» يُنهي الليلة بعدها أبدًا. */
+    const occ = new Map();
     for (const p of g.players) {
       if (!p.alive) continue;
       const want = p.move;
       if (p.stuck) p.stuck = false;                     // محبوس: يبقى ثم يتحرّر
       else if (want && this.moveOpts(p).includes(want)) p.dist = want;
-      (occ[p.dist] = occ[p.dist] || []).push(p.id);
+      if (!occ.has(p.dist)) occ.set(p.dist, []);
+      occ.get(p.dist).push(p.id);
     }
 
     const byHand = [];
-    for (const d in occ) {
-      const here = occ[d].map(i => g.players.find(p => p.id === i));
+    for (const ids of occ.values()) {
+      const here = ids.map(i => g.players.find(p => p.id === i));
       const killers = here.filter(p => p.role === 'killer' && p.intent);
       const prey = here.filter(p => p.role !== 'killer');
       if (killers.length > 0 && prey.length === 1) byHand.push(prey[0].id);
@@ -17257,8 +18550,8 @@ export class HuntRoom {
 
     const byTrap = [], watched = {}, stuck = [];
     for (const t of g.activeTraps) {
-      if (!t || !HUNT_TRAPS[t.type] || !g.adj[t.dist]) continue;
-      const here = (occ[t.dist] || []).map(i => g.players.find(p => p.id === i))
+      if (!t || !huntOwn(HUNT_TRAPS, t.type) || !huntOwn(g.adj, t.dist)) continue;
+      const here = (occ.get(t.dist) || []).map(i => g.players.find(p => p.id === i))
         .filter(p => p && !byHand.includes(p.id));
       const prey = here.filter(p => p.role !== 'killer');
       if (t.type === 'kill') {
@@ -17285,7 +18578,7 @@ export class HuntRoom {
 
     // التقرير الخاص بكل لاعب — لا يخرج منه شيء للحالة العامة
     for (const p of g.players) {
-      const mates = (occ[p.dist] || []).filter(i => i !== p.id)
+      const mates = (occ.get(p.dist) || []).filter(i => i !== p.id)
         .map(i => g.players.find(x => x.id === i)).filter(Boolean);
       p.report = {
         dist: p.dist,
@@ -17302,7 +18595,7 @@ export class HuntRoom {
       return p ? { name: p.name, district: p.dist, byTrap: byTrap.includes(id) } : null;
     }).filter(Boolean);
     const busy = [];
-    for (const d in occ) if (occ[d].length >= 2) busy.push(d);
+    for (const [d, ids] of occ) if (ids.length >= 2) busy.push(d);
 
     const facts = {
       round: g.round,
@@ -17476,6 +18769,9 @@ export class HuntRoom {
 }
 
 function huntAr(n) { return String(n).replace(/\d/g, d => '٠١٢٣٤٥٦٧٨٩'[d]); }
+/* v264: أسماء الأماكن وأنواع الفخاخ مفاتيح في كائنات عادية — تُقبل خاصيةً
+   للكائن نفسه لا لأصله (toString/constructor/valueOf…). */
+function huntOwn(o, k) { return !!o && typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k); }
 
 
 /* ══════════════════════ سباق المربعات أونلاين (SquaresRoom) ══════════════════════
@@ -17495,6 +18791,12 @@ const SQ_COLORS = ['red', 'green', 'blue', 'yellow', 'black', 'white', 'orange',
 const SQ_COLOR_AR = { red: 'الأحمر', green: 'الأخضر', blue: 'الأزرق', yellow: 'الأصفر', black: 'الأسود',
                       white: 'الأبيض', orange: 'البرتقالي', purple: 'البنفسجي', teal: 'التركواز' };
 const SQ_RESULT_FALLBACK_MS = 75000;   // بعدها يُقبل تقرير أي لاعب لا المضيف وحده
+/* v263: أقصر جولةٍ تُسجَّل في الحساب. أقصر سباقٍ حقيقي في محاكاة الصفحة نفسها
+   (٢٠٠ بذرة لكل وضع وخريطة) ١٣ ث في «السقوط الحر» و٢٠ ث في «معركة السكين»،
+   فوقها عدّ ٣٫٢ ث — أي ١٦ ث من «ابدأ». النصف هامشٌ لساعة جهاز المضيف. */
+const SQ_MIN_ROUND_MS = 8000;
+/* v264: ما يُقال لصاحب مقعدٍ رجع لغرفةٍ أُعيد تشغيلها (المربعات والحلبة بلا تخزين) */
+const ROOM_RESTART_MSG = 'تحدّث الخادم — انتهت الجولة، ابدؤوا من جديد.';
 
 export class SquaresRoom {
   constructor(state, env) {
@@ -17517,12 +18819,23 @@ export class SquaresRoom {
     return r.n <= MSG_PER_SEC;
   }
 
-  /* الفوز لمن كان مربعه هو الفائز. من بلا حساب يُتجاوَز، وكل حساب مرّة. */
+  /* الفوز لمن كان مربعه هو الفائز. من بلا حساب يُتجاوَز، وكل حساب مرّة.
+     v263: الخادم يصدّق نتيجة المضيف كما هي — فكان ٤٠ «فوزًا» في ثلث ثانية
+     تُسجَّل (ابدأ ثم نتيجة فورًا). الآن نتيجةٌ واحدة لكل جولة، ولا تسجيل
+     لجولةٍ أقصر من أقصر سباقٍ ممكن (SQ_MIN_ROUND_MS) — الجولة نفسها تمضي
+     كما هي، الحساب وحده لا يُمسّ. ولا خسارة على من لم يكن في الجولة:
+     من غادر بعد النتيجة كان لونه باقيًا فتُسجَّل عليه كل جولةٍ بعدها. */
   async recordRound() {
     if (!this.env || !this.env.DB || !this.g || !this.g.result) return;
+    const g = this.g;
+    if (g.recorded === g.round) return;
+    if (Date.now() - (g.raceAt || 0) < SQ_MIN_ROUND_MS) return;
+    g.recorded = g.round;
+    const racers = new Set(g.racers || []);
     const done = new Set();
     for (const p of this.g.players) {
       if (!p || !p.did || !p.color || done.has(p.did)) continue;
+      if (!racers.has(p.id)) continue;
       done.add(p.did);
       try { await recordResult(this.env, p.did, p.color === this.g.result.winner, this.GAME); } catch {}
     }
@@ -17583,6 +18896,11 @@ export class SquaresRoom {
     const brandNew = !this.g;
     if (!this.g) this.init(code);
     if (brandNew) this.g.pub = wantsPublic;
+    /* v264: غرفةٌ أُعيد تشغيلها (نشرة) — لا تخزين هنا، فأوّل صاحب مقعدٍ يرجع يجد
+       ذاكرةً فاضية ويُفتح له مقعد جديد في ردهة جديدة. كان ذلك يحدث بصمت: السباق
+       يختفي والنقاط تصفر ولا أحد يعرف لماذا. الغرفة تتذكّر أنها وُلدت من جديد،
+       وكل صاحب مقعدٍ قديم يرجع إليها يُقال له ذلك (بعد الحالة — انظر آخر fetch). */
+    if (brandNew && pid && tok && url.searchParams.get('new') !== '1') this.g.reborn = true;
 
     seatSweep(this.g, this.sockets);
 
@@ -17593,12 +18911,16 @@ export class SquaresRoom {
     }
 
     let p = seatFind(this.g, pid, tok, cid);
+    const staleSeat = !p && !!(pid && tok) && !!this.g.reborn;
     if (p) {
       pid = p.id;
       p.connected = true;
       p.quit = false;
       p.left = 0;
-      p.name = name || p.name;
+      /* v263: الرجوع لا يمنح اسم لاعبٍ آخر — قاعدة طاريك نفسها: الاسم الجديد
+         يُنظَّف ويُفرَّد عن بقية المقاعد كما في الدخول الجديد. كان
+         «p.name = name || p.name» يسمح لأي عائد أن يأخذ اسم غيره وسط اللعب. */
+      if (url.searchParams.get('name')) p.name = uniqueName({ players: this.g.players.filter(x => x !== p) }, name);
       if (cid) p.cid = cid;
       if (did) p.did = String(did).slice(0, 64);
     } else {
@@ -17671,6 +18993,8 @@ export class SquaresRoom {
     ws.addEventListener('error', bye);
 
     this.broadcast();
+    /* v264: بعد الحالة لا قبلها — صفحة الحلبة تعدّ أي خطأ يسبق أول حالة رفضًا نهائيًا */
+    if (staleSeat) { try { ws.send(JSON.stringify({ t: 'err', code: 'restarted', m: ROOM_RESTART_MSG })); } catch {} }
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -17740,6 +19064,7 @@ export class SquaresRoom {
         if (here.length < 2) throw new Error('تحتاجون لاعبَين على الأقل.');
         /* من لم يختر مربعًا يُعطى واحدًا متاحًا: الجولة ما تنتظر أحدًا */
         for (const p of here) if (!p.color) p.color = this.freeColor();
+        g.racers = here.map(p => p.id);         // v263: من في الجولة فعلًا (للتسجيل)
         g.round++;
         g.seed = randInt(0x7fffffff) + 1;       // عشوائية الخادم، وبذرة واحدة للجميع
         g.raceAt = Date.now();
@@ -18420,6 +19745,42 @@ function tariBuildBank(add, off) {
   return bank;
 }
 
+/* v263: نصّ مطالبةٍ للعرض العام (/tari/bank ورسالة welcome). «من ذاكرتك»
+   كانت تُرسَل بنصّها الأصلي ومعها المغلوطتان، فيطابق أي عميلٍ خيارات الجولة
+   بالبنك ويعرف الصحيحة بلا ما يسمع شيئًا. الآن تُعرض الكلمات المشتركة بين
+   الجمل الثلاث وحدها وما يختلف «…» — دالّةٌ في مجموع الثلاث لا في أيّها
+   الأصل (تُرتَّب قبل الحساب)، فلا تفرّق بينها. شاشة «الأسئلة» تعرض النصّ
+   رقاقةً لتطفئ السؤال أو تشغّله فقط، والمعرّف كما هو. */
+function tariPublicText(p) {
+  if (!p || !Array.isArray(p.alts) || !p.alts.length) return p ? p.text : '';
+  const seqs = [p.text, ...p.alts].map(s => String(s || '')).sort().map(s => s.split(/\s+/).filter(Boolean));
+  const lcs = (a, b) => {                      // أزواج [i, j] لأطول تتابعٍ مشترك
+    const T = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+    for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--)
+      T[i][j] = a[i] === b[j] ? T[i + 1][j + 1] + 1 : Math.max(T[i + 1][j], T[i][j + 1]);
+    const out = [];
+    for (let i = 0, j = 0; i < a.length && j < b.length;) {
+      if (a[i] === b[j]) { out.push([i, j]); i++; j++; } else if (T[i + 1][j] >= T[i][j + 1]) i++; else j++;
+    }
+    return out;
+  };
+  /* مواضع كل كلمةٍ مشتركة في كل جملة: نطوي الجمل واحدةً بعد واحدة */
+  let common = seqs[0].map((w, i) => ({ w, at: [i] }));
+  for (let k = 1; k < seqs.length; k++) {
+    common = lcs(common.map(c => c.w), seqs[k]).map(([ci, j]) => ({ w: common[ci].w, at: common[ci].at.concat(j) }));
+  }
+  const out = [];
+  let prev = seqs.map(() => -1);
+  const gap = (next) => next.some((n, k) => n - prev[k] > 1);
+  for (const c of common) {
+    if (gap(c.at)) out.push('…');
+    out.push(c.w);
+    prev = c.at;
+  }
+  if (gap(seqs.map(s => s.length))) out.push('…');
+  return out.join(' ');
+}
+
 function tariShuffle(arr) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) { const j = randInt(i + 1); [a[i], a[j]] = [a[j], a[i]]; }
@@ -18561,7 +19922,7 @@ export class TariRoom {
       const newId = (validPlayerId(askedId) && !this.room.players.some(p => p.id === askedId)) ? askedId : oldId;
       if (newId !== oldId) {
         player.id = newId;
-        for (const bag of ['subs', 'votes', 'picks', 'marks', 'readys', 'reported']) {
+        for (const bag of ['subs', 'votes', 'picks', 'marks', 'readys', 'reported', 'aliases', 'voteAs']) {
           if (this.room[bag] && oldId in this.room[bag]) {
             this.room[bag][newId] = this.room[bag][oldId];
             delete this.room[bag][oldId];
@@ -18669,7 +20030,7 @@ export class TariRoom {
     await this.persist();
     this.sendPrivate(pid, {
       type: 'welcome', playerId: pid, roomCode: this.room.code, seatToken: player.seatToken,
-      kinds: this.kindsBrief(), bank: TARI_BANK.map((p, i) => ({ id: p.id || (p.kind + ':' + i), kind: p.kind, text: p.text })),
+      kinds: this.kindsBrief(), bank: TARI_BANK.map((p, i) => ({ id: p.id || (p.kind + ':' + i), kind: p.kind, text: tariPublicText(p) })),
     });
     this.broadcastState();
     /* غرفةٌ سكنت وهي فارغة تُستأنف بأوّل عائد: كل الأطوار تنتظر اللاعبين
@@ -18920,7 +20281,7 @@ export class TariRoom {
     if (prompt.sound) r.prompt.sound = prompt.sound;
     if (prompt.flat) r.prompt.flat = true;
     r.starId = (k.recorders === 'chain') ? null : this.nextStar();
-    r.subs = {}; r.votes = {}; r.result = null; r.order = []; r.turn = 0;
+    r.subs = {}; r.votes = {}; r.result = null; r.order = []; r.turn = 0; r.aliases = null; r.voteAs = {};
     r.picks = {}; r.quiz = null; r.peeked = false;
     /* الجملة الصحيحة تُخلط مع بديليها هنا مرة واحدة، ويُحفظ موضعها.
        الخلط في الخادم لا في الصفحة: لو خلطه العميل لعرف كلُّ جهازٍ
@@ -19074,8 +20435,24 @@ export class TariRoom {
     r.picks = {};
     r.marks = {};
     r.endsAt = 0;
+    /* v263: في الجولة المجهولة كان معرّف العنصر = معرّف كاتبه، وقائمة اللاعبين
+       المبثوثة تربطه باسمه — فالمجهول معروف لأي عميل. الآن لكل عنصرٍ معرّف
+       عشوائي جديد كل جولة يُترجَم هنا (realOf) ولا يغادر الخادم إلا مستعارًا. */
+    const kv = this.kind();
+    r.aliases = (kv && kv.anon) ? Object.fromEntries(r.order.map(id => [id, crypto.randomUUID()])) : null;
+    r.voteAs = {};
     await this.persist();
     this.broadcastState();
+  }
+
+  /* v263: المستعار ↔ الحقيقي. masked = تصويتٌ جارٍ في نمط مجهول: وقتها لا يُعرض
+     إلا المستعار، ولا يُسلَّم مقطعٌ بمعرّفٍ حقيقي. الكشف يعرض الأسماء أصلًا. */
+  masked() { const k = this.kind(); return !!(k && k.anon) && this.room.phase === 'vote' && !!this.room.aliases; }
+  aliasOf(id) { const a = this.room.aliases; return (a && a[id]) || id; }
+  realOf(id) {
+    const a = this.room.aliases;
+    if (a) for (const k of Object.keys(a)) if (a[k] === id) return k;
+    return id;
   }
 
   /* ── درجات من الأجهزة ──
@@ -19097,7 +20474,8 @@ export class TariRoom {
       /* رقمًا حقيقيًا لا شيئًا يتحوّل إلى رقم: JSON يحوّل NaN إلى null،
          و Number(null) صفر، والقصّ يجعله ١ — فيُظلم لاعب بسبب جهازٍ
          أرسل قيمة فاسدة. نتجاهلها ويكملها الوسيط من بقية الأجهزة. */
-      const v = raw[id];
+      const al = this.aliasOf(id);        // v263: الصفحة ترسل بالمستعار
+      const v = (al !== id && typeof raw[al] === 'number') ? raw[al] : raw[id];
       if (typeof v !== 'number' || !Number.isFinite(v)) continue;
       clean[id] = Math.max(1, Math.min(10, Math.round(v * 10) / 10));
     }
@@ -19174,7 +20552,7 @@ export class TariRoom {
       scored: true, marks: med, top, gains,
       items: r.order.map(id => {
         const p = this.findPlayer(id);
-        return { id, name: (p && p.name) || '', mark: med[id], gain: gains[id] || 0, audio: true };
+        return { id, vid: r.aliases ? this.aliasOf(id) : undefined, name: (p && p.name) || '', mark: med[id], gain: gains[id] || 0, audio: true };
       }),
       soundName: r.prompt ? String(r.prompt.text || '') : '',
     };
@@ -19279,6 +20657,7 @@ export class TariRoom {
     // 4) لقطة العرض — نصوص وأسماء فقط، ولا بايت صوت واحد فيها
     const items = r.order.map(id => ({
       id, name: this.nameOf(id),
+      vid: r.aliases ? this.aliasOf(id) : undefined,   // v263: معرّف العنصر وقت التصويت (كاش الصفحة)
       audio: k.inputType === 'audio' && this.clips.has(id),
       text: r.subs[id] && typeof r.subs[id].text === 'string' ? r.subs[id].text : null,
       choice: r.subs[id] && typeof r.subs[id].choice === 'number' ? r.subs[id].choice : null,
@@ -19415,9 +20794,13 @@ export class TariRoom {
              لاعبٌ يرسل vote على مقطع النجم فيُحسب صوتًا، وallVoted تُنهي
              الطور قبل أن يخمّن أحد. */
           { const kv = this.kind(); if (kv && kv.vote === 'quiz') return; }
-          const id = String(msg.id || '');
+          const sent = String(msg.id || '');
+          const id = this.realOf(sent);
           if (!r.order.includes(id) || id === playerId) return;
           r.votes[playerId] = id;
+          /* يُعاد إليه بالصيغة التي أرسلها — لو أعدناه مستعارًا لصوتٍ أُرسل
+             بمعرّفٍ حقيقي لكشفنا له المستعار */
+          (r.voteAs || (r.voteAs = {}))[playerId] = sent;
           await this.persist(); this.broadcastState();
           if (this.allVoted()) await this.endVote();
           return;
@@ -19568,18 +20951,21 @@ export class TariRoom {
      الأصل ما عاد يقلّد تشويهًا. */
   onGetClip(playerId, msg) {
     const r = this.room;
-    const id = String((msg && msg.id) || '');
+    const sent = String((msg && msg.id) || '');
+    const id = this.realOf(sent);
     if (!this.findPlayer(playerId)) return;
     let ok = false;
     if (r.phase === 'collect' && this.isChain()) {
       ok = (r.order[r.turn] === playerId) && !!r.chainSrc && id === r.chainSrc;
     } else if (r.phase === 'vote' || r.phase === 'reveal') {
-      ok = r.order.includes(id);
+      /* v263: وقت التصويت المجهول بالمستعار وحده — بالحقيقي يطلب الغشّاش مقطع
+         كل لاعبٍ باسمه ويطابقه بالعناصر. والردّ يحمل المعرّف كما طُلب. */
+      ok = r.order.includes(id) && !(this.masked() && id === sent);
     }
-    if (!ok) { this.sendPrivate(playerId, { type: 'clipMiss', id }); return; }
+    if (!ok) { this.sendPrivate(playerId, { type: 'clipMiss', id: sent }); return; }
     const c = this.clips.get(id);
-    if (!c) { this.sendPrivate(playerId, { type: 'clipMiss', id }); return; }
-    this.sendPrivate(playerId, { type: 'clip', id, mime: c.mime, b64: c.b64, ms: c.ms });
+    if (!c) { this.sendPrivate(playerId, { type: 'clipMiss', id: sent }); return; }
+    this.sendPrivate(playerId, { type: 'clip', id: sent, mime: c.mime, b64: c.b64, ms: c.ms });
   }
 
   /* ── بلاغ على مقطع صوتي ──
@@ -19598,8 +20984,11 @@ export class TariRoom {
     const me = this.findPlayer(playerId);
     if (!me) return;
 
-    const target = String((msg && msg.id) || '');
-    if (!validPlayerId(target)) return;
+    const sent = String((msg && msg.id) || '');
+    if (!validPlayerId(sent)) return;
+    /* v263: بالمستعار أو بالحقيقي؛ والإخفاق يُردّ بما أُرسل لا بالحقيقي
+       (reportFail بالحقيقي كان يكشف صاحب العنصر المجهول) */
+    const target = this.realOf(sent);
     if (target === playerId) return;                          // لا بلاغ على النفس
     if (!r.order.includes(target)) return;                    // ما هو من مقاطع هذي الجولة
     const clip = this.clips.get(target);
@@ -19626,7 +21015,7 @@ export class TariRoom {
     const fail = () => {
       if (!this._reporting.has(lock)) return;   // نجح ثم تعثّر تنظيفٌ بعده
       this._reporting.delete(lock);
-      this.sendPrivate(playerId, { type: 'reportFail', id: target });
+      this.sendPrivate(playerId, { type: 'reportFail', id: sent });
     };
 
     const tp = this.findPlayer(target);
@@ -19642,6 +21031,19 @@ export class TariRoom {
       ).bind(now - 60 * 60 * 1000).first();
       if (hour && (hour.n | 0) >= MOD_REPORTS_PER_HOUR) return fail();  // السقف العام
 
+      /* v264: لا يُحفظ معرّف حسابٍ ما عاد موجودًا. الغرفة تحفظ did من لحظة
+         الدخول، وصاحبه قد يحذف حسابه وسط الجولة — ومحو الحساب سبق البلاغ فلا
+         يمسحه، فكان الصفّ يحمل معرّف حسابٍ محذوف. نسأل players لحظة البلاغ؛
+         وما لا نقدر نتحقّق منه (جدول غائب، عطل) لا يُحفظ معرّفه. */
+      const liveDid = async (d) => {
+        if (!d) return null;
+        try {
+          const row = await this.env.DB.prepare('SELECT 1 AS x FROM players WHERE device_id = ?1').bind(String(d)).first();
+          return row ? String(d) : null;
+        } catch { return null; }
+      };
+      const targetDid = await liveDid(tp && tp.did), byDid = await liveDid(me.did);
+
       /* الفهرس الفريد يمنع تكرار المُبلِّغ نفسه على المقطع نفسه، فتكرار
          الضغط لا يضاعف الصفوف ولا يضاعف الإشعارات. */
       const res = await this.env.DB.prepare(
@@ -19651,8 +21053,8 @@ export class TariRoom {
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)`
       ).bind(
         r.code, 'tari', r.round | 0,
-        target, (tp && tp.name) || '', (tp && tp.did) || null,
-        playerId, me.name || '', me.did || null,
+        target, (tp && tp.name) || '', targetDid,
+        playerId, me.name || '', byDid,
         r.kind || '', r.prompt ? String(r.prompt.text || '').slice(0, 200) : '',
         clip.mime || 'audio/webm', clip.ms | 0, clip.b64, now
       ).run();
@@ -19736,10 +21138,27 @@ export class TariRoom {
     r.players = r.players.filter(p => p.id !== targetId);
     delete r.subs[targetId];
     delete r.votes[targetId];
+    if (r.voteAs) delete r.voteAs[targetId];
     if (r.picks) delete r.picks[targetId];
     if (r.tones) delete r.tones[targetId];
+    /* v263: السلسلة — الدور يُحسب بفهرسٍ في r.order، فحذف المطرود بلا تعديل
+       r.turn كان يزيح الدور: مطرودٌ سجّل قبل صاحب الدور يطيّر دوره (ويُردّ
+       مقطعه «مو دورك»)، والطرد عند آخر الحلقة يخرج بالفهرس عن السلسلة.
+       قبله ⇒ الفهرس ينقص واحدًا (نفس صاحب الدور). هو صاحب الدور ⇒ الفهرس
+       نفسه صار التالي، وتخطّي المنقطع ونهاية السلسلة يتكفّل بهما
+       maybeAdvanceOnDisconnect بعد الحفظ. والمصدر يُعاد حسابه لأن مقطع
+       المطرود يُمحى معه. */
+    const ki = r.order.indexOf(targetId);
     r.order = r.order.filter(id => id !== targetId);
     this.clips.delete(targetId);        // صوته يُمحى معه فورًا
+    if (ki >= 0 && r.phase === 'collect' && this.isChain()) {
+      if (ki < r.turn) r.turn--;
+      r.chainSrc = null;
+      for (let i = Math.min(r.turn, r.order.length) - 1; i >= 0; i--) {
+        const prev = r.order[i];
+        if (r.subs[prev] && r.subs[prev].has && this.clips.has(prev)) { r.chainSrc = prev; break; }
+      }
+    }
     if (r.starId === targetId) r.starId = null;
     this.migrateHostIfNeeded();
     await this.persist();
@@ -19813,7 +21232,7 @@ export class TariRoom {
     const showNames = !!(k && !k.anon) || r.phase === 'reveal';
     const items = (r.phase === 'vote' || r.phase === 'reveal')
       ? r.order.map((id, i) => ({
-          id,
+          id: this.masked() ? this.aliasOf(id) : id,      // v263: مستعار وقت التصويت المجهول
           label: showNames ? this.nameOf(id) : `مشاركة ${i + 1}`,
           audio: !!(k && k.inputType === 'audio'),
           text: (k && k.inputType !== 'audio' && r.subs[id]) ? (r.subs[id].text || null) : null,
@@ -19875,7 +21294,7 @@ export class TariRoom {
         tone: myTone,
         submitted: !!mine, myText: (mine && mine.text) || null,
         myChoice: (mine && typeof mine.choice === 'number') ? mine.choice : null,
-        myVote: r.votes[playerId] || null,
+        myVote: r.votes[playerId] ? ((r.voteAs && r.voteAs[playerId]) || r.votes[playerId]) : null,
         canVote: r.phase === 'vote' && (isQuiz ? playerId !== r.starId
                                                : r.order.some(id => id !== playerId)),
       },
@@ -19927,6 +21346,11 @@ const RVB_MAX_PLAYERS = 4;
 const RVB_COLORS = ['red', 'blue', 'green', 'yellow'];
 const RVB_COLOR_AR = { red: 'الأحمر', blue: 'الأزرق', green: 'الأخضر', yellow: 'الأصفر' };
 const RVB_RESULT_FALLBACK_MS = 150000;   // بعدها يُقبل تقرير أي لاعب لا المضيف وحده
+/* v263: أقصر معركةٍ تُسجَّل في الحساب. القلوب عشرة وأقوى سلاح يُسقط ستة، فلا
+   قتل بلا سلاحين، والثاني لا يظهر قبل ٤٫٢ ث من القتال — مع العدّ (٣ ث) لا
+   تنتهي معركةٌ قبل ~٨ ث. وأقصرها في محاكاة الصفحة (٢٠٠ معركة لكل عدد)
+   ١٠٫٥ ث قتالًا بكرتين. ستّ ثوانٍ تحت الحدّ النظري كله. */
+const RVB_MIN_ROUND_MS = 6000;
 const RVB_SNAP_PER_SEC = 32;             // المضيف يبثّ ٢٠ لقطة/ث؛ هامش للتذبذب
 const RVB_IN_PER_SEC = 8;                // دفعة كل ٠.٦ ث تقريبًا لكل لاعب
 const RVB_SNAP_MAX = 16000;              // حجم اللقطة بالمحارف؛ أكبر منه يُهمل
@@ -19954,9 +21378,14 @@ export class RedVsBlueRoom {
     return r.n <= (limit || MSG_PER_SEC);
   }
 
-  /* الفوز لمن كانت كرته هي الفائزة. من بلا حساب يُتجاوَز، وكل حساب مرّة. */
+  /* الفوز لمن كانت كرته هي الفائزة. من بلا حساب يُتجاوَز، وكل حساب مرّة.
+     v263: نتيجةٌ واحدة لكل جولة، ولا تسجيل لمعركةٍ أقصر من الممكن
+     (RVB_MIN_ROUND_MS) — كان المضيف يسجّل ٤٠ فوزًا في ثلث ثانية. */
   async recordRound() {
     if (!this.env || !this.env.DB || !this.g || !this.g.result) return;
+    if (this.g.recorded === this.g.round) return;
+    if (Date.now() - (this.g.startAt || 0) < RVB_MIN_ROUND_MS) return;
+    this.g.recorded = this.g.round;
     const done = new Set();
     for (const p of this.g.roster) {
       const q = this.g.players.find(x => x.id === p.id);
@@ -20021,6 +21450,11 @@ export class RedVsBlueRoom {
     const brandNew = !this.g;
     if (!this.g) this.init(code);
     if (brandNew) this.g.pub = wantsPublic;
+    /* v264: غرفةٌ أُعيد تشغيلها (نشرة) — لا تخزين هنا، فأوّل صاحب مقعدٍ يرجع يجد
+       ذاكرةً فاضية ويُفتح له مقعد جديد في ردهة جديدة. كان ذلك يحدث بصمت: السباق
+       يختفي والنقاط تصفر ولا أحد يعرف لماذا. الغرفة تتذكّر أنها وُلدت من جديد،
+       وكل صاحب مقعدٍ قديم يرجع إليها يُقال له ذلك (بعد الحالة — انظر آخر fetch). */
+    if (brandNew && pid && tok && url.searchParams.get('new') !== '1') this.g.reborn = true;
 
     seatSweep(this.g, this.sockets);
 
@@ -20031,12 +21465,16 @@ export class RedVsBlueRoom {
     }
 
     let p = seatFind(this.g, pid, tok, cid);
+    const staleSeat = !p && !!(pid && tok) && !!this.g.reborn;
     if (p) {
       pid = p.id;
       p.connected = true;
       p.quit = false;
       p.left = 0;
-      p.name = name || p.name;
+      /* v263: الرجوع لا يمنح اسم لاعبٍ آخر — قاعدة طاريك نفسها: الاسم الجديد
+         يُنظَّف ويُفرَّد عن بقية المقاعد كما في الدخول الجديد. كان
+         «p.name = name || p.name» يسمح لأي عائد أن يأخذ اسم غيره وسط اللعب. */
+      if (url.searchParams.get('name')) p.name = uniqueName({ players: this.g.players.filter(x => x !== p) }, name);
       if (cid) p.cid = cid;
       if (did) p.did = String(did).slice(0, 64);
     } else {
@@ -20136,6 +21574,8 @@ export class RedVsBlueRoom {
     ws.addEventListener('error', bye);
 
     this.broadcast();
+    /* v264: بعد الحالة لا قبلها — الصفحة تعدّ أي خطأ يسبق أول حالة رفضًا نهائيًا */
+    if (staleSeat) { try { ws.send(JSON.stringify({ t: 'err', code: 'restarted', m: ROOM_RESTART_MSG })); } catch {} }
     /* العائد أثناء المعركة يستلم آخر لقطة فورًا بدل انتظار التالية */
     if (this.g.phase === 'play' && this.g.last && pid !== this.g.hostId) {
       try { ws.send(this.g.last); } catch {}
