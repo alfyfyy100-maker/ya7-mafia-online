@@ -49,6 +49,14 @@ function withCors(resp, origin) {
 // ══════════════════════ حدود وتنقية عامة ══════════════════════
 const MAX_PLAYERS = 20;
 
+/* v266: نصف زوجٍ بديل (lone surrogate). القصّ بـslice يعدّ وحدات UTF-16، فاسمٌ من ١٣ محرفًا
+   وبعده إيموجي يُقصّ في منتصف الإيموجي ويبقى نصفه. الاسم يُخزَّن ويُبثّ بلا مشكلة، لكن
+   encodeURIComponent ترمي URIError على نصف الزوج — فصاحب هذا الاسم كان يأخذ 500 عند فتح
+   دردشة غرفته (الاسم يمرّ في ترويسة) في كل الغرف. يُنزع بعد كل قصّ، ومن أي نص داخل. */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+function wellFormed(s) { return String(s == null ? '' : s).replace(LONE_SURROGATE, ''); }
+const encU = (x) => encodeURIComponent(wellFormed(x));
+
 // تنقية الاسم في الخادم: يمنع الحقن في الواجهة ويحدّ الطول
 function cleanName(raw) {
   const s = String(raw == null ? '' : raw)
@@ -58,7 +66,8 @@ function cleanName(raw) {
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 14);
+    .slice(0, 14)
+    .replace(LONE_SURROGATE, '');   // v266
   return s || 'لاعب';
 }
 
@@ -87,7 +96,8 @@ function cleanText(raw, max = 60) {
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, max);
+    .slice(0, max)
+    .replace(LONE_SURROGATE, '');   // v266
 }
 
 // مقارنة توكن بزمن ثابت — تمنع استنتاج التوكن عبر قياس زمن الرد
@@ -508,6 +518,65 @@ function wsOversize(raw, max) {
   const n = typeof raw === 'string' ? raw.length
           : (raw && typeof raw.byteLength === 'number') ? raw.byteLength : 0;
   return n > (max || WS_MSG_MAX);
+}
+
+/* ── ردّ مصافحة الإغلاق (v266) ──
+   تاريخ التوافق في wrangler.toml (2025-05-01) أقدم من web_socket_auto_reply_to_close
+   (يبدأ 2026-04-07)، فالرَّنتايم لا يردّ بنفسه على إطار Close الذي يرسله المتصفح: ما لم
+   نُغلق نحن من جهتنا تبقى المصافحة نصف مكتملة. مقاسٌ على workerd نفسه وبكروم حقيقي في
+   الغرف الستّ عشرة كلها: الصفحة تنادي ws.close() فلا يصلها حدث close إلا بعد ١٠ ثوانٍ
+   (غرفة سبات ساكنة — حين ينام الكائن) أو ٦٠ ثانية (غرفة نشطة، وكل غرف accept())، ويصل
+   1006 «غير نظيف» فتراه الصفحة انقطاعًا لا خروجًا. وفي غرف accept() يبقى الكائن صاحيًا
+   ومحاسَبًا على تلك الدقيقة بعد خروج آخر لاعب. المحاكي في الاختبارات يُكمل المصافحة
+   فورًا، فما كان شيء من هذا يظهر فيه.
+   الردّ بعد معالج الغرفة لا قبله (finally): المعالج يقرأ مرفق المقبس ويقارنه بمقبس
+   المقعد الحالي، فلا نمسّ المقبس حتى يفرغ. والرموز التي لا يجوز إرسالها (1005/1006/…)
+   تُردّ 1000. مقبسٌ أغلقناه نحن أولًا (طرد، استلام مقعد) إغلاقه الثاني يرمي ويُبتلع. */
+function wsCloseReply(ws, code) {
+  const c = Number(code);
+  try { ws.close((c === 1000 || (c >= 3000 && c <= 4999)) ? c : 1000); } catch {}
+}
+/* لغرف accept() (بلا سبات): القبول + ردّ المصافحة عند إغلاقٍ يبدؤه العميل */
+function acceptWs(ws) {
+  ws.accept();
+  try { ws.addEventListener('close', (ev) => wsCloseReply(ws, ev && ev.code)); } catch {}
+}
+
+/* ── JSON من العميل بلا مفاتيح «تحويل» (v266) ──
+   جسمٌ فيه {"toString":1} أو {"valueOf":1} في حقلٍ نحوّله نصًّا أو رقمًا (String(x)،
+   Number(x)، x + '') يرمي «Cannot convert object to primitive value»: 500 في ٦٧ زوجًا
+   من (مسار، حقل)، وفي بعض الغرف يصل نصّ الخطأ الداخلي للعميل. المفتاحان يُسقطان عند
+   التحليل نفسه فيصير الحقل كائنًا عاديًّا يتحوّل «[object Object]» ويُرفض بفحصه المعتاد. */
+function safeJsonParse(text) {
+  return JSON.parse(text, (k, v) => (k === 'toString' || k === 'valueOf') ? undefined : v);
+}
+/* نصّ الخطأ الذي يُرسَل للعميل: رسائلنا العربية (throw new Error('…')) تمرّ، وأخطاء
+   المحرّك (TypeError وأخواتها) تُبدَّل بجملة عامة — لا تفصيل داخلي يخرج. */
+function errText(e, fallback) {
+  const fb = fallback || 'طلب غير صالح';
+  if (!e || e instanceof TypeError || e instanceof RangeError || e instanceof ReferenceError || e instanceof SyntaxError) return fb;
+  return String(e.message || fb);
+}
+/* ── قراءة جسمٍ بسقفٍ على التدفق (v266) ──
+   bodyTooBig تقرأ ترويسة Content-Length وحدها، وطلبٌ chunked بلا ترويسة كان يمرّ منها:
+   ٢٤ ميغابايت تُقرأ وتُحلَّل كاملةً في مسار إنشاء غرفة (وkick ولودو ونبضة اللوبي). ترجع
+   النص، أو null إن تجاوز السقف أو انقطع. */
+async function readCapped(request, max) {
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const chunks = []; let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > max) { try { await reader.cancel(); } catch {} return null; }
+      chunks.push(value);
+    }
+  } catch { return null; }
+  const buf = new Uint8Array(total); let off = 0;
+  for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
+  return new TextDecoder().decode(buf);
 }
 
 // عمر الغرفة الخاملة قبل الحذف التلقائي
@@ -1247,7 +1316,9 @@ function applyRoomCommon(cls, gameKey) {
       try {
         const me = this.seatByToken(u.searchParams.get('token') || '');
         if (!me) return Response.json({ ok: false });
-        const players = ((this.room && this.room.players) || []).map(q => ({
+        /* v266: المطرود وسط الجولة يبقى مقعده معلَّمًا kicked حتى الجولة الجاية (فهارسها
+           ونتائجها بمعرّفه) — ولا يُعرض هنا: كان يظهر في لوحة الغرفة بزرّ «اطرد» حيّ. */
+        const players = ((this.room && this.room.players) || []).filter(q => q && !q.kicked).map(q => ({
           id: String(q.id || ''),
           name: String(q.name || ''),
           bot: !!q.isBot,
@@ -1342,6 +1413,17 @@ function applyRoomCommon(cls, gameKey) {
     cls.prototype.webSocketMessage = function (ws, raw) {
       if (wsOversize(raw, this.WS_MAX)) return;
       return innerWsMsg.call(this, ws, raw);
+    };
+  }
+
+  /* v266: غرف السبات تردّ مصافحة الإغلاق بعد أن يفرغ معالجها (انظر wsCloseReply).
+     نقطة واحدة للعشر: السبع التي أخذت webSocketClose من applyHibernation، والبلياردو
+     والبلوت وسلالم بمعالجها الخاص. */
+  const innerWsClose = cls.prototype.webSocketClose;
+  if (typeof innerWsClose === 'function') {
+    cls.prototype.webSocketClose = async function (ws, code) {
+      try { return await innerWsClose.apply(this, arguments); }
+      finally { wsCloseReply(ws, code); }
     };
   }
 
@@ -2650,14 +2732,21 @@ export class MafiaRoom {
 
   async endGame(winner) {
     this.room.phase = 'over';
-    await this.persist();
-    await this.recordResults(this.room.players
-      .filter(p => ROLES[p.role] && ROLES[p.role].team === winner).map(p => p.id));
-    this.broadcastPublic({
+    /* v266: كشف الأدوار يُبنى ويُبثّ قبل تسجيل النتائج لا بعده. التسجيل نداءات D1، وكل
+       await عليها يفتح الباب لرسالةٍ أخرى؛ فمضيفٌ يرسل «ابدأ» فور الحسم (الطور صار over
+       فيُقبل) يوزّع أدوار المباراة الجديدة قبل أن يُبنى gameOver — فيخرج gameOver يحمل
+       أدوار المباراة الجديدة لكل المقاعد. مقاسٌ على workerd بحسابات حقيقية؛ المحاكي لا
+       يُدخل رسالةً بين نداءين لـD1 فما ظهر فيه. */
+    const winners = this.room.players
+      .filter(p => ROLES[p.role] && ROLES[p.role].team === winner).map(p => p.id);
+    const over = {
       type: 'gameOver',
       winner, // 'good' | 'evil'
       players: this.room.players.map(p => ({ id: p.id, name: p.name, role: p.role, roleName: ROLES[p.role].name, alive: p.alive })),
-    });
+    };
+    await this.persist();
+    this.broadcastPublic(over);
+    await this.recordResults(winners);
   }
 
   roleMessageFor(player) {
@@ -3990,6 +4079,15 @@ export class GotRoom {
     }
     return null;
   }
+  /* v266: ضحية الليل يختارها قائد لانستر الحيّ وحده (handleNightAction)، والصفحة كانت
+     تستنتج القائد من أدوار اللاعبين — وهي لا تصلها — فيرى كل لانستريٍّ قائمة القتل ويُقال
+     له «تم إرسال فعلك» واختياره مهمل. نقول لكلٍّ عن نفسه فقط: هل القرار بيده الليلة؟
+     (لا أسماء ولا أدوار — ما يُكشف شيء لم يكن يعرفه). لغير لانستر لا يُرسل الحقل. */
+  leaderFlag(p){
+    if (!p || !['tywin','cersei','joffrey'].includes(p.role)) return {};
+    const leader = this.leaderPlayer();
+    return { isLeader: !!(leader && leader.id === p.id) };
+  }
 
   async startGame() {
     // بدون هذا الشرط يقدر المضيف يعيد توزيع الأدوار في نص اللعبة
@@ -4006,6 +4104,7 @@ export class GotRoom {
     this.room.deathsTotal = 0; this.room.crasterTransformed = false;
     this.room.bronnArrowUsed = false; this.room.bronnContract = null; this.room.baelishSide = null;
     this.room.accuseVotes = {}; this.room.finalVotes = {}; this.room.accusedId = null; this.room.lastDeaths = [];
+    this.room.lastRevived = [];
 
     this.room.players.forEach((p,i)=>{ p.role = roles[i]; p.alive = true; p.partnerId = null; p.usedRevive = false; });
     // الربط بعد التصفير — وإلا انمسح ارتباط العاشقين توًّا
@@ -4052,7 +4151,12 @@ export class GotRoom {
       /* v264: الإحياء يُحجز عند الاختيار، فتبديله لحماية في نفس الليلة كان يحرقه بلا
          ما يُستعمل (usedRevive يبقى true). reviveBy = حجزُ هذي الليلة: التبديل يردّه،
          وتغيير هدف الإحياء نفسه لا يُرفض. */
-      if (msg.action==='revive') {
+      /* v266: «إحياء» على حيٍّ حمايةٌ لا إحياء. قائمة الإحياء في الصفحة كانت تعرض الأحياء
+         وحدهم، فكل اختيارٍ منها يحرق القدرة بلا أثر — ولو كان المختار ضحية الليلة نفسها
+         مات ثم «أُحيي» في الحسم وبقي اسمه في قتلى الفجر: حيٌّ عند الخادم ميتٌ عند الكل.
+         والإحياء بلا هدف (كان يحرقها كذلك) ليلةٌ بلا حماية لا أكثر. */
+      const reviveTgt = msg.action==='revive' ? this.findPlayer(msg.targetId) : null;
+      if (reviveTgt && !reviveTgt.alive) {
         // لو الإحياء انتهى، ما نسقط بصمت على حماية ميت — نرجّع خطأ وننتظر اختيارًا صحيحًا
         if (p.usedRevive && na.reviveBy !== p.id) {
           this.sendPrivate(p.id, { type:'error', message:'استخدمتِ الإحياء مرة واحدة — اختاري حماية بدلًا منه' });
@@ -4177,9 +4281,17 @@ export class GotRoom {
     };
     for (const id of deaths) applyDeath(id);
 
+    /* v266: من عاد للحياة يُعلَن (revived) ويُشطب من قتلى الليلة لو كان منهم — الصفحة
+       كانت لا تعرف بالإحياء أصلًا: قائمة موتاها تكبر ولا تصغر. */
+    const revived = [];
     if (na.reviveTarget!==null && na.reviveTarget!==undefined) {
       const p = this.findPlayer(na.reviveTarget);
-      if (p && !p.alive) { p.alive = true; this.room.deathsTotal = Math.max(0,this.room.deathsTotal-1); }
+      if (p && !p.alive) {
+        p.alive = true; this.room.deathsTotal = Math.max(0,this.room.deathsTotal-1);
+        revived.push({ id:p.id, name:p.name });
+        const k = deadNames.findIndex(d => d.id === p.id);
+        if (k >= 0) deadNames.splice(k, 1);
+      }
     }
 
     // تُسلَّم لفاريس فقط لو نجا الليلة (والإحياء يُحتسب)
@@ -4198,10 +4310,11 @@ export class GotRoom {
     this.room.nightActions = {};
     this.room.phase = 'day';
     this.room.lastDeaths = deadNames;
+    this.room.lastRevived = revived;
     this.room.lastNightNum = this.room.nightNum - 1;
     this.deliverRavens();
     await this.persist();
-    this.broadcastPublic({ type:'dawnResult', nightNum:this.room.lastNightNum, deaths:deadNames });
+    this.broadcastPublic({ type:'dawnResult', nightNum:this.room.lastNightNum, deaths:deadNames, revived });
     this.broadcastLobby();
     this.maybePromptBaelish();
 
@@ -4220,6 +4333,7 @@ export class GotRoom {
         /* v264: الصفحة تقرأ reviveUsed لا usedRevive — فزرّ الإحياء ما كان يتعطّل بعد
            استعماله، والضغط عليه ثانيةً يرجع خطأً يرمي ميليساندرا للرئيسية وسط اللعب */
         reviveUsed: !!p.usedRevive,
+        ...this.leaderFlag(p),
       });
       const rv = this.ravenStateFor(p);
       if (rv) this.sendPrivate(p.id, rv);
@@ -4394,13 +4508,17 @@ export class GotRoom {
 
   async endGame(winner){
     this.room.phase = 'over';
-    await this.persist();
-    await this.recordResults(this.winnerIds(winner));
-    this.broadcastPublic({
+    /* v266: الكشف قبل التسجيل — انظر endGame في مافيا (أدوار مباراةٍ جديدة كانت تخرج
+       في gameOver لو بدأها المضيف أثناء نداءات D1). */
+    const winners = this.winnerIds(winner);
+    const over = {
       type:'gameOver', winner,
       players: this.room.players.map(p=>({ id:p.id, name:p.name, role:p.role, roleName:GOT_ROLES[p.role].name, alive:p.alive })),
       baelishSide: this.room.baelishSide,
-    });
+    };
+    await this.persist();
+    this.broadcastPublic(over);
+    await this.recordResults(winners);
   }
 
   /* ═══════════ بث ═══════════ */
@@ -4421,6 +4539,7 @@ export class GotRoom {
           bronnArrowUsed: this.room.bronnArrowUsed,
           usedRevive: !!me.usedRevive,
           reviveUsed: !!me.usedRevive,   // v264: الاسم الذي تقرؤه الصفحة (انظر sendNightState)
+          ...this.leaderFlag(me),
         });
         const rv = this.ravenStateFor(me);
         if (rv) this.sendPrivate(playerId, rv);
@@ -4429,7 +4548,7 @@ export class GotRoom {
     const mine = (this.room.ravenLog || {})[playerId];
     if (mine && mine.length) this.sendPrivate(playerId, { type:'ravenHistory', items: mine });
     if (this.room.phase === 'day') {
-      this.sendPrivate(playerId, { type:'dawnResult', nightNum:this.room.lastNightNum||this.room.nightNum, deaths:this.room.lastDeaths||[] });
+      this.sendPrivate(playerId, { type:'dawnResult', nightNum:this.room.lastNightNum||this.room.nightNum, deaths:this.room.lastDeaths||[], revived:this.room.lastRevived||[] });
     } else if (this.room.phase === 'accusing') {
       this.sendPrivate(playerId, { type:'phaseChanged', phase:'accusing' });
     } else if (this.room.phase === 'trial') {
@@ -5055,7 +5174,10 @@ export class MawwihRoom {
     if (msg.type === 'pickCategory' && this.room.phase === 'picking' && playerId === this.chooser().id) await this.pickCategory(msg.catIndex);
     if (msg.type === 'submitAnswer' && this.room.phase === 'writing') await this.submitAnswer(playerId, msg.text);
     if (msg.type === 'submitVote' && this.room.phase === 'voting') await this.submitVote(playerId, msg.key);
-    if (msg.type === 'nextRound' && playerId === this.room.hostId && this.room.phase === 'reveal') await this.nextRound();
+    if (msg.type === 'nextRound' && playerId === this.room.hostId && this.room.phase === 'reveal') {
+      /* v266: بعد كشف الجولة الأخيرة الزرّ نفسه يعرض النتيجة النهائية (انظر reveal) */
+      if (this.room.round >= this.room.rounds) await this.endGame(); else await this.nextRound();
+    }
     if (msg.type === 'hostForceAdvance' && playerId === this.room.hostId) await this.forceAdvance();
   }
 
@@ -5381,7 +5503,9 @@ export class MawwihRoom {
 
     const payload = this.revealPayload();
     this.broadcastPublic(payload);
-    if (payload.isLast) await this.endGame();
+    /* v266: كشف الجولة الأخيرة يبقى على الشاشة كغيره حتى يضغط المضيف «عرض النتيجة النهائية»
+       (الزرّ موجود في الصفحة لهذي الحالة بالذات). كانت النهاية تُبثّ هنا فورًا بعد الكشف،
+       فيُستبدل في أجزاء من الثانية ولا يرى أحدٌ من خدع من في آخر جولة. */
   }
 
   /* v264: حمولتا الكشف والنهاية تُبنيان من الحالة (الخيارات والأصوات والنقاط) —
@@ -5417,9 +5541,13 @@ export class MawwihRoom {
 
   async endGame() {
     this.room.phase = 'over';
+    /* v266: الترتيب النهائي يُبنى ويُبثّ قبل تسجيل النتائج (انظر endGame في مافيا) —
+       مباراةٌ جديدة تبدأ أثناء نداءات D1 كانت تصفّر النقاط قبل بناء اللوحة. */
+    const winners = topBy(this.room.players, p => p.score);
+    const over = this.overPayload();
     await this.persist();
-    await this.recordResults(topBy(this.room.players, p => p.score));
-    this.broadcastPublic(this.overPayload());
+    this.broadcastPublic(over);
+    await this.recordResults(winners);
   }
 
   sendRoundStateTo(playerId) {
@@ -5666,7 +5794,7 @@ export class FatinRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    acceptWs(server);   // v266: accept() + ردّ مصافحة الإغلاق
 
     // ── عميل الشاشة: مشاهد فقط، خارج المقاعد، ما يوقف عليه أحد ──
     if (url.searchParams.get('screen') === '1') {
@@ -6929,7 +7057,13 @@ export class WalimaRoom {
       }
       return;
     }
-    if (msg.type === 'startGame' && playerId === this.room.hostId) {
+    /* v266: الإعدادان يُكتبان حيث تُقبل startGame فقط (الردهة وبعد الحكم — الحارس نفسه
+       في أولها). كانا يُكتبان قبله: مضيفٌ بعميلٍ معدَّل يرسل startGame وسط الجولة فلا تبدأ
+       مباراة، لكن reveal ينقلب «live» في الذاكرة — فيبثّ الخادم كلام الجولة الجارية لحظةً
+       بلحظة بدل كشفه معًا آخرها، ويقرأ هو إفادات الضيوف قبل أن يكتب إفادته. و family
+       ينقلب معه فيتغيّر كلام المحقّق وسط المباراة. */
+    if (msg.type === 'startGame' && playerId === this.room.hostId
+        && (this.room.phase === 'lobby' || this.room.phase === 'over')) {
       /* الإعدادُ يُثبَّت من قائمةٍ مغلقة، فأيُّ قيمةٍ أخرى تسقط
          للافتراضيّ بدل أن تُخزَّن كما جاءت من العميل. */
       this.room.reveal = msg.reveal === 'live' ? 'live' : 'round';
@@ -7913,7 +8047,7 @@ export class DaqashRoom {
       const cand = (base.slice(0, 14 - suffix.length) + suffix).trim();
       if (!taken.has(cand)) return cand;
     }
-    return base.slice(0, 10) + ' ' + Math.floor(Math.random() * 900 + 100);
+    return wellFormed(base.slice(0, 10)) + ' ' + Math.floor(Math.random() * 900 + 100);
   }
 
   newSeat(id, name, token) {
@@ -8069,6 +8203,8 @@ export class DaqashRoom {
         id: p.id, name: p.name, chips: p.chips, out: p.out,
         sitting: p.sitting, connected: p.connected, av: p.av,
         isHost: p.id === r.hostId,
+        /* v266: احتياطٌ لانتهاء الوقت ولم يعلن حضوره بعد — الصفحة تعرض له «رجّعني» */
+        idle: !!(p.sitting && !p.out && (p.autoMiss || 0) >= DQ_MAX_AUTO),
       };
       if (!h) return base;
       const inHand = h.seats.includes(i);
@@ -8192,6 +8328,7 @@ export class DaqashRoom {
         if (!h || h.phase !== 'reveal') break;
         const i = this.idxOf(playerId);
         if (i < 0 || h.ready.includes(i)) break;
+        p.autoMiss = 0;            // v266: ضغطة «جاهز» حضور — الجالس احتياطًا يدخل اليد الجاية
         h.ready.push(i);
         const waiting = this.room.players
           .filter((p, k) => p.connected && !p.out && !p.sitting && !h.ready.includes(k));
@@ -8199,6 +8336,13 @@ export class DaqashRoom {
         else { await this.persist(); this.broadcastState(); }
         break;
       }
+      /* v266: «رجّعني» — من قعد احتياطًا لانتهاء وقته يعلن حضوره فيدخل اليد الجاية.
+         لا يدخل اليد الجارية: ما وُزّع له فيها (انظر تعليق الرجوع من انقطاع). */
+      case 'back':
+        if (p.kicked || this.room.phase !== 'playing' || !p.autoMiss) break;
+        p.autoMiss = 0;
+        await this.persist(); this.broadcastState();
+        break;
       case 'ping':
         this.send(playerId, this.stateFor(playerId));
         break;
@@ -8375,6 +8519,15 @@ export class DaqashRoom {
     if (seats.length < 2) {
       r.phase = 'over';
       r.hand = null;
+      /* v266: ما بقي على الطاولة أحدٌ يلعب (الكل احتياط: ناموا أو انقطعوا) وفيهم أكثر من
+         واحدٍ برصيد — لعبةٌ هُجرت لا لعبةٌ حُسمت: تنتهي بلا فائز ولا نتيجة تُسجَّل (قاعدة
+         الطاولة المهجورة في v265). من أفلس خصومه كلهم فائزٌ ولو كان هو نفسه احتياطًا. */
+      if (seats.length === 0 && r.players.filter(p => !p.out && !p.kicked).length >= 2) {
+        r.noWinner = true;
+        await this.persist();
+        this.broadcastState();
+        return;
+      }
       await this.recordResults(topBy(r.players, p => p.chips));
       await this.persist();
       this.broadcastState();
@@ -8983,7 +9136,13 @@ export class DaqashRoom {
     if (!h || h.phase !== 'reveal') return;
     this.parkIdlePlayers();
     // من رجع من انقطاع أو ضغط أي زر يعود من الاحتياط تلقائيًا
-    this.room.players.forEach(p => { if (p.connected && p.chips > 0 && !p.kicked) p.sitting = false; });
+    /* v266: «أي زر» لا «أي متصل». كان كل متصلٍ يرجع للطاولة مع كل يد ولو لم يلمس شيئًا:
+       فالنائم المتصل يُوزَّع له كل يد وتنتظره الطاولة مهلته في كل دور، وطاولةٌ نام أهلها
+       كلهم تلعب نفسها بلا نهاية (منبّه كل مهلة). autoMiss يُصفَّر بأي حركة في اليد،
+       وبالرجوع من انقطاع، وبزر «جاهز»، وبرسالة «back» (زر «رجّعني» في الصفحة). */
+    this.room.players.forEach(p => {
+      if (p.connected && p.chips > 0 && !p.kicked && (p.autoMiss || 0) < DQ_MAX_AUTO) p.sitting = false;
+    });
     await this.newHand();
     await this.persist();
     this.broadcastState();
@@ -9173,7 +9332,7 @@ export class LudoRoom {
       if (d.names.length >= LUDO_MAX_PLAYERS) return J({ error: 'الغرفة ممتلئة' }, 400);
       // الاسم المكرر يُميَّز برقم بدل ما يلتبس لاعبان على اللوح
       let nm = want;
-      for (const suffix of ['٢','٣','٤']) { if (!d.names.includes(nm)) break; nm = (want + ' ' + suffix).slice(0, 14); }
+      for (const suffix of ['٢','٣','٤']) { if (!d.names.includes(nm)) break; nm = wellFormed((want + ' ' + suffix).slice(0, 14)); }
       d.names.push(nm);
       d.tokens[d.names.length - 1] = newSeatToken();
       await this.save();
@@ -9340,6 +9499,8 @@ const DAKHIL_BANK = {
 };
 
 const DK_CATS = Object.keys(DAKHIL_BANK);
+/* v266: كم يُنتظر لاعبٌ انقطع والمرحلة تنتظره قبل أن تُحسم بلاه (تحديث صفحة، قفل شاشة) */
+const DK_DROP_GRACE_MS = 15000;
 
 const sanitizeDakhilBools = makeConfigSanitizer(
   ['useCustom', 'mukhadiOn', 'decoyOn', 'guessOn'],
@@ -9355,7 +9516,10 @@ function sanitizeDakhilConfig(raw) {
   out.catKey = DK_CATS.includes(cat) ? cat : DK_CATS[0];
   out.customWord = cleanText(raw && raw.customWord, 24);
   out.dakhilMode = (raw && raw.dakhilMode === 'random') ? 'random' : 'fixed';
-  if (!out.customWord) out.useCustom = false;
+  /* v266: كان هنا «بلا كلمة ⇒ useCustom = false»، فمفتاح «كلمة مخصصة» في الردهة لا
+     يشتغل أبدًا: خانة الكلمة لا تظهر إلا والمفتاح مشغّل، والمفتاح يُطفأ ما دامت الخانة
+     فارغة. الحالة الوسطى (مفتاحٌ مشغّل وكلمة لم تُكتب بعد) مشروعة، وstartGame يرفض
+     البدء بها برسالة «اكتب الكلمة المخصصة أول». */
   if (out.useCustom) out.decoyOn = false;   // الكلمة القريبة تحتاج فئة
   return out;
 }
@@ -9407,15 +9571,48 @@ export class DakhilRoom {
     if (!r) return 0;
     const d = this.pendingPhase();
     const g = r.ghostAt > 0 ? r.ghostAt + BOOT_GRACE_MS : 0;
-    return d && g ? Math.min(d, g) : (d || g);
+    const ts = [d, g, this.dropWake()].filter(x => x > 0);
+    return ts.length ? Math.min(...ts) : 0;
   }
   async onWake() {
     const r = this.room, now = Date.now() + 20;     // سماحية RoomCommon.alarm نفسها
     /* مهلة الرجوع: لو لم يحسم الفحصُ شيئًا يُحفظ مسحُها — وإلا عاد الموعد الفائت
        من التخزين بعد النومة وسلّح منبّهًا بلا عمل */
     if (r.ghostAt > 0 && r.ghostAt + BOOT_GRACE_MS <= now && !(await this.endGrace())) await this.persist();
+    /* v266: مهلة منقطعٍ انقضت — يُمسح موعدها ثم تُفحص المرحلة بلاه (ما كان onClose يفعله فورًا) */
+    let lapsed = 0;
+    for (const p of r.players) if (p.goneAt > 0 && p.goneAt + DK_DROP_GRACE_MS <= now) { p.goneAt = 0; lapsed++; }
+    if (lapsed && !(await this.maybeAdvance())) await this.persist();
     const d = this.pendingPhase();
     if (d && d <= now) await this.startVote();     // ما كان يفعله مؤقّت النقاش حرفًا
+  }
+
+  /* ── v266: مهلة الانقطاع ──
+     كان إغلاق مقبس اللاعب يحسم المرحلة فورًا لو كان آخر من ننتظره («لا نعلّق الجولة
+     عليه») — وتحديث الصفحة إغلاقٌ ثم اتصال بعد ثانية: الدخيل الذي حدّث صفحته وقت
+     التخمين خسر تخمينه، وآخر مصوّتٍ حدّث صفحته أُغلق التصويت بلا صوته. الآن المنقطع
+     يبقى منتظَرًا DK_DROP_GRACE_MS من لحظة انقطاعه (goneAt في مقعده، محفوظة)، والمنبّه
+     يحسم المرحلة بلاه لو لم يرجع. «فرض» المضيف كما هو لمن لا يريد الانتظار. */
+  inGrace(p, now) {
+    return !!p && !p.connected && !p.kicked && p.goneAt > 0 && (now || Date.now()) - p.goneAt < DK_DROP_GRACE_MS;
+  }
+  dropWake() {
+    let t = 0;
+    for (const p of this.room.players) {
+      if (!p || p.connected || p.kicked || !(p.goneAt > 0)) continue;
+      const e = p.goneAt + DK_DROP_GRACE_MS;
+      if (!t || e < t) t = e;
+    }
+    return t;
+  }
+  /* هل المرحلة الجارية تنتظر من هذا اللاعب شيئًا لم يفعله بعد؟ */
+  awaits(playerId) {
+    const r = this.room, rd = r.round;
+    if (!rd || !this.roleOf(playerId)) return false;
+    if (r.phase === 'reveal') return !rd.seen.includes(playerId);
+    if (r.phase === 'vote') return !Array.isArray(rd.votes[playerId]);
+    if (r.phase === 'guess') return rd.dakhil.includes(playerId) && rd.guesses[playerId] === undefined;
+    return false;
   }
 
   /* ── إحياء المرحلة بعد إعادة تشغيل الكائن ──
@@ -9491,6 +9688,7 @@ export class DakhilRoom {
       if (stale && stale !== server) { try { stale.close(); } catch {} }
       this.sockets.delete(player.id);
       player.connected = true;
+      player.goneAt = 0;            // v266: رجع داخل مهلة الانقطاع أو بعدها
     } else {
       if (!this.room.code) {
         server.accept();
@@ -9562,7 +9760,11 @@ export class DakhilRoom {
     const cur = this.sockets.get(playerId);
     if (ws && cur && cur !== ws) return;
     const p = this.findPlayer(playerId);
-    if (p) p.connected = false;
+    if (p) {
+      p.connected = false;
+      /* v266: منتظَرٌ انقطع ⇒ يُمهَل (انظر «مهلة الانقطاع» فوق)؛ غيره لا موعد له */
+      p.goneAt = (!p.kicked && this.awaits(playerId)) ? Date.now() : 0;
+    }
     this.sockets.delete(playerId);
     const wasHost = this.room.hostId === playerId;
     this.migrateHostIfNeeded();
@@ -10098,7 +10300,10 @@ export class DakhilRoom {
   async maybeAdvance() {
     const r = this.room, rd = r.round;
     if (!rd) return false;
-    const active = this.activePlayers().filter(p => this.roleOf(p.id));
+    const now = Date.now();
+    /* v266: المنقطع داخل مهلته ما زال منتظَرًا. والغرفة بلا متصلٍ واحد لا تُحسم كما كانت. */
+    if (!this.activePlayers().some(p => this.roleOf(p.id))) return false;
+    const active = r.players.filter(p => (p.connected || this.inGrace(p, now)) && this.roleOf(p.id));
     if (!active.length) return false;
     if (r.phase === 'reveal' && active.every(p => rd.seen.includes(p.id))) {
       await this.startDiscuss(); return true;
@@ -10109,7 +10314,7 @@ export class DakhilRoom {
     if (r.phase === 'guess') {
       const waiting = rd.dakhil.filter(id => {
         const p = this.findPlayer(id);
-        return p && p.connected && rd.guesses[id] === undefined;
+        return p && (p.connected || this.inGrace(p, now)) && rd.guesses[id] === undefined;
       });
       if (!waiting.length) { await this.finishRound(); return true; }
     }
@@ -10283,6 +10488,19 @@ function kirmMakeBodies() {
              vx: 0, vy: 0, r: KIRM_PR, m: 1, type: (i % 2 ? 'b' : 'w'), alive: true, id: id++ });
   }
   return b;
+}
+
+/* حاجزٌ تحته قطعة معطَّل هذا الدور — مطابق لـ trapOff في kirm/index.html حرفًا (v266) */
+function kirmTrapOff(z, bodies) {
+  if (!z || z.t !== 'bar') return false;
+  const sx = z.x2 - z.x1, sy = z.y2 - z.y1;
+  for (let i = 0; i < bodies.length; i++) {
+    const b = bodies[i]; if (!b.alive) continue;
+    const t = kirmClamp(((b.x - z.x1) * sx + (b.y - z.y1) * sy) / (sx * sx + sy * sy), 0, 1);
+    const px = z.x1 + sx * t, py = z.y1 + sy * t, lim = b.r + z.half + 1;
+    if ((b.x - px) * (b.x - px) + (b.y - py) * (b.y - py) < lim * lim) return true;
+  }
+  return false;
 }
 
 /* خطوة الفيزياء — نسخة طبق الأصل من العميل، بلا أي اعتماد على المتصفح */
@@ -10872,7 +11090,11 @@ const KirmLogic = {
     const v = power * KIRM_CFG.MAXV;
     r.striker.vx = dx * v; r.striker.vy = dy * v;
 
-    const zones = r.traps.filter(z => z.target === r.turn);
+    /* v266: «الحاجز يتعطّل هالدور لو صار تحته قطعة» — قاعدة الصفحة (trapOff) وما كانت هنا.
+       فالصفحة تعيد الضربة بلا الحاجز المعطَّل والخادم يحسبها به: القطع «تقفز» عند وصول
+       الحالة، ونتيجة الضربة (إدخال/خطأ) غير ما رآه اللاعب. تُحسب قبل الضربة على مواضع
+       القطع نفسها التي بنت الصفحة حكمها عليها. */
+    const zones = r.traps.filter(z => z.target === r.turn && !kirmTrapOff(z, r.bodies));
     for (const b of r.bodies) b.wasHit = false;
     r.striker.wasHit = false;
     const list = r.bodies.concat([r.striker]);
@@ -11136,8 +11358,9 @@ const KirmLogic = {
     for (const p of inPlay) if (p.pts > best) best = p.pts;
     const winners = inPlay.filter(p => p.pts === best).map(p => p.id);
     r.msg = 'انتهت المباراة';
-    try { await this.recordResults(winners); } catch {}
+    /* v266: اللوحة قبل التسجيل (انظر endGame في مافيا) */
     this.broadcast({ type: 'over', winners, players: inPlay.map(p => ({ id: p.id, name: p.name, pts: p.pts })) });
+    try { await this.recordResults(winners); } catch {}
   },
   /* الرجوع للردهة (v263): بلا مقاعد الغائبين والمطرودين — كانت «مرة ثانية» تبقيها
      فتُحسب في سقف الأربعة («الغرفة ممتلئة» والحاضرون اثنان). مقعد المضيف يبقى
@@ -11561,6 +11784,19 @@ async function routeRequest(request, env, ctx) {
       return withCors(hit, origin);
     }
 
+    /* ── سقف الجسم لمسارات الغرف واللوبي، على التدفق لا على الترويسة (v266) ──
+       يُقرأ الجسم هنا مرة واحدة بسقف ROOM_BODY_MAX ويُعاد بناء الطلب بنصٍّ محدود، فكل ما
+       بعده (request.json()/text() في الإنشاء والطرد ولودو والنبضة) يقرأ نسخةً صغيرة.
+       ومفتاحا toString/valueOf يُسقطان هنا (انظر safeJsonParse). مسارات الحساب واللوحة
+       والصدارة لها قراءتها المحدودة الخاصة. */
+    if (request.method === 'POST' && (/\/room\//.test(url.pathname) || url.pathname.startsWith('/lobby/'))) {
+      if (bodyTooBig(request)) return withCors(new Response('body-too-large', { status: 413 }), origin);
+      let raw = await readCapped(request, ROOM_BODY_MAX);
+      if (raw === null) return withCors(new Response('body-too-large', { status: 413 }), origin);
+      try { raw = JSON.stringify(safeJsonParse(raw)); } catch {}   // JSON معطوب يمرّ كما هو ليُرفض بسببه
+      request = new Request(request.url, { method: 'POST', headers: request.headers, body: raw });
+    }
+
     // ── دردشة الغرف: كائن مستقل لكل (لعبة + رمز) ──
     if (url.pathname.startsWith('/chat/')) {
       const m = url.pathname.match(/^\/chat\/([a-z]+)\/([A-Za-z0-9]{4,8})\/ws$/);
@@ -11573,6 +11809,7 @@ async function routeRequest(request, env, ctx) {
       if ((request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket') {
         return withCors(new Response('expected-websocket', { status: 426 }), origin);
       }
+      if (request.method !== 'GET') return withCors(new Response('method', { status: 405 }), origin);   // v266
       const game = m[1].toLowerCase();
       if (!LOBBY_GAMES[game]) return withCors(new Response('bad-game', { status: 404 }), origin);
       if (!allowSocket(request.headers.get('CF-Connecting-IP') || '')) {
@@ -11614,11 +11851,11 @@ async function routeRequest(request, env, ctx) {
          «انقطع الاتصال». والاسم واليوزر ينتقلان في ترويسات لا في
          الرابط، حتى ما يقدر أحد يزوّرهما بتعديل عنوان السوكِت. */
       const h = new Headers(request.headers);
-      h.set('X-Ya7-Name', encodeURIComponent(seatInfo.name || ''));
-      h.set('X-Ya7-User', encodeURIComponent(user));
+      h.set('X-Ya7-Name', encU(seatInfo.name || ''));   // v266: اسمٌ خُزّن قبل الإصلاح بنصف إيموجي لا يرمي
+      h.set('X-Ya7-User', encU(user));
       /* معرّف المقعد يُستعمل داخل الكائن لمنع أكثر من سوكِت للمقعد نفسه.
          ليس سرًّا — معرّفات اللاعبين تُبَث في اللوبي أصلًا. */
-      h.set('X-Ya7-Seat', encodeURIComponent(String(seatInfo.id || '')));
+      h.set('X-Ya7-Seat', encU(String(seatInfo.id || '')));
       /* v263: بصمة توكن المقعد — مفتاح حدّ الإغراق وعلم الطرد داخل الكائن
          (المعرّف يتبدّل بالرجوع في بعض الغرف، والتوكن لا) */
       h.set('X-Ya7-Key', await ChatRoom.seatKey(url.searchParams.get('seat')));
@@ -11698,9 +11935,7 @@ async function routeRequest(request, env, ctx) {
        request.json()/text() مباشرة. مسار حركات لودو وحده يسمح ٤٠٠
        طلب/دقيقة لكل بادئة، فجسم ضخم في كل واحد يعني نقلًا ومعالجةً بلا
        سقف. هنا قبل أي قراءة أو توجيه — الردّ يخرج بلا لمس الجسم أصلًا. */
-    if (request.method === 'POST' && /\/room\//.test(url.pathname) && bodyTooBig(request)) {
-      return withCors(new Response('body-too-large', { status: 413 }), origin);
-    }
+    /* v266: الفحص انتقل لأعلى الراوتر (قبل اللوبي) وصار على التدفق — انظر readCapped */
 
     // إنشاء غرفة جديدة: نولّد كودًا عشوائيًا أولاً، ثم نربطه بـ DO ثابت عبر idFromName
     // حتى الانضمام لاحقًا بنفس الكود يوصل لنفس الغرفة دائمًا
@@ -11897,6 +12132,9 @@ async function routeRequest(request, env, ctx) {
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
           { status: 501 }), origin);
       }
+      /* v266: الترقية GET فقط. طلب POST/PUT بترويسة Upgrade كان يصل الغرفة فتحجز له
+         مقعدًا وترجع 101، والرَّنتايم لا يرقّي غير GET فيخرج 500 — والمقعد الشبح يبقى. */
+      if (request.method !== 'GET') return withCors(new Response('method', { status: 405 }), origin);
       // حارس وجود الغرفة يرفض الرمز الغلط، لكن كل محاولة توقظ Durable Object.
       // نخنق المحاولات نفسها حتى لا يصير مسح الرموز بالتخمين رخيصًا.
       if (!allowSocket(request.headers.get('CF-Connecting-IP') || '')) {
@@ -11929,7 +12167,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v265';   // v265 = استرجاع السبات للغرف السبع (مافيا، لمن العرش، موّه، وليمة، داقش، الدخيل، الكيرم) — ضاع برفع ١١ سبتمبر: acceptWebSocket وواجهة مقابس فوق getWebSockets، والنبضة يردّها الرَّنتايم، ومؤقّتات الأطوار على المنبّه (nextWake/onWake)، وحالة الغراب ومهلة رجوع وليمة وطابور همساتها محفوظة، والطاولة المهجورة تقف. قبله:   // v264 = الدفعة المنخفضة من فحص v261: مافيا — حدّ عدد المافيا وفعل المطرود الليلي والإعداد يُدمج · لمن العرش — إحياء ميليساندرا، انحياز بيليش بعد قتيلين، فوز كراستر يُسجَّل، الغراب يتبع المعرّف · موّه — طرد المختار وإعادة الكشف لمن يحدّث · البلوت — الغرفة الفاضية تقف والأرقام محروسة · سلالم — سقف مقاعد شاشة النهاية · الدخيل — تغيير الاسم · داقش — نهاية الطرد بلا فائز · الشفرة — تلميح من اللوحة مرفوض والمباراة تنجو من النشرة · المربعات/الحلبة — رسالة بعد النشرة · المطاردة — أسماء أحياء كأسماء خصائص الكائن · طاريك — بلاغ حساب محذوف · لوحة التحكم — الحدّ قبل المقارنة · أسماء الألعاب بلا نموذج أولي · سقف وكنس للأركيد · الإشعارات لخدمات الدفع وحدها · سقف الأصدقاء للطرفين · محارف C1 · جسم null. قبله:   // v263 = الدفعة المتوسطة من فحص v261: اكتمال المرحلة بمن تصرّف لا بعدد المدخلات (مافيا/لمن العرش/موّه) · إنسانٌ باسم بوت لا يأخذ مقعده · الدخيل: طردٌ في كل طور، والتقدّم بعد النشرة · داقش: القدر لا يضيع بطرد الموزّع والغائب لا يُوزَّع عليه · الكيرم: الغائب والمطرود لا يُنتظران ولا يفوزان · البلياردو: لا تجمّد بعد النشرة، و«ابدأ» وplace محروسان · المطرود بلا نتيجة ولا فوز بالطرد، ويخرج من دردشة الغرفة، وحدّ الدردشة للمقعد · خمّن من؟: عدّاد الخدعة لكل مشاهد · الرجوع لا يأخذ اسم غيرك (الشفرة/المطاردة/المربعات/الحلبة) · طاريك: طرد السلسلة، بنك «من ذاكرتك»، ومعرّفات مجهولة فعلًا · المربعات/الحلبة: نتيجة واحدة للجولة بحدّ أدنى · لودو: حصّة حركات لكل مقعد · الحظر لا يرفعه المحظور · السقف العام للتسجيل والاسترجاع بعد التحقق · حذف الحساب يمسح البلاغات، وبصمة بدل عنوان IP في الأركيد. قبله:   // v262 = الست العالية من فحص v261: لمن العرش — طرد المتّهم لا يجمّد الغرفة (وفرض الحسم ينقذ العالقة) · خمّن من؟ — طرد صاحب الدور وبداية الجولة على مقعدٍ غائب · الشفرة — مخرج للمضيف من مباراة قائدها غاب وشاشة نهاية بلا طريق مسدود · لودو — «مرّر» المكرّر لا يطيّر دور التالي · الدخيل — الكلمة المخصّصة لا توصل للدخيل وكاتبها لا يُختار دخيلًا · وليمة — الأصوات والهمسات تتبع المعرّف الجديد. قبله:   // v255 = سدّ سرقة مقعد بالاسم بلا jid: مقعدٌ يحمل jid (حال كل لاعبٍ طبيعيّ) كان يُستعاد بطلبٍ بلا jid — في اللعب (reclaimByName، يصيب طاريك) وفي الردهة (reclaimSeat، كل الألعاب). الحارس صار يرفض أي مقعدٍ ذي jid ما لم يطابق jid الطلب. قبله:   // v229 = «رد يا سامي» في GAME_NAMES (حتى يقبل /account/rate و/rate/notes تقييمها من بطاقة الرئيسية) — لا شيء غيره. قبله:   // v222 = وليمة: مهلة رجوع للمنقطع · كلمةٌ تحمل رقم جولتها · همسةٌ لا تضيع · استرداد المقعد بالاسم وسط اللعب · الدخول بين مباراتين · خروجٌ مقصود · سبب takeover يصل · ردٌّ فارغ من المزوّد = المحقّق الاحتياطي · مطابقة الأسماء القصيرة. قبله:   // v220 = v220 = فحص الاتصال الشامل: كنس الإقلاع (أشباح «متصل» بعد النشرة في ١١ غرفة) · وليمة تُكنس · رمز غلط لا يفتح غرفة وهمية في الشفرة/المربعات/الحلبة · رفض البلياردو/البلوت قبل قبول المقبس. قبله:   // v219 = طاريك: ٩٠ جملة كتابية جديدة · «توقّع الأغلبية» (إجابات جاهزة) أُزيل نهائيًا. قبله:   // v218 = مطاردة الحواري: صاحب الحساب يستردّ مقعده المنقطع من أي جهاز · لهجة الغرفة يختارها المضيف · الغرفة تنجو من إعادة التشغيل · المنقطع لا يعلّق الطور · رمزٌ غلط لا يفتح غرفة وهمية. قبله:   // v216 = طاريك: الكشف لا يُعاد بعد إعادة التشغيل (نقاط مرتين) · النبضة توقظ بطاقة التعريف. قبله:   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
+const WORKER_VERSION = 'v266';   // v266 = فحص مختلف (workerd حقيقي + كروم حقيقي + سباقات الانتظار + حدود المنصّة): مصافحة الإغلاق تُردّ (كان كل خروج ينتظر ١٠–٦٠ث وينتهي 1006) · منبّه البلوت/سلالم لا يدور بعد ست ساعات خمول · قائمة الأصدقاء فوق ١٠٠ صف (حدّ D1) · gameOver يُبنى قبل التسجيل (مافيا/لمن العرش/موّه/الكيرم) والنتائج تُحسب قبل أول انتظار (المربعات/الحلبة/الشفرة/المطاردة) · حظرٌ لا يكتبه قبولٌ متزامن، وبلاغ واحد، و@يوزر مقبول · سقف الجسم على التدفّق وأجسام {toString} بلا 500 · اسمٌ مقصوص داخل إيموجي لا يكسر الدردشة · داقش: الاحتياط يلصق وطاولة النائمين تقف («back») · لمن العرش: إحياء الحيّ حماية وrevived في الفجر وisLeader · موّه: كشف آخر جولة يبقى حتى زرّ المضيف · الدخيل: مفتاح الكلمة المخصصة ومهلة انقطاع ١٥ث · طاريك: مهلة انقطاع وطردٌ يلصق · المربعات: ادّعاءات النتيجة · البلوت: «again» · الكيرم: الحاجز المعطَّل · /roster بلا مطرودين · توقيع الأركيد على الاسم كما كُتب · نتائج الأركيد في لوحة التحكم. قبله:   // v265 = استرجاع السبات للغرف السبع (مافيا، لمن العرش، موّه، وليمة، داقش، الدخيل، الكيرم) — ضاع برفع ١١ سبتمبر: acceptWebSocket وواجهة مقابس فوق getWebSockets، والنبضة يردّها الرَّنتايم، ومؤقّتات الأطوار على المنبّه (nextWake/onWake)، وحالة الغراب ومهلة رجوع وليمة وطابور همساتها محفوظة، والطاولة المهجورة تقف. قبله:   // v264 = الدفعة المنخفضة من فحص v261: مافيا — حدّ عدد المافيا وفعل المطرود الليلي والإعداد يُدمج · لمن العرش — إحياء ميليساندرا، انحياز بيليش بعد قتيلين، فوز كراستر يُسجَّل، الغراب يتبع المعرّف · موّه — طرد المختار وإعادة الكشف لمن يحدّث · البلوت — الغرفة الفاضية تقف والأرقام محروسة · سلالم — سقف مقاعد شاشة النهاية · الدخيل — تغيير الاسم · داقش — نهاية الطرد بلا فائز · الشفرة — تلميح من اللوحة مرفوض والمباراة تنجو من النشرة · المربعات/الحلبة — رسالة بعد النشرة · المطاردة — أسماء أحياء كأسماء خصائص الكائن · طاريك — بلاغ حساب محذوف · لوحة التحكم — الحدّ قبل المقارنة · أسماء الألعاب بلا نموذج أولي · سقف وكنس للأركيد · الإشعارات لخدمات الدفع وحدها · سقف الأصدقاء للطرفين · محارف C1 · جسم null. قبله:   // v263 = الدفعة المتوسطة من فحص v261: اكتمال المرحلة بمن تصرّف لا بعدد المدخلات (مافيا/لمن العرش/موّه) · إنسانٌ باسم بوت لا يأخذ مقعده · الدخيل: طردٌ في كل طور، والتقدّم بعد النشرة · داقش: القدر لا يضيع بطرد الموزّع والغائب لا يُوزَّع عليه · الكيرم: الغائب والمطرود لا يُنتظران ولا يفوزان · البلياردو: لا تجمّد بعد النشرة، و«ابدأ» وplace محروسان · المطرود بلا نتيجة ولا فوز بالطرد، ويخرج من دردشة الغرفة، وحدّ الدردشة للمقعد · خمّن من؟: عدّاد الخدعة لكل مشاهد · الرجوع لا يأخذ اسم غيرك (الشفرة/المطاردة/المربعات/الحلبة) · طاريك: طرد السلسلة، بنك «من ذاكرتك»، ومعرّفات مجهولة فعلًا · المربعات/الحلبة: نتيجة واحدة للجولة بحدّ أدنى · لودو: حصّة حركات لكل مقعد · الحظر لا يرفعه المحظور · السقف العام للتسجيل والاسترجاع بعد التحقق · حذف الحساب يمسح البلاغات، وبصمة بدل عنوان IP في الأركيد. قبله:   // v262 = الست العالية من فحص v261: لمن العرش — طرد المتّهم لا يجمّد الغرفة (وفرض الحسم ينقذ العالقة) · خمّن من؟ — طرد صاحب الدور وبداية الجولة على مقعدٍ غائب · الشفرة — مخرج للمضيف من مباراة قائدها غاب وشاشة نهاية بلا طريق مسدود · لودو — «مرّر» المكرّر لا يطيّر دور التالي · الدخيل — الكلمة المخصّصة لا توصل للدخيل وكاتبها لا يُختار دخيلًا · وليمة — الأصوات والهمسات تتبع المعرّف الجديد. قبله:   // v255 = سدّ سرقة مقعد بالاسم بلا jid: مقعدٌ يحمل jid (حال كل لاعبٍ طبيعيّ) كان يُستعاد بطلبٍ بلا jid — في اللعب (reclaimByName، يصيب طاريك) وفي الردهة (reclaimSeat، كل الألعاب). الحارس صار يرفض أي مقعدٍ ذي jid ما لم يطابق jid الطلب. قبله:   // v229 = «رد يا سامي» في GAME_NAMES (حتى يقبل /account/rate و/rate/notes تقييمها من بطاقة الرئيسية) — لا شيء غيره. قبله:   // v222 = وليمة: مهلة رجوع للمنقطع · كلمةٌ تحمل رقم جولتها · همسةٌ لا تضيع · استرداد المقعد بالاسم وسط اللعب · الدخول بين مباراتين · خروجٌ مقصود · سبب takeover يصل · ردٌّ فارغ من المزوّد = المحقّق الاحتياطي · مطابقة الأسماء القصيرة. قبله:   // v220 = v220 = فحص الاتصال الشامل: كنس الإقلاع (أشباح «متصل» بعد النشرة في ١١ غرفة) · وليمة تُكنس · رمز غلط لا يفتح غرفة وهمية في الشفرة/المربعات/الحلبة · رفض البلياردو/البلوت قبل قبول المقبس. قبله:   // v219 = طاريك: ٩٠ جملة كتابية جديدة · «توقّع الأغلبية» (إجابات جاهزة) أُزيل نهائيًا. قبله:   // v218 = مطاردة الحواري: صاحب الحساب يستردّ مقعده المنقطع من أي جهاز · لهجة الغرفة يختارها المضيف · الغرفة تنجو من إعادة التشغيل · المنقطع لا يعلّق الطور · رمزٌ غلط لا يفتح غرفة وهمية. قبله:   // v216 = طاريك: الكشف لا يُعاد بعد إعادة التشغيل (نقاط مرتين) · النبضة توقظ بطاقة التعريف. قبله:   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
 
 /* v264: بلا نموذج أولي (__proto__: null) — كانت كائنًا عاديًا، فـconstructor
    وtoString و__proto__ «ألعابٌ» تمرّ من كل فحص LOBBY_GAMES[x] / GAME_NAMES[x]. */
@@ -11974,7 +12212,8 @@ function cleanNote(raw) {
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, RATE_NOTE_MAX);
+    .slice(0, RATE_NOTE_MAX)
+    .replace(LONE_SURROGATE, '');   // v266
 }
 
 const GAME_NAMES = {
@@ -12681,7 +12920,7 @@ export class BtaqatiRoom {
     if (request.headers.get('Upgrade') !== 'websocket') return new Response('يتطلب WebSocket', { status: 426 });
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    acceptWs(server);   // v266: accept() + ردّ مصافحة الإغلاق
 
     const playerId = url.searchParams.get('playerId');
     const name = url.searchParams.get('name');
@@ -13466,7 +13705,9 @@ async function checkUsername(env, raw) {
    الحلّ: البحث يتحقّق من الشكل فقط، والوجود في players هو الحكم.     */
 function lookupNorm(raw) {
   if (typeof raw !== 'string') return null;
-  const u = raw.trim();
+  /* v266: الموقع يعرض اليوزر «@name» في كل مكان، فمن نسخه كما يراه (إضافة صديق،
+     بلاغ) كان يُردّ «ما فيه حساب بهذا الاسم». @ في أوله تُهمل؛ اليوزر نفسه حروف وأرقام. */
+  const u = raw.trim().replace(/^@+/, '');
   if (u.length < ACC.USER_MIN || u.length > ACC.USER_MAX) return null;
   if (!/^[A-Za-z0-9]+$/.test(u)) return null;
   return normUsername(u);
@@ -13484,6 +13725,7 @@ function sanitizeDisplayName(raw) {
     .replace(/[<>&"'`\\]/g, '')
     .replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
+    .replace(LONE_SURROGATE, '')   // v266
     .replace(/\s+/g, ' ')
     .trim();
   const chars = Array.from(s);
@@ -13714,7 +13956,7 @@ async function readBody(request) {
   const buf = new Uint8Array(total); let off = 0;
   for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
   try {
-    const v = JSON.parse(td.decode(buf));
+    const v = safeJsonParse(td.decode(buf));   // v266
     return (v && typeof v === 'object' && !Array.isArray(v)) ? v : null;
   } catch { return null; }
 }
@@ -13836,7 +14078,8 @@ function lbCleanName(raw) {
     .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\u061C\uFEFF]/g, '')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, LB_NAME_MAX);
+    .slice(0, LB_NAME_MAX)
+    .replace(LONE_SURROGATE, '');   // v266
 }
 async function handleLeaderboard(request, env, url, ctx) {
   const sub = url.pathname.slice('/lb'.length);
@@ -13881,7 +14124,15 @@ async function handleLeaderboard(request, env, url, ctx) {
       if (!isFinite(score) || score <= 0 || score > LB_SCORE_MAX) return fail(request, 'bad-score');
       const secret = await hmac(env.ACCOUNT_SECRET, 'lb:' + sid);
       const expect = await hmacHex(secret, game + '|' + name + '|' + score + '|' + sid);
-      if (!/^[0-9a-f]{64}$/.test(sig) || !timingSafeEqual(sig, expect)) return fail(request, 'bad-sig');
+      /* v266: الصفحة توقّع الاسم كما كُتب، والخادم كان يتحقق على الاسم بعد تنظيفه — فاسمٌ
+         فيه ' أو & أو مسافتان متتاليتان (يتغيّر بالتنظيف) يُردّ bad-sig ولا تُحفظ نتيجته
+         أبدًا. التوقيع يُقبل على أيٍّ من الصيغتين، والمحفوظ هو الاسم المنظَّف كما كان. */
+      const rawName = typeof body.name === 'string' ? body.name.slice(0, 200) : '';
+      let sigOk = /^[0-9a-f]{64}$/.test(sig) && timingSafeEqual(sig, expect);
+      if (!sigOk && /^[0-9a-f]{64}$/.test(sig) && rawName && rawName !== name) {
+        sigOk = timingSafeEqual(sig, await hmacHex(secret, game + '|' + rawName + '|' + score + '|' + sid));
+      }
+      if (!sigOk) return fail(request, 'bad-sig');
       /* يفشل مقفلًا: مسار كتابة، والجلسة المستهلكة لا تُقبل مرتين */
       if (!await rateLimit(env, 'lbs:' + parts[2], 1, LB_TTL_MS, true)) return fail(request, 'used');
       if (!await rateLimit(env, 'lbw:' + ip, 40, 60 * 60 * 1000, true)) return fail(request, 'rate', 'نتائج كثيرة، جرّب بعدين');
@@ -14229,6 +14480,8 @@ async function handleAccountInner(request, env, url, ctx) {
 
     const row = await env.DB.prepare('SELECT * FROM players WHERE device_id = ?1')
       .bind(me.device_id).first();
+    /* v266: حسابٌ حُذف بين التحقق وهذا السطر (حذفٌ من تبويب آخر) كان يرمي 500 */
+    if (!row) return fail(request, 'auth');
     return J(request, { ok: true, player: playerOf(row) });
   }
 
@@ -14389,9 +14642,15 @@ async function handleAccountInner(request, env, url, ctx) {
       /* هو أرسل لي أولًا وأنا أضفته الآن — نية متبادلة، فالقبول فوري */
       const full = await friendCapHit(env, me.device_id, other.device_id);   // v264
       if (full) return fail(request, 'limit', full);
-      await env.DB.prepare(
-        "UPDATE friends SET status='accepted', updated_at=?3 WHERE a=?1 AND b=?2"
+      /* v266: القبول الفوري مشروطٌ بأن الصف ما زال «معلّقًا» لحظة الكتابة. بين قراءته
+         فوق وهذا السطر نداءات D1، وحظرٌ يضعه الطرف الآخر في تلك اللحظة كان يُستبدل
+         بـ«accepted»: الحاظر يجد المحظور في قائمة أصدقائه، والمحظور يقدر يدعوه. نفس
+         شرط friends/accept تحت. والرد المحايد نفسه لمن حُظر (لا يُبلَّغ). */
+      const acc = await env.DB.prepare(
+        "UPDATE friends SET status='accepted', updated_at=?3 WHERE a=?1 AND b=?2 AND status='pending'"
       ).bind(a, b, now).run();
+      if (acc && acc.meta && acc.meta.changes === 0)
+        return fail(request, 'blocked', 'ما نقدر نرسل الطلب لهذا الحساب');
       return J(request, { ok: true, state: 'friends' });
     }
 
@@ -14587,10 +14846,15 @@ async function handleAccountInner(request, env, url, ctx) {
     const code = /^[A-Z0-9]{4,8}$/.test(String(body.code || '').toUpperCase())
       ? String(body.code).toUpperCase() : '';
 
-    await env.DB.prepare(
+    /* v266: الفحص والإدراج في عبارة واحدة. كانا خطوتين بينهما نداءات D1، فبلاغاتٌ
+       متزامنة عن الزوج نفسه تمرّ كلها من الفحص قبل أن يُكتب أيٌّ منها (ثمانية متوازية =
+       ثمانية صفوف في اللوحة). الفحص فوق باقٍ للردّ السريع في الحال العادية. */
+    const ins = await env.DB.prepare(
       `INSERT INTO reports (from_did, about_did, reason, note, game, code, status, created_at)
-       VALUES (?1,?2,?3,?4,?5,?6,'open',?7)`
-    ).bind(me.device_id, other, reason, note, game, code, now).run();
+       SELECT ?1,?2,?3,?4,?5,?6,'open',?7
+        WHERE NOT EXISTS (SELECT 1 FROM reports WHERE from_did=?1 AND about_did=?2 AND created_at > ?8)`
+    ).bind(me.device_id, other, reason, note, game, code, now, now - 6 * 60 * 60 * 1000).run();
+    if (ins && ins.meta && ins.meta.changes === 0) return J(request, { ok: true, duplicate: true });
     return J(request, { ok: true });
   }
 
@@ -14714,22 +14978,40 @@ async function accountLive(env, tok, who) {
   return ok;
 }
 
+/* v266: D1 يرفض أي استعلام فيه أكثر من مئة معامل مربوط («variable number must be between
+   ?1 and ?100»). القائمة كانت تبني IN (?1..?N) بعدد صفوف العلاقات كلها — حتى ٣٠٠ — فأول
+   حساب تتجاوز علاقاته المئة (أصدقاء + طلبات واردة وصادرة + محظورون) تنكسر قائمته كلها:
+   /account/friends/list يرجع «صار خطأ في الخادم» إلى الأبد، وسقف ١٥٠ صديقًا نفسه لا
+   يُبلَغ. والطلبات الواردة بلا سقف، فمئة حساب ترسل طلبًا واحدًا لكلٍّ تكفي لكسر قائمة أي
+   لاعب عمدًا. مقاسٌ على D1 الحقيقية (workerd)؛ قاعدة الاختبارات (node:sqlite) تسمح بـ٣٢ ألف
+   معامل فما ظهر فيها قط. الآن تُقرأ الأسماء دفعاتٍ دون الحدّ. */
+const D1_MAX_BIND = 90;
 async function friendsOf(env, deviceId) {
+  /* صفٌّ حظرني فيه غيري لا يظهر لي أصلًا (انظر الحلقة تحت)، فلا يأخذ خانةً من الثلاثمئة:
+     كان حظرٌ من حسابات كثيرة يزيح أصدقائي الحقيقيين خارج النافذة. والأصدقاء أولًا ثم
+     الطلبات ثم من حظرتُهم، فإغراقٌ بالطلبات لا يُخفي صديقًا. الترتيب داخل كل قائمة كما
+     كان (الأحدث أولًا) — الصفحة تفصل القوائم الثلاث بنفسها. */
   const rows = await env.DB.prepare(
     `SELECT a, b, status, requested_by FROM friends
       WHERE (a = ?1 OR b = ?1)
-      ORDER BY updated_at DESC LIMIT 300`
+        AND NOT (status = 'blocked' AND requested_by <> ?1)
+      ORDER BY CASE status WHEN 'accepted' THEN 0 WHEN 'pending' THEN 1 ELSE 2 END,
+               updated_at DESC LIMIT 300`
   ).bind(deviceId).all();
   const list = (rows && rows.results) || [];
   if (!list.length) return { friends: [], incoming: [], outgoing: [] };
 
   const others = list.map(r => (r.a === deviceId ? r.b : r.a));
-  const marks = others.map((_, i) => '?' + (i + 1)).join(',');
-  const people = await env.DB.prepare(
-    `SELECT device_id, username, display_name, avatar, games_played, wins, last_seen, show_online
-       FROM players WHERE device_id IN (${marks})`
-  ).bind(...others).all();
-  const byId = new Map(((people && people.results) || []).map(p => [p.device_id, p]));
+  const byId = new Map();
+  for (let at = 0; at < others.length; at += D1_MAX_BIND) {
+    const part = others.slice(at, at + D1_MAX_BIND);
+    const marks = part.map((_, i) => '?' + (i + 1)).join(',');
+    const people = await env.DB.prepare(
+      `SELECT device_id, username, display_name, avatar, games_played, wins, last_seen, show_online
+         FROM players WHERE device_id IN (${marks})`
+    ).bind(...part).all();
+    for (const p of ((people && people.results) || [])) byId.set(p.device_id, p);
+  }
 
   const out = { friends: [], incoming: [], outgoing: [], blocked: [] };
   const fresh = Date.now() - ACC.ONLINE_MS;
@@ -15058,7 +15340,12 @@ async function adminPanelInner(request, env, url, body) {
     const order = SORTS[body.sort] || SORTS.last_seen;
     const page = Math.max(0, Math.min(500, Number(body.page) || 0));
     const q = String(body.q || '').trim().slice(0, 32);
-    const like = '%' + q.toLowerCase().replace(/[%_]/g, '') + '%';
+    /* v266: D1 يرفض نمط LIKE أطول من ٥٠ بايت («pattern too complex»)، وadmAll تبلع
+       الخطأ فترجع «لا نتائج» — بحثٌ باسمٍ عربيّ فوق ٢٤ حرفًا (أو بإيموجي) كان يقول إن
+       اللاعب غير موجود وهو موجود. النمط يُقصّ على حدّ المحرف حتى يسعه الحدّ. */
+    let core = q.toLowerCase().replace(/[%_]/g, '');
+    while (te.encode(core).length > 48) core = Array.from(core).slice(0, -1).join('');
+    const like = '%' + core + '%';
     const rows = await admAll(env,
       `SELECT ${ADM_PCOLS} FROM players
         WHERE username IS NOT NULL
@@ -15342,23 +15629,32 @@ async function adminPanelInner(request, env, url, body) {
   }
 
   /* ── نتائج لوحة الصدارة (جدول scores المشترك) ── */
+  /* v266: ومعه arcade_scores — لوحة صدارة الموقع نفسه (/lb). التبويب كان يقرأ scores
+     وحده، فنتائج «غزو» لا تُرى ولا تُحذف من اللوحة، ولو غاب scores قال «الجدول غير
+     موجود» ووقف. الردّ القديم كما هو (scores/missing) وزاد عليه arcade. */
   if (sub === '/scores') {
-    let rows;
+    let rows = [], missing = false, arcade = [];
     try {
       const r = await env.DB.prepare(
         'SELECT rowid AS _rowid, * FROM scores ORDER BY rowid DESC LIMIT 100').all();
       rows = (r && r.results) || [];
     } catch (e) {
-      if (/no such table/i.test(String(e && e.message)))
-        return Response.json({ ok: true, missing: true, scores: [] });
-      throw e;
+      if (!/no such table/i.test(String(e && e.message))) throw e;
+      missing = true;
     }
-    return Response.json({ ok: true, scores: rows });
+    try {
+      const r = await env.DB.prepare(
+        'SELECT rowid AS _rowid, game, name, score, at FROM arcade_scores ORDER BY at DESC LIMIT 200').all();
+      arcade = (r && r.results) || [];
+    } catch (e) {
+      if (!/no such table/i.test(String(e && e.message))) throw e;
+    }
+    return Response.json({ ok: true, missing, scores: rows, arcade });
   }
   if (sub === '/scores/delete') {
     const id = Number(body.rowid) || 0;
     if (!id) return Response.json({ ok: false, error: 'bad-action' });
-    await env.DB.prepare('DELETE FROM scores WHERE rowid = ?1').bind(id).run();
+    await env.DB.prepare('DELETE FROM ' + (body.arcade === true ? 'arcade_scores' : 'scores') + ' WHERE rowid = ?1').bind(id).run();
     return Response.json({ ok: true });
   }
 
@@ -16126,7 +16422,14 @@ export class BalootRoom {
   /* منبّه واحد فقط لكل كائن: نأخذ الأقرب بين إيقاع اللعب وتنظيف الغرفة */
   async arm() {
     if (!this.room) return;
-    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
+    const now = Date.now();
+    let next = (this.room.lastSeen || now) + ROOM_TTL_MS;
+    /* v266: موعد التنظيف يُحسب من آخر حفظ، والنبضة يردّها الرَّنتايم بلا إيقاظ ولا حفظ —
+       فغرفةٌ فيها تبويب مفتوح ست ساعات بلا لعب يصير موعدها في الماضي. ومنبّهٌ يُضبط على
+       الماضي يُطلق فورًا، وalarm() تجد المقبس حيًّا فلا تمسح وتنادي arm() من جديد: حلقة
+       منبّهات بلا توقف ما دام التبويب مفتوحًا (مقاسٌ على workerd: ١٠٦ نداءات في خمس ثوانٍ،
+       وكل نداء طلبٌ محسوب). الغرفة الحيّة تُفحص بعد مهلة كاملة من الآن — كما في بقية الغرف. */
+    if (next <= now) next = now + ROOM_TTL_MS;
     if (this.room.tick) next = Math.min(next, this.room.tick);
     try { await this.state.storage.setAlarm(next); } catch {}
   }
@@ -16456,6 +16759,23 @@ export class BalootRoom {
 
     if (m.type === 'sync') return this.send(ws, this.viewFor(seat));
 
+    /* v266: «مباراة جديدة» بعد النهاية. الغرفة كانت تموت بعد أول مباراة: الطور يبقى over،
+       و«ابدأ» لا يُقبل إلا في الردهة، ولا رسالة ترجّع لها — زرّ «رجوع للغرفة» في الصفحة
+       يطلب الحالة فتعود له ورقة النهاية نفسها. المضيف يرجّع الجميع للردهة: البوتات
+       تُشال (تُكمَّل من جديد عند «ابدأ»)، ومن انقطع يُشطب مقعده، فيدخل من ينتظر. */
+    if (m.type === 'again') {
+      if (this.room.phase !== 'over') return;
+      if (!isHost) return this.send(ws, { type: 'error', message: 'المضيف وحده يبدأ مباراة جديدة' });
+      this.room.players = this.room.players.filter(q => !q.isBot && q.connected !== false);
+      if (!this.room.players.some(q => q.id === this.room.hostId)) this.migrateHost();
+      this.room.phase = 'lobby';
+      this.room.G = null; this.room.tick = 0; this.room.deadline = 0;
+      this.room.ready = {}; this.room.lastTrick = null;
+      await this.persist();
+      this.pushAll();
+      return;
+    }
+
     if (m.type === 'start') {
       if (!isHost) return this.send(ws, { type: 'error', message: 'المضيف وحده يبدأ' });
       if (this.room.phase !== 'lobby') return;
@@ -16507,7 +16827,7 @@ export class BalootRoom {
         act.suit = s;
       }
       try { G.bidAction(seat, act); }
-      catch (e) { return this.send(ws, { type: 'error', message: String(e.message || 'حركة غير مقبولة') }); }
+      catch (e) { return this.send(ws, { type: 'error', message: errText(e, 'حركة غير مقبولة') }); }
     } else if (m.type === 'play') {
       if (G.phase !== 'play') return;
       if (G.turn !== seat) return this.send(ws, { type: 'error', message: 'ليس دورك' });
@@ -16523,7 +16843,7 @@ export class BalootRoom {
       if (!Array.isArray(m.idx) || m.idx.length > 8 || !m.idx.every(n => Number.isInteger(n) && n >= 0 && n < 8)) return;
       const raw = m.idx.slice();
       try { G.declare(seat, raw); }
-      catch (e) { return this.send(ws, { type: 'error', message: String(e.message || 'تعذّر الإعلان') }); }
+      catch (e) { return this.send(ws, { type: 'error', message: errText(e, 'تعذّر الإعلان') }); }
     } else if (m.type === 'ready') {
       if (G.phase !== 'handEnd') return;
       this.room.ready[me.id] = 1;
@@ -16705,7 +17025,10 @@ export class SalalemRoom {
   }
   async arm() {
     if (!this.room) return;
-    let next = (this.room.lastSeen || Date.now()) + ROOM_TTL_MS;
+    const now = Date.now();
+    let next = (this.room.lastSeen || now) + ROOM_TTL_MS;
+    /* v266: نفس حلقة البلوت (انظر arm هناك): موعد تنظيفٍ في الماضي لغرفةٍ مقبسها حيّ */
+    if (next <= now) next = now + ROOM_TTL_MS;
     if (this.room.tick) next = Math.min(next, this.room.tick);
     try { await this.state.storage.setAlarm(next); } catch {}
   }
@@ -17291,11 +17614,16 @@ export class ShifraRoom {
      من يلعب بلا حساب يُتجاوز، وكل حساب يُحسب مرة واحدة. */
   async recordShifra() {
     if (!this.env || !this.env.DB || !this.g || !this.g.winner) return;
-    const done = new Set();
+    /* v266: من فاز يُحسب قبل أول await. كل نداء D1 يفتح الباب لرسالةٍ أخرى؛ فمضيفٌ يبدأ
+       مباراةً جديدة والتسجيل جارٍ كان يبدّل الفائز والفرق تحت الحلقة — فائزون يُسجَّلون
+       خاسرين ومن بعدهم بلا صفّ (مقاسٌ على workerd). */
+    const rows = new Map();
     for (const p of this.g.players) {
-      if (!p || !p.did || done.has(p.did)) continue;
-      done.add(p.did);
-      try { await recordResult(this.env, p.did, p.team === this.g.winner, this.GAME); } catch {}
+      if (!p || !p.did || rows.has(p.did)) continue;
+      rows.set(p.did, p.team === this.g.winner);
+    }
+    for (const [did, won] of rows) {
+      try { await recordResult(this.env, did, won, this.GAME); } catch {}
     }
   }
 
@@ -17315,7 +17643,7 @@ export class ShifraRoom {
 
     const pair = new WebSocketPair();
     const ws = pair[1];
-    ws.accept();
+    acceptWs(ws);   // v266: accept() + ردّ مصافحة الإغلاق
 
     /* ── رمزٌ غلط لا يفتح غرفة وهمية (v220 — نفس إصلاح المطاردة في v218) ──
        الغرفة تُنشأ بأول اتصال، فكان «ادخل» برمزٍ فيه حرف غلط يفتح غرفة
@@ -17407,7 +17735,7 @@ export class ShifraRoom {
         return;
       }
       if (!this.allowMsg(pid)) return;
-      try { this.onMsg(pid, m2); } catch (e) { ws.send(JSON.stringify({ t: 'err', m: String(e.message || e) })); }
+      try { this.onMsg(pid, m2); } catch (e) { ws.send(JSON.stringify({ t: 'err', m: errText(e) })); }
       this.broadcast();
     });
     const bye = () => {
@@ -18073,12 +18401,14 @@ export class HuntRoom {
   /* الفائز يقرّره الخادم. من يلعب بلا حساب يُتجاوَز، وكل حساب مرّة واحدة. */
   async recordHunt() {
     if (!this.env || !this.env.DB || !this.g || !this.g.winner) return;
-    const done = new Set();
+    /* v266: الصفوف قبل أول await (انظر recordShifra) */
+    const rows = new Map();
     for (const p of this.g.players) {
-      if (!p || !p.did || done.has(p.did)) continue;
-      done.add(p.did);
-      const won = (p.role === 'killer') === (this.g.winner === 'killers');
-      try { await recordResult(this.env, p.did, won, this.GAME); } catch {}
+      if (!p || !p.did || rows.has(p.did)) continue;
+      rows.set(p.did, (p.role === 'killer') === (this.g.winner === 'killers'));
+    }
+    for (const [did, won] of rows) {
+      try { await recordResult(this.env, did, won, this.GAME); } catch {}
     }
   }
 
@@ -18123,7 +18453,7 @@ export class HuntRoom {
 
     const pair = new WebSocketPair();
     const ws = pair[1];
-    ws.accept();
+    acceptWs(ws);   // v266: accept() + ردّ مصافحة الإغلاق
 
     /* ── رمزٌ غلط لا يفتح غرفة وهمية ──
        الغرفة تُنشأ بأول اتصال، فكان «ادخل» برمزٍ فيه حرف غلط — أو رابط
@@ -18236,7 +18566,7 @@ export class HuntRoom {
       }
       if (!this.allowMsg(pid)) return;
       try { this.onMsg(pid, m2); }
-      catch (e) { try { ws.send(JSON.stringify({ t: 'err', m: String(e.message || e) })); } catch {} }
+      catch (e) { try { ws.send(JSON.stringify({ t: 'err', m: errText(e) })); } catch {} }
       this.broadcast();
     });
     const bye = () => {
@@ -18832,12 +19162,16 @@ export class SquaresRoom {
     if (Date.now() - (g.raceAt || 0) < SQ_MIN_ROUND_MS) return;
     g.recorded = g.round;
     const racers = new Set(g.racers || []);
-    const done = new Set();
-    for (const p of this.g.players) {
-      if (!p || !p.did || !p.color || done.has(p.did)) continue;
+    /* v266: الصفوف قبل أول await (انظر recordShifra) — «مرة ثانية» من المضيف والتسجيل
+       جارٍ كانت تمسح النتيجة والألوان تحت الحلقة. */
+    const rows = new Map();
+    for (const p of g.players) {
+      if (!p || !p.did || !p.color || rows.has(p.did)) continue;
       if (!racers.has(p.id)) continue;
-      done.add(p.did);
-      try { await recordResult(this.env, p.did, p.color === this.g.result.winner, this.GAME); } catch {}
+      rows.set(p.did, p.color === g.result.winner);
+    }
+    for (const [did, won] of rows) {
+      try { await recordResult(this.env, did, won, this.GAME); } catch {}
     }
   }
 
@@ -18877,7 +19211,7 @@ export class SquaresRoom {
 
     const pair = new WebSocketPair();
     const ws = pair[1];
-    ws.accept();
+    acceptWs(ws);   // v266: accept() + ردّ مصافحة الإغلاق
 
     /* ── رمزٌ غلط لا يفتح غرفة وهمية (v220 — نفس إصلاح المطاردة في v218) ──
        الغرفة تُنشأ بأول اتصال، فكان «ادخل» برمزٍ فيه حرف غلط يفتح غرفة
@@ -18970,7 +19304,7 @@ export class SquaresRoom {
       }
       if (!this.allowMsg(pid)) return;
       try { this.onMsg(pid, m2); }
-      catch (e) { try { ws.send(JSON.stringify({ t: 'err', m: String(e.message || e) })); } catch {} }
+      catch (e) { try { ws.send(JSON.stringify({ t: 'err', m: errText(e) })); } catch {} }
       this.broadcast();
     });
     const bye = () => {
@@ -19070,6 +19404,7 @@ export class SquaresRoom {
         g.raceAt = Date.now();
         g.result = null;
         g.phase = 'race';
+        this.dropClaims();                      // v266: ادّعاءات جولةٍ سابقة لا تعبر
         g.log.unshift(`بدأت الجولة ${g.round}`);
         this.lobbySync('remove');
         return;
@@ -19081,22 +19416,22 @@ export class SquaresRoom {
         const host = g.players.find(p => p.id === g.hostId);
         const hostGone = !host || !host.connected;
         const late = Date.now() - g.raceAt > SQ_RESULT_FALLBACK_MS;
-        if (!isHost && !hostGone && !late) return;
+        const early = !isHost && !hostGone && !late;
         const winner = typeof m.winner === 'string' && SQ_COLORS.includes(m.winner) ? m.winner : '';
-        if (!winner) throw new Error('نتيجة غير صالحة.');
+        if (!winner) { if (early) return; throw new Error('نتيجة غير صالحة.'); }
         const order = [];
         for (const c of (Array.isArray(m.order) ? m.order : [])) {
           if (typeof c === 'string' && SQ_COLORS.includes(c) && !order.includes(c)) order.push(c);
           if (order.length >= SQ_COLORS.length) break;
         }
         if (order[0] !== winner) { const i = order.indexOf(winner); if (i > 0) order.splice(i, 1); order.unshift(winner); }
-        g.result = { winner, order, by: me.name };
-        g.phase = 'over';
-        for (const p of g.players) if (p.color === winner) p.score = (p.score | 0) + 1;
-        g.log.unshift(`فاز ${SQ_COLOR_AR[winner]} في الجولة ${g.round}`);
-        this.state.waitUntil
-          ? this.state.waitUntil(this.recordRound())
-          : this.recordRound().catch(() => {});
+        /* v266: تقرير غير المضيف قبل المهلة كان يُرمى، والصفحة لا ترسله إلا مرة عند نهاية
+           السباق عندها — فمضيفٌ نام جواله وسط السباق يترك الجولة بلا نتيجة للأبد: المهلة
+           تمرّ ولا أحد يعيد الإرسال، والاستضافة تنتقل والمضيف الجديد لا زرّ عنده. الآن
+           يُحفظ التقرير «ادّعاءً» ويُعتمد حين تحلّ المهلة نفسها (أو تنتقل الاستضافة) إن لم
+           تصل نتيجة المضيف قبلها — لا ثقة زائدة: هو ما كان يُقبل لو أُعيد إرساله حينها. */
+        if (early) { this.noteClaim(pid, winner, order); return; }
+        this.applyResult(winner, order, me.name);
         return;
       }
 
@@ -19129,6 +19464,53 @@ export class SquaresRoom {
     }
   }
 
+  applyResult(winner, order, byName) {
+    const g = this.g;
+    g.result = { winner, order, by: byName };
+    g.phase = 'over';
+    this.dropClaims();
+    for (const p of g.players) if (p.color === winner) p.score = (p.score | 0) + 1;
+    g.log.unshift(`فاز ${SQ_COLOR_AR[winner]} في الجولة ${g.round}`);
+    this.state.waitUntil
+      ? this.state.waitUntil(this.recordRound())
+      : this.recordRound().catch(() => {});
+  }
+
+  /* ── v266: ادّعاءات النتيجة (انظر case 'result') ──
+     في الذاكرة وحدها كبقية حالة هذي الغرفة. المؤقّت يعيش ما دام في الغرفة مقبس. */
+  noteClaim(pid, winner, order) {
+    const g = this.g;
+    if (!this._claims || this._claims.round !== g.round) this._claims = { round: g.round, by: {} };
+    this._claims.by[pid] = { winner, order };
+    if (this._claimT || typeof setTimeout !== 'function') return;
+    const round = g.round;
+    const wait = Math.max(0, g.raceAt + SQ_RESULT_FALLBACK_MS + 250 - Date.now());
+    this._claimT = setTimeout(() => {
+      this._claimT = null;
+      try { if (this.settleClaims(round)) this.broadcast(); } catch {}
+    }, wait);
+  }
+  dropClaims() {
+    this._claims = null;
+    if (this._claimT) { try { clearTimeout(this._claimT); } catch {} this._claimT = null; }
+  }
+  /* يعتمد ما اتفق عليه أكثر المدّعين (السباق حتمي بالبذرة: الأمناء كلهم على نتيجة واحدة) */
+  settleClaims(round) {
+    const g = this.g, c = this._claims;
+    if (!c || c.round !== round || g.phase !== 'race' || g.round !== round) return false;
+    const tally = new Map();
+    for (const [id, v] of Object.entries(c.by)) {
+      if (!g.players.some(p => p.id === id)) continue;         // مطرود أو خرج
+      const e = tally.get(v.winner) || { n: 0, v, id };
+      e.n++; tally.set(v.winner, e);
+    }
+    let best = null;
+    for (const e of tally.values()) if (!best || e.n > best.n) best = e;
+    if (!best) return false;
+    this.applyResult(best.v.winner, best.v.order, this.nameOf(best.id));
+    return true;
+  }
+
   ensureHost() {
     const g = this.g;
     if (g.hostId && g.players.some(p => p.id === g.hostId && p.connected)) return;
@@ -19144,6 +19526,8 @@ export class SquaresRoom {
     g.log.unshift(`انتقلت الاستضافة إلى ${this.nameOf(g.hostId)}`);
     const s = this.sockets.get(g.hostId);
     if (s) { try { s.send(JSON.stringify({ t: 'host' })); } catch {} }
+    /* v266: المضيف غاب وعند الغرفة ادّعاءات نتيجة ⇒ تُعتمد الآن (كل مناديّ hostCheck يبثّون بعده) */
+    if (g.phase === 'race' && this._claims) this.settleClaims(g.round);
   }
 
   nameOf(id) { const p = this.g.players.find(x => x.id === id); return p ? p.name : '—'; }
@@ -19909,7 +20293,7 @@ export class TariRoom {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
+    acceptWs(server);   // v266: accept() + ردّ مصافحة الإغلاق
 
     const askedId = url.searchParams.get('playerId');
     const name = url.searchParams.get('name');
@@ -19959,6 +20343,14 @@ export class TariRoom {
            إلى الأبد على رمزٍ لا وجود له، فيرى اللاعب تنبيهًا يتكرّر بلا
            مخرج بدل أن يُرجَع للبداية ليكتب رمزًا صحيحًا. */
         server.send(JSON.stringify({ type: 'error', fatal: true, code: 'nosuchroom', message: 'ما فيه غرفة بهذا الرمز' }));
+        server.close();
+        return new Response(null, { status: 101, webSocket: client });
+      }
+      /* v266: الطرد يلصق. كان المطرود يرجع بضغطة «ادخل» — يُحذف مقعده ولا يُحفظ عنه شيء،
+         فيدخل مقعدًا جديدًا بالاسم والرمز نفسيهما. الآن تبويبه (jid) وحسابه (did) يُحفظان
+         عند الطرد ويُردّان هنا. fatal كي لا تعيد الصفحة المحاولة بلا نهاية. */
+      if (this.isBanned(url)) {
+        server.send(JSON.stringify({ type: 'error', fatal: true, code: 'kicked', message: 'المضيف طلّعك من هذي الغرفة' }));
         server.close();
         return new Response(null, { status: 101, webSocket: client });
       }
@@ -20056,6 +20448,12 @@ export class TariRoom {
   findPlayer(id) { return this.room.players.find(p => p.id === id); }
   activePlayers() { return this.room.players.filter(p => p.connected); }
   nameOf(id) { const p = this.findPlayer(id); return p ? p.name : '—'; }
+  isBanned(url) {
+    const b = this.room.banned;
+    if (!Array.isArray(b) || !b.length) return false;
+    const jid = url.searchParams.get('jid'), did = url.searchParams.get('did');
+    return !!((jid && b.includes('j:' + jid)) || (did && b.includes('d:' + did)));
+  }
 
   /* ─────────────── المؤقّتات ─────────────── */
   setPhaseTimer(ms, fn) {
@@ -20886,7 +21284,7 @@ export class TariRoom {
           return;
       }
     } catch (e) {
-      this.sendPrivate(playerId, { type: 'error', message: String((e && e.message) || e) });
+      this.sendPrivate(playerId, { type: 'error', message: errText(e) });
     }
   }
 
@@ -21109,7 +21507,24 @@ export class TariRoom {
     this.migrateHostIfNeeded();
     await this.persist();
     this.broadcastState();
-    await this.maybeAdvanceOnDisconnect();
+    await this.deferDropCheck();
+  }
+
+  /* v266: «المنقطع لا يعلّق الجولة» — بعد مهلة قصيرة لا لحظة انقطاعه. تحديث الصفحة
+     إغلاقٌ ثم اتصال بعد ثانية أو اثنتين؛ فكان نجم «من ذاكرتك» يحدّث صفحته فتقفز
+     الجولة للكشف بلا تخمين، وصاحب الدور في السلسلة يُحسب متخطّيًا. الفحص نفسه
+     (maybeAdvanceOnDisconnect) يُؤجَّل DROP_GRACE_MS من آخر انقطاع: من رجع قبلها وُجد
+     حاضرًا، ومن لم يرجع تُحسم بلاه كما كانت. «اخرج من الغرفة» والطرد يحسمان فورًا كما
+     هما، والمضيف عنده «تخطَّ» لمن لا يريد الانتظار. الغرفة بـ accept() (لا سبات) فالمؤقّت
+     يعيش ما دام فيها مقبس؛ ولو فرغت فأول راجعٍ يفحص عند دخوله. */
+  deferDropCheck() {
+    const ms = this.DROP_GRACE_MS;
+    if (!(ms > 0) || typeof setTimeout !== 'function') return this.maybeAdvanceOnDisconnect();
+    if (this._dropT) { try { clearTimeout(this._dropT); } catch {} }
+    this._dropT = setTimeout(() => {
+      this._dropT = null;
+      try { const q = this.maybeAdvanceOnDisconnect(); if (q && q.catch) q.catch(() => {}); } catch {}
+    }, ms);
   }
 
   migrateHostIfNeeded() {
@@ -21135,6 +21550,10 @@ export class TariRoom {
     const ws = this.sockets.get(targetId);
     if (ws) { try { ws.close(4002, 'kicked'); } catch {} }
     this.sockets.delete(targetId);
+    /* v266: هويّتا المطرود الثابتتان تُحفظان فلا يرجع بمقعدٍ جديد (انظر isBanned) */
+    const ban = Array.isArray(r.banned) ? r.banned : [];
+    for (const k of [t.jid && 'j:' + t.jid, t.did && 'd:' + t.did]) if (k && !ban.includes(k)) ban.push(k);
+    r.banned = ban.slice(-60);
     r.players = r.players.filter(p => p.id !== targetId);
     delete r.subs[targetId];
     delete r.votes[targetId];
@@ -21323,6 +21742,7 @@ applyRoomCommon(TariRoom, 'tari');
    للتجاوز المعقول (متصفّح يسجّل بمعدّل أعلى) أن يصل ويُردّ برسالة
    مفهومة، ويبقى ما فوقه إساءةً تُهمَل بصمت. */
 TariRoom.prototype.WS_MAX = TARI_CLIP_MAX * 2 + 4096;
+TariRoom.prototype.DROP_GRACE_MS = 12000;      // v266: مهلة الانقطاع (انظر deferDropCheck)
 
 /* ══════════════════════ الحلبة أونلاين (RedVsBlueRoom) ══════════════════════
    معركة كرات (٢ إلى ٤) داخل حلبة، كل لاعب يدفع كرته من جواله. بخلاف سباق
@@ -21386,12 +21806,15 @@ export class RedVsBlueRoom {
     if (this.g.recorded === this.g.round) return;
     if (Date.now() - (this.g.startAt || 0) < RVB_MIN_ROUND_MS) return;
     this.g.recorded = this.g.round;
-    const done = new Set();
+    /* v266: الصفوف قبل أول await (انظر recordShifra) */
+    const rows = new Map();
     for (const p of this.g.roster) {
       const q = this.g.players.find(x => x.id === p.id);
-      if (!q || !q.did || done.has(q.did)) continue;
-      done.add(q.did);
-      try { await recordResult(this.env, q.did, p.color === this.g.result.winner, this.GAME); } catch {}
+      if (!q || !q.did || rows.has(q.did)) continue;
+      rows.set(q.did, p.color === this.g.result.winner);
+    }
+    for (const [did, won] of rows) {
+      try { await recordResult(this.env, did, won, this.GAME); } catch {}
     }
   }
 
@@ -21431,7 +21854,7 @@ export class RedVsBlueRoom {
 
     const pair = new WebSocketPair();
     const ws = pair[1];
-    ws.accept();
+    acceptWs(ws);   // v266: accept() + ردّ مصافحة الإغلاق
 
     /* ── رمزٌ غلط لا يفتح غرفة وهمية (v220 — نفس إصلاح المطاردة في v218) ──
        الغرفة تُنشأ بأول اتصال، فكان «ادخل» برمزٍ فيه حرف غلط يفتح غرفة
@@ -21551,7 +21974,7 @@ export class RedVsBlueRoom {
       }
       if (!this.allowMsg(pid, 'msg')) return;
       try { this.onMsg(pid, m2); }
-      catch (e) { try { ws.send(JSON.stringify({ t: 'err', m: String(e.message || e) })); } catch {} }
+      catch (e) { try { ws.send(JSON.stringify({ t: 'err', m: errText(e) })); } catch {} }
       this.broadcast();
     });
     const bye = () => {
