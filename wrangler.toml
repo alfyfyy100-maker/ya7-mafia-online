@@ -6,6 +6,7 @@
 ##  الجديد في v172: ربط TARI_ROOM + وسم الترحيل v18 (طاريك — لعبة الحفلات)
 ##  الجديد في v174: ربط RVB_ROOM + وسم الترحيل v19 (أحمر ضد أزرق أونلاين)
 ##  الجديد في v205: ربط SALALEM_ROOM + وسم الترحيل v20 (سلالم وثعابين أونلاين)
+##  الجديد في v270: ربط MAZAD_ROOM + وسم الترحيل v21 (مزاد العشرين أونلاين)
 ## ════════════════════════════════════════════════════════════════
 
 name = "ya7-mafia-online"
@@ -104,6 +105,11 @@ class_name = "RedVsBlueRoom"
 name = "SALALEM_ROOM"
 class_name = "SalalemRoom"
 
+# ── جديد في v270: غرفة مزاد العشرين ──
+[[durable_objects.bindings]]
+name = "MAZAD_ROOM"
+class_name = "MazadRoom"
+
 ## ── قاعدة D1 ──
 [[d1_databases]]
 binding = "DB"
@@ -188,6 +194,13 @@ new_sqlite_classes = ["TariRoom"]
 [[migrations]]
 tag = "v20"
 new_sqlite_classes = ["SalalemRoom"]
+
+# ── v21: مزاد العشرين أونلاين (v270) ──
+# v20 محجوز لسلالم. الوسوم تُضاف فقط ولا تُعدَّل — تعديل وسم قديم أو
+# تكراره يفشل النشر كله (خطأ 10074).
+[[migrations]]
+tag = "v21"
+new_sqlite_classes = ["MazadRoom"]
 
 ## ════════════════════════════════════════════════════════════════
 ##  الأسرار لا تُكتب هنا أبدًا — من لوحة Cloudflare أو:

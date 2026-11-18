@@ -1175,6 +1175,7 @@ function roomNS(env, g) {
     case 'tari':     return env.TARI_ROOM;
     case 'redvsblue': return env.RVB_ROOM;
     case 'salalem':   return env.SALALEM_ROOM;
+    case 'mazad':     return env.MAZAD_ROOM;
     default:         return env.MAFIA_ROOM;
   }
 }
@@ -1471,6 +1472,7 @@ function gameNS(env, key) {
     case 'tari':     return env.TARI_ROOM;
     case 'redvsblue': return env.RVB_ROOM;
     case 'salalem':   return env.SALALEM_ROOM;
+    case 'mazad':     return env.MAZAD_ROOM;
     default:         return null;
   }
 }
@@ -11717,7 +11719,7 @@ async function routeRequest(request, env, ctx) {
           BILLIARD_ROOM: !!env.BILLIARD_ROOM, HUNT_ROOM: !!env.HUNT_ROOM,
           BALOOT_ROOM: !!env.BALOOT_ROOM, SHIFRA_ROOM: !!env.SHIFRA_ROOM,
           SQUARES_ROOM: !!env.SQUARES_ROOM, TARI_ROOM: !!env.TARI_ROOM,
-          RVB_ROOM: !!env.RVB_ROOM, SALALEM_ROOM: !!env.SALALEM_ROOM,
+          RVB_ROOM: !!env.RVB_ROOM, SALALEM_ROOM: !!env.SALALEM_ROOM, MAZAD_ROOM: !!env.MAZAD_ROOM,
           PUBLIC_LOBBY: !!env.PUBLIC_LOBBY,
           CHAT_ROOM: !!env.CHAT_ROOM,
           DB: !!env.DB, ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
@@ -12083,8 +12085,9 @@ async function routeRequest(request, env, ctx) {
       }), origin);
     }
 
-    if (url.pathname === '/salalem/room/create' || url.pathname === '/tari/room/create' || url.pathname === '/baloot/room/create' || url.pathname === '/bilyardo/room/create' || url.pathname === '/kirm/room/create' || url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
+    if (url.pathname === '/salalem/room/create' || url.pathname === '/mazad/room/create' || url.pathname === '/tari/room/create' || url.pathname === '/baloot/room/create' || url.pathname === '/bilyardo/room/create' || url.pathname === '/kirm/room/create' || url.pathname === '/btaqati/room/create' || url.pathname === '/room/create' || url.pathname === '/got/room/create' || url.pathname === '/mawwih/room/create' || url.pathname === '/daqash/room/create' || url.pathname === '/walima/room/create' || url.pathname === '/dakhil/room/create') {
       const gameNS = url.pathname.startsWith('/salalem/') ? env.SALALEM_ROOM
+                    : url.pathname.startsWith('/mazad/') ? env.MAZAD_ROOM
                     : url.pathname.startsWith('/tari/') ? env.TARI_ROOM
                     : url.pathname.startsWith('/baloot/') ? env.BALOOT_ROOM
                     : url.pathname.startsWith('/bilyardo/') ? env.BILLIARD_ROOM
@@ -12129,6 +12132,7 @@ async function routeRequest(request, env, ctx) {
           // الإدراج في اللوبي اختياري وصريح: بلا public:true تبقى الغرفة خاصة
           if (resp.ok && body && body.public === true && env.PUBLIC_LOBBY) {
             const g = url.pathname.startsWith('/salalem/') ? 'salalem'
+                    : url.pathname.startsWith('/mazad/') ? 'mazad'
                     : url.pathname.startsWith('/tari/') ? 'tari'
                     : url.pathname.startsWith('/baloot/') ? 'baloot'
                     : url.pathname.startsWith('/bilyardo/') ? 'bilyardo'
@@ -12161,7 +12165,7 @@ async function routeRequest(request, env, ctx) {
     /* ── لوحة الغرفة المشتركة: قائمة اللاعبين والطرد ──
        نفس نطاقات الغرف، لكن بمسارَي /roster و/kick. الغرفة نفسها
        تتحقق من التوكن وأن الطالب هو المضيف — الراوتر ينقل فقط.     */
-    const rk = url.pathname.match(/^\/(salalem|baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/(roster|kick)$/i);
+    const rk = url.pathname.match(/^\/(salalem|mazad|baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil)?\/?room\/([A-Z0-9]{6})\/(roster|kick)$/i);
     if (rk) {
       const g = (rk[1] || '').toLowerCase();
       const ns = roomNS(env, g);
@@ -12190,10 +12194,11 @@ async function routeRequest(request, env, ctx) {
       }), origin);
     }
 
-    const match = url.pathname.match(/^\/(salalem|baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra|mutarada|squares|tari|redvsblue)?\/?room\/([A-Z0-9]{6})\/ws$/i);
+    const match = url.pathname.match(/^\/(salalem|mazad|baloot|bilyardo|kirm|btaqati|got|mawwih|daqash|walima|dakhil|shifra|mutarada|squares|tari|redvsblue)?\/?room\/([A-Z0-9]{6})\/ws$/i);
     if (match) {
       const g = (match[1]||'').toLowerCase();
-      const gameNS = g==='salalem' ? env.SALALEM_ROOM : g==='baloot' ? env.BALOOT_ROOM : g==='bilyardo' ? env.BILLIARD_ROOM : g==='kirm' ? env.KIRM_ROOM : g==='btaqati' ? env.BTAQATI_ROOM : g==='got' ? env.GOT_ROOM : g==='mawwih' ? env.MAWWIH_ROOM : g==='daqash' ? env.DAQASH_ROOM : g==='walima' ? env.WALIMA_ROOM : g==='dakhil' ? env.DAKHIL_ROOM : g==='shifra' ? env.SHIFRA_ROOM : g==='mutarada' ? env.HUNT_ROOM : g==='squares' ? env.SQUARES_ROOM : g==='tari' ? env.TARI_ROOM : g==='redvsblue' ? env.RVB_ROOM : env.MAFIA_ROOM;
+      const WS_BIND = { salalem: 'SALALEM_ROOM', mazad: 'MAZAD_ROOM', baloot: 'BALOOT_ROOM', bilyardo: 'BILLIARD_ROOM', kirm: 'KIRM_ROOM', btaqati: 'BTAQATI_ROOM', got: 'GOT_ROOM', mawwih: 'MAWWIH_ROOM', daqash: 'DAQASH_ROOM', walima: 'WALIMA_ROOM', dakhil: 'DAKHIL_ROOM', shifra: 'SHIFRA_ROOM', mutarada: 'HUNT_ROOM', squares: 'SQUARES_ROOM', tari: 'TARI_ROOM', redvsblue: 'RVB_ROOM' };
+      const gameNS = env[WS_BIND[g] || 'MAFIA_ROOM'];
       if (!gameNS) {
         return withCors(new Response(
           'binding-missing: أضف ربط الـ Durable Object في wrangler.toml ثم أعد النشر',
@@ -12220,7 +12225,7 @@ async function routeRequest(request, env, ctx) {
     }
 
     return withCors(new Response(
-      'مافيا، لمن العرش، موّه، داقش، وليمة، لودو، الشفرة، المطاردة، سباق المربعات، طاريك، الحلبة، وسلالم وثعابين أونلاين — ألعاب ياح · /health للفحص',
+      'مافيا، لمن العرش، موّه، داقش، وليمة، لودو، الشفرة، المطاردة، سباق المربعات، طاريك، الحلبة، سلالم وثعابين، ومزاد العشرين أونلاين — ألعاب ياح · /health للفحص',
       { status: 200 }), origin);
 }
 
@@ -12234,7 +12239,7 @@ async function routeRequest(request, env, ctx) {
    تكفي بفارق أمان كبير للغرفة الحيّة وتُسقط المهجورة بسرعة. */
 const LOBBY_TTL_MS = 8 * 60 * 1000;    // مدخل بلا نبض يسقط بعدها
 const LOBBY_MAX = 120;                 // سقف المعروض
-const WORKER_VERSION = 'v269';   // v269 = مزاد العشرين في GAME_NAMES (تقييم + سجل لعبت) واسمها محجوز. v268 = حارس الفاتورة أمام المسارات المفتوحة: سقف عام في الذاكرة بلا عنوان لـ check/register/recover (تدوير شبكات IPv6 كان يكتب في D1 مع كل طلب) · /lb/session و/lb/submit بخانق ذاكرة لكل بادئة وسقف عام (كانا بلا أي حارس قبل D1) · /lb/top و/rate/all بنسخة في ذاكرة العقدة · /rate/notes بخانق قبل D1. قبله:   // v266 = فحص مختلف (workerd حقيقي + كروم حقيقي + سباقات الانتظار + حدود المنصّة): مصافحة الإغلاق تُردّ (كان كل خروج ينتظر ١٠–٦٠ث وينتهي 1006) · منبّه البلوت/سلالم لا يدور بعد ست ساعات خمول · قائمة الأصدقاء فوق ١٠٠ صف (حدّ D1) · gameOver يُبنى قبل التسجيل (مافيا/لمن العرش/موّه/الكيرم) والنتائج تُحسب قبل أول انتظار (المربعات/الحلبة/الشفرة/المطاردة) · حظرٌ لا يكتبه قبولٌ متزامن، وبلاغ واحد، و@يوزر مقبول · سقف الجسم على التدفّق وأجسام {toString} بلا 500 · اسمٌ مقصوص داخل إيموجي لا يكسر الدردشة · داقش: الاحتياط يلصق وطاولة النائمين تقف («back») · لمن العرش: إحياء الحيّ حماية وrevived في الفجر وisLeader · موّه: كشف آخر جولة يبقى حتى زرّ المضيف · الدخيل: مفتاح الكلمة المخصصة ومهلة انقطاع ١٥ث · طاريك: مهلة انقطاع وطردٌ يلصق · المربعات: ادّعاءات النتيجة · البلوت: «again» · الكيرم: الحاجز المعطَّل · /roster بلا مطرودين · توقيع الأركيد على الاسم كما كُتب · نتائج الأركيد في لوحة التحكم. قبله:   // v265 = استرجاع السبات للغرف السبع (مافيا، لمن العرش، موّه، وليمة، داقش، الدخيل، الكيرم) — ضاع برفع ١١ سبتمبر: acceptWebSocket وواجهة مقابس فوق getWebSockets، والنبضة يردّها الرَّنتايم، ومؤقّتات الأطوار على المنبّه (nextWake/onWake)، وحالة الغراب ومهلة رجوع وليمة وطابور همساتها محفوظة، والطاولة المهجورة تقف. قبله:   // v264 = الدفعة المنخفضة من فحص v261: مافيا — حدّ عدد المافيا وفعل المطرود الليلي والإعداد يُدمج · لمن العرش — إحياء ميليساندرا، انحياز بيليش بعد قتيلين، فوز كراستر يُسجَّل، الغراب يتبع المعرّف · موّه — طرد المختار وإعادة الكشف لمن يحدّث · البلوت — الغرفة الفاضية تقف والأرقام محروسة · سلالم — سقف مقاعد شاشة النهاية · الدخيل — تغيير الاسم · داقش — نهاية الطرد بلا فائز · الشفرة — تلميح من اللوحة مرفوض والمباراة تنجو من النشرة · المربعات/الحلبة — رسالة بعد النشرة · المطاردة — أسماء أحياء كأسماء خصائص الكائن · طاريك — بلاغ حساب محذوف · لوحة التحكم — الحدّ قبل المقارنة · أسماء الألعاب بلا نموذج أولي · سقف وكنس للأركيد · الإشعارات لخدمات الدفع وحدها · سقف الأصدقاء للطرفين · محارف C1 · جسم null. قبله:   // v263 = الدفعة المتوسطة من فحص v261: اكتمال المرحلة بمن تصرّف لا بعدد المدخلات (مافيا/لمن العرش/موّه) · إنسانٌ باسم بوت لا يأخذ مقعده · الدخيل: طردٌ في كل طور، والتقدّم بعد النشرة · داقش: القدر لا يضيع بطرد الموزّع والغائب لا يُوزَّع عليه · الكيرم: الغائب والمطرود لا يُنتظران ولا يفوزان · البلياردو: لا تجمّد بعد النشرة، و«ابدأ» وplace محروسان · المطرود بلا نتيجة ولا فوز بالطرد، ويخرج من دردشة الغرفة، وحدّ الدردشة للمقعد · خمّن من؟: عدّاد الخدعة لكل مشاهد · الرجوع لا يأخذ اسم غيرك (الشفرة/المطاردة/المربعات/الحلبة) · طاريك: طرد السلسلة، بنك «من ذاكرتك»، ومعرّفات مجهولة فعلًا · المربعات/الحلبة: نتيجة واحدة للجولة بحدّ أدنى · لودو: حصّة حركات لكل مقعد · الحظر لا يرفعه المحظور · السقف العام للتسجيل والاسترجاع بعد التحقق · حذف الحساب يمسح البلاغات، وبصمة بدل عنوان IP في الأركيد. قبله:   // v262 = الست العالية من فحص v261: لمن العرش — طرد المتّهم لا يجمّد الغرفة (وفرض الحسم ينقذ العالقة) · خمّن من؟ — طرد صاحب الدور وبداية الجولة على مقعدٍ غائب · الشفرة — مخرج للمضيف من مباراة قائدها غاب وشاشة نهاية بلا طريق مسدود · لودو — «مرّر» المكرّر لا يطيّر دور التالي · الدخيل — الكلمة المخصّصة لا توصل للدخيل وكاتبها لا يُختار دخيلًا · وليمة — الأصوات والهمسات تتبع المعرّف الجديد. قبله:   // v255 = سدّ سرقة مقعد بالاسم بلا jid: مقعدٌ يحمل jid (حال كل لاعبٍ طبيعيّ) كان يُستعاد بطلبٍ بلا jid — في اللعب (reclaimByName، يصيب طاريك) وفي الردهة (reclaimSeat، كل الألعاب). الحارس صار يرفض أي مقعدٍ ذي jid ما لم يطابق jid الطلب. قبله:   // v229 = «رد يا سامي» في GAME_NAMES (حتى يقبل /account/rate و/rate/notes تقييمها من بطاقة الرئيسية) — لا شيء غيره. قبله:   // v222 = وليمة: مهلة رجوع للمنقطع · كلمةٌ تحمل رقم جولتها · همسةٌ لا تضيع · استرداد المقعد بالاسم وسط اللعب · الدخول بين مباراتين · خروجٌ مقصود · سبب takeover يصل · ردٌّ فارغ من المزوّد = المحقّق الاحتياطي · مطابقة الأسماء القصيرة. قبله:   // v220 = v220 = فحص الاتصال الشامل: كنس الإقلاع (أشباح «متصل» بعد النشرة في ١١ غرفة) · وليمة تُكنس · رمز غلط لا يفتح غرفة وهمية في الشفرة/المربعات/الحلبة · رفض البلياردو/البلوت قبل قبول المقبس. قبله:   // v219 = طاريك: ٩٠ جملة كتابية جديدة · «توقّع الأغلبية» (إجابات جاهزة) أُزيل نهائيًا. قبله:   // v218 = مطاردة الحواري: صاحب الحساب يستردّ مقعده المنقطع من أي جهاز · لهجة الغرفة يختارها المضيف · الغرفة تنجو من إعادة التشغيل · المنقطع لا يعلّق الطور · رمزٌ غلط لا يفتح غرفة وهمية. قبله:   // v216 = طاريك: الكشف لا يُعاد بعد إعادة التشغيل (نقاط مرتين) · النبضة توقظ بطاقة التعريف. قبله:   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
+const WORKER_VERSION = 'v270';   // v270 = مزاد العشرين أونلاين (غرفة MazadRoom: ٢-٨ لاعبين، عروض سرّية متزامنة، قدرات، تصويت الشلة، بلا D1). قبله:   // v269 = مزاد العشرين في GAME_NAMES (تقييم + سجل لعبت) واسمها محجوز. v268 = حارس الفاتورة أمام المسارات المفتوحة: سقف عام في الذاكرة بلا عنوان لـ check/register/recover (تدوير شبكات IPv6 كان يكتب في D1 مع كل طلب) · /lb/session و/lb/submit بخانق ذاكرة لكل بادئة وسقف عام (كانا بلا أي حارس قبل D1) · /lb/top و/rate/all بنسخة في ذاكرة العقدة · /rate/notes بخانق قبل D1. قبله:   // v266 = فحص مختلف (workerd حقيقي + كروم حقيقي + سباقات الانتظار + حدود المنصّة): مصافحة الإغلاق تُردّ (كان كل خروج ينتظر ١٠–٦٠ث وينتهي 1006) · منبّه البلوت/سلالم لا يدور بعد ست ساعات خمول · قائمة الأصدقاء فوق ١٠٠ صف (حدّ D1) · gameOver يُبنى قبل التسجيل (مافيا/لمن العرش/موّه/الكيرم) والنتائج تُحسب قبل أول انتظار (المربعات/الحلبة/الشفرة/المطاردة) · حظرٌ لا يكتبه قبولٌ متزامن، وبلاغ واحد، و@يوزر مقبول · سقف الجسم على التدفّق وأجسام {toString} بلا 500 · اسمٌ مقصوص داخل إيموجي لا يكسر الدردشة · داقش: الاحتياط يلصق وطاولة النائمين تقف («back») · لمن العرش: إحياء الحيّ حماية وrevived في الفجر وisLeader · موّه: كشف آخر جولة يبقى حتى زرّ المضيف · الدخيل: مفتاح الكلمة المخصصة ومهلة انقطاع ١٥ث · طاريك: مهلة انقطاع وطردٌ يلصق · المربعات: ادّعاءات النتيجة · البلوت: «again» · الكيرم: الحاجز المعطَّل · /roster بلا مطرودين · توقيع الأركيد على الاسم كما كُتب · نتائج الأركيد في لوحة التحكم. قبله:   // v265 = استرجاع السبات للغرف السبع (مافيا، لمن العرش، موّه، وليمة، داقش، الدخيل، الكيرم) — ضاع برفع ١١ سبتمبر: acceptWebSocket وواجهة مقابس فوق getWebSockets، والنبضة يردّها الرَّنتايم، ومؤقّتات الأطوار على المنبّه (nextWake/onWake)، وحالة الغراب ومهلة رجوع وليمة وطابور همساتها محفوظة، والطاولة المهجورة تقف. قبله:   // v264 = الدفعة المنخفضة من فحص v261: مافيا — حدّ عدد المافيا وفعل المطرود الليلي والإعداد يُدمج · لمن العرش — إحياء ميليساندرا، انحياز بيليش بعد قتيلين، فوز كراستر يُسجَّل، الغراب يتبع المعرّف · موّه — طرد المختار وإعادة الكشف لمن يحدّث · البلوت — الغرفة الفاضية تقف والأرقام محروسة · سلالم — سقف مقاعد شاشة النهاية · الدخيل — تغيير الاسم · داقش — نهاية الطرد بلا فائز · الشفرة — تلميح من اللوحة مرفوض والمباراة تنجو من النشرة · المربعات/الحلبة — رسالة بعد النشرة · المطاردة — أسماء أحياء كأسماء خصائص الكائن · طاريك — بلاغ حساب محذوف · لوحة التحكم — الحدّ قبل المقارنة · أسماء الألعاب بلا نموذج أولي · سقف وكنس للأركيد · الإشعارات لخدمات الدفع وحدها · سقف الأصدقاء للطرفين · محارف C1 · جسم null. قبله:   // v263 = الدفعة المتوسطة من فحص v261: اكتمال المرحلة بمن تصرّف لا بعدد المدخلات (مافيا/لمن العرش/موّه) · إنسانٌ باسم بوت لا يأخذ مقعده · الدخيل: طردٌ في كل طور، والتقدّم بعد النشرة · داقش: القدر لا يضيع بطرد الموزّع والغائب لا يُوزَّع عليه · الكيرم: الغائب والمطرود لا يُنتظران ولا يفوزان · البلياردو: لا تجمّد بعد النشرة، و«ابدأ» وplace محروسان · المطرود بلا نتيجة ولا فوز بالطرد، ويخرج من دردشة الغرفة، وحدّ الدردشة للمقعد · خمّن من؟: عدّاد الخدعة لكل مشاهد · الرجوع لا يأخذ اسم غيرك (الشفرة/المطاردة/المربعات/الحلبة) · طاريك: طرد السلسلة، بنك «من ذاكرتك»، ومعرّفات مجهولة فعلًا · المربعات/الحلبة: نتيجة واحدة للجولة بحدّ أدنى · لودو: حصّة حركات لكل مقعد · الحظر لا يرفعه المحظور · السقف العام للتسجيل والاسترجاع بعد التحقق · حذف الحساب يمسح البلاغات، وبصمة بدل عنوان IP في الأركيد. قبله:   // v262 = الست العالية من فحص v261: لمن العرش — طرد المتّهم لا يجمّد الغرفة (وفرض الحسم ينقذ العالقة) · خمّن من؟ — طرد صاحب الدور وبداية الجولة على مقعدٍ غائب · الشفرة — مخرج للمضيف من مباراة قائدها غاب وشاشة نهاية بلا طريق مسدود · لودو — «مرّر» المكرّر لا يطيّر دور التالي · الدخيل — الكلمة المخصّصة لا توصل للدخيل وكاتبها لا يُختار دخيلًا · وليمة — الأصوات والهمسات تتبع المعرّف الجديد. قبله:   // v255 = سدّ سرقة مقعد بالاسم بلا jid: مقعدٌ يحمل jid (حال كل لاعبٍ طبيعيّ) كان يُستعاد بطلبٍ بلا jid — في اللعب (reclaimByName، يصيب طاريك) وفي الردهة (reclaimSeat، كل الألعاب). الحارس صار يرفض أي مقعدٍ ذي jid ما لم يطابق jid الطلب. قبله:   // v229 = «رد يا سامي» في GAME_NAMES (حتى يقبل /account/rate و/rate/notes تقييمها من بطاقة الرئيسية) — لا شيء غيره. قبله:   // v222 = وليمة: مهلة رجوع للمنقطع · كلمةٌ تحمل رقم جولتها · همسةٌ لا تضيع · استرداد المقعد بالاسم وسط اللعب · الدخول بين مباراتين · خروجٌ مقصود · سبب takeover يصل · ردٌّ فارغ من المزوّد = المحقّق الاحتياطي · مطابقة الأسماء القصيرة. قبله:   // v220 = v220 = فحص الاتصال الشامل: كنس الإقلاع (أشباح «متصل» بعد النشرة في ١١ غرفة) · وليمة تُكنس · رمز غلط لا يفتح غرفة وهمية في الشفرة/المربعات/الحلبة · رفض البلياردو/البلوت قبل قبول المقبس. قبله:   // v219 = طاريك: ٩٠ جملة كتابية جديدة · «توقّع الأغلبية» (إجابات جاهزة) أُزيل نهائيًا. قبله:   // v218 = مطاردة الحواري: صاحب الحساب يستردّ مقعده المنقطع من أي جهاز · لهجة الغرفة يختارها المضيف · الغرفة تنجو من إعادة التشغيل · المنقطع لا يعلّق الطور · رمزٌ غلط لا يفتح غرفة وهمية. قبله:   // v216 = طاريك: الكشف لا يُعاد بعد إعادة التشغيل (نقاط مرتين) · النبضة توقظ بطاقة التعريف. قبله:   // v215 = وليمة: قرائن تدريجيّة · الأغلبيّة تمسك الجاني · وضع العائلة. قبله:   // v213 = وليمة أونلاين ترسل X-Ya7-Internal لبروكسي الذكاء. قبله:   // v212 = وليمة: ٣٠ قضيّة · بريءٌ في صفِّ العدالة · قرينةٌ بالاسم · المتواطئ يعرف الجاني · إصلاح جولةٍ زائدة/طردٍ مجمِّد/تصويتٍ على النفس/محقّقٍ عالق. قبله:   // v206 = سلالم: مقعد المضيف محفوظ + رفض برسالة يصل · v207 = حذف كل ما يخص نسخة التطبيق (لها ووركر خاص)
 
 /* v264: بلا نموذج أولي (__proto__: null) — كانت كائنًا عاديًا، فـconstructor
    وtoString و__proto__ «ألعابٌ» تمرّ من كل فحص LOBBY_GAMES[x] / GAME_NAMES[x]. */
@@ -12256,6 +12261,7 @@ const LOBBY_GAMES = {
   tari:    { name: 'طاريك',         path: '/tari/' },
   redvsblue: { name: 'الحلبة', path: '/redvsblue/' },
   salalem: { name: 'سلالم وثعابين', path: '/salalem/' },
+  mazad:   { name: 'مزاد العشرين', path: '/mazad/' },
 };
 
 /* أسماء كل الألعاب للعرض، لا الأونلاين وحدها: سجل اللاعب يشمل ما لعبه
@@ -12299,7 +12305,7 @@ const GAME_NAMES = {
   redvsblue: 'الحلبة',
   salalem: 'سلالم وثعابين',
   sami: 'رد يا سامي',
-  mazad: 'مزاد العشرين',   // v269: لعبة جوال واحد — للتقييم وسجل «لعبت» فقط، بلا غرفة
+  mazad: 'مزاد العشرين',   // v269 تقييم + سجل «لعبت» · v270 أونلاين (غرفة MazadRoom)
 };
 
 /* ═══════════════════════ البلياردو (BilliardRoom) ═══════════════════════
@@ -15843,7 +15849,7 @@ async function adminPanelInner(request, env, url, body) {
         KIRM_ROOM: !!env.KIRM_ROOM, BILLIARD_ROOM: !!env.BILLIARD_ROOM,
         HUNT_ROOM: !!env.HUNT_ROOM, SQUARES_ROOM: !!env.SQUARES_ROOM,
         TARI_ROOM: !!env.TARI_ROOM, RVB_ROOM: !!env.RVB_ROOM,
-        SALALEM_ROOM: !!env.SALALEM_ROOM,
+        SALALEM_ROOM: !!env.SALALEM_ROOM, MAZAD_ROOM: !!env.MAZAD_ROOM,
         CHAT_ROOM: !!env.CHAT_ROOM, DB: !!env.DB,
         ACCOUNT_SECRET: !!env.ACCOUNT_SECRET, ADMIN_TOKEN: !!env.ADMIN_TOKEN,
         ACCOUNT_CODE_KEY: !!env.ACCOUNT_CODE_KEY,
@@ -17637,6 +17643,1876 @@ export class SalalemRoom {
 applyRoomCommon(SalalemRoom, 'salalem');
 
 /* ==== SALALEM-END ==== */
+
+/* ==== MAZAD-BEGIN — مزاد العشرين أونلاين ====
+   الخادم حَكَم كامل: يحتفظ بالحالة الكاملة (التقييمات المخفية والبذرة وعروض الجميع
+   السرّية) ولا يرسل لكل لاعب إلا نسخته المنقّحة (D20.redact). العميل يرسل نيّة فقط
+   (زايد/مرّر/ثبّت/اختر/فعّل/جاهز/صوّت) والمحرك يتحقق ويرفض — فلا يقدر عميلٌ معدَّل
+   يزايد بأكثر من رصيده ولا يقرأ عرض غيره ولا تقييم عنصر لم يُعرض.
+
+   على نمط غرفة سلالم: سبات (acceptWebSocket) + منبّه واحد (setAlarm) يجمع مهلات
+   المراحل وتنظيف الغرفة، والنبضة يردّها الرَّنتايم بلا إيقاظ. قواعد «الألعاب
+   الأونلاين» الثابتة مطبّقة من البداية:
+     • الطرد والخروج والانقطاع يمرّون على نفس مسار «من ننتظر»: بعد كل واحد منها
+       يُعاد حساب المرحلة، فطرد صاحب الدور أو آخر من لم يثبّت عرضه لا يجمّد الطاولة.
+     • بقي لاعب واحد غير خارج ⇒ تنتهي بلا فائز (الطرد ليس فوزًا).
+     • الغائب لا يجمّد أحدًا: مهلة قصيرة ثم يُنفَّذ عنه «مرّر / عرض صفر / قدرة افتراضية»،
+       وبعد انتهاء العنصر لا ننتظر «جاهز» من منقطع. ولو غاب الجميع تقف الغرفة.
+     • لا تسجيل نتائج في قاعدة البيانات إطلاقًا: الفائز يقرّره تصويت الشلة، فلا
+       استعلام D1 في أي مسار من هذي الغرفة.
+
+   المحرك (D20) والبيانات (D20_CATS) مستخرجان آليًا من ملفات اللعبة بين
+   ENGINE-BEGIN/END وDATA-BEGIN/END بأداة tools/embed-worker.py — لا تعدّلهما هنا. */
+const D20 = (function () {
+  const module = { exports: {} };
+  const self = undefined;
+/* ===== ENGINE-BEGIN — مستخرج آليًا من src/engine.js ===== */
+/* مزاد العشرين — محرك اللعبة (نقي بلا DOM)
+   نفس الملف يُستخدم في المتصفح الآن، ويُنقل لغرفة Durable Object عند الأونلاين:
+   السيرفر هو المرجع الوحيد — العميل يرسل نية (bid/pass/submit) والمحرك يتحقق ويرفض.
+   كل دالة فعل ترجع {ok:true} أو {ok:false,error} ولا تغيّر الحالة عند الرفض. */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.D20 = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const MODES = ['open', 'secret'];
+  const BUDGETS = [10, 20, 30, 50];
+  const SIZES = [6, 8, 10, 12, 15];
+  const MIN_P = 2, MAX_P = 8, NAME_MAX = 14;
+
+  const OK = { ok: true };
+  const bad = msg => ({ ok: false, error: msg });
+  const isInt = v => typeof v === 'number' && Number.isInteger(v);
+
+  function mulberry32(a) {
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function shuffle(arr, rnd) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      const t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  }
+
+  /* أسماء اللاعبين: تجريد أحرف التحكم واتجاه النص (bidi) وتقصير */
+  function sanitizeName(s) {
+    return String(s == null ? '' : s)
+      .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, '')
+      .replace(/\s+/g, ' ').trim().slice(0, NAME_MAX);
+  }
+
+  const ABILITIES = ['veto', 'coupon'];          // فيتو: يلغي العنصر · قسيمة خصم: الفائز يدفع النص
+  const AB_MODES = ['none', 'random', 'choose'];   // بدون / عشوائية / كل لاعب يختار
+  const AB_VIS = ['secret', 'shown'];              // القدرات سرّية أو ظاهرة
+
+  const AR = '٠١٢٣٤٥٦٧٨٩';
+  const arNum = x => String(x).replace(/\d/g, d => AR[d]);
+
+  function cleanNames(names) {
+    const seen = new Set();
+    return names.map((raw, i) => {
+      let nm = sanitizeName(raw) || ('لاعب ' + arNum(i + 1));
+      if (/^لاعب \d+$/.test(nm)) nm = arNum(nm);   // أسماء افتراضية قديمة محفوظة بأرقام لاتينية
+      let base = nm, k = 2;
+      while (seen.has(nm)) nm = base.slice(0, NAME_MAX - 2) + ' ' + arNum(k++);
+      seen.add(nm);
+      return nm;
+    });
+  }
+
+  function pickDeck(items, size, rnd) {
+    return shuffle(items, rnd).slice(0, size).map(x => ({ e: x.e, name: x.name, r: x.r }));
+  }
+
+  function eligible(s) {
+    const r = [];
+    for (const p of s.players) if (p.budget >= 1) r.push(p.id);
+    return r;
+  }
+
+  function create(opts) {
+    if (!opts || !Array.isArray(opts.names)) throw new Error('names');
+    if (opts.names.length < MIN_P || opts.names.length > MAX_P) throw new Error('players');
+    if (MODES.indexOf(opts.mode) < 0) throw new Error('mode');
+    if (BUDGETS.indexOf(opts.budget) < 0) throw new Error('budget');
+    if (!Array.isArray(opts.deck) || opts.deck.length < 1) throw new Error('deck');
+    const abilities = opts.abilities == null ? 'none' : opts.abilities;
+    const abVis = opts.abVis == null ? 'secret' : opts.abVis;
+    if (AB_MODES.indexOf(abilities) < 0) throw new Error('abilities');
+    if (AB_VIS.indexOf(abVis) < 0) throw new Error('abVis');
+    const names = cleanNames(opts.names);
+    const s = {
+      v: 1, mode: opts.mode, budget: opts.budget, abilities, abVis,
+      sim: opts.sim === true,   // أونلاين: كل لاعب يرسل من جواله بنفس الوقت (العروض السرّية والاختيار) بدل تمرير الجوال
+      players: names.map((name, i) => ({ id: i, name, budget: opts.budget, roster: [], card: null, used: false })),
+      seed: (Number.isInteger(opts.seed) ? opts.seed : 1) >>> 0,
+      deck: opts.deck, cur: -1, opener: -1, phase: 'idle', auction: null, last: null
+    };
+    if (abilities === 'random') {
+      // توزيع متوازن: نفس عدد كل قدرة تقريبًا، بترتيب عشوائي من بذرة اللعبة
+      const pool = [];
+      for (let i = 0; i < names.length; i++) pool.push(ABILITIES[i % ABILITIES.length]);
+      const mixed = shuffle(pool, mulberry32((s.seed ^ 0x5bd1e995) >>> 0));
+      s.players.forEach((p, i) => { p.card = mixed[i]; });
+    }
+    if (abilities === 'choose') { s.phase = 'pick'; if (!s.sim) s.pickIdx = 0; return s; }
+    advance(s);
+    return s;
+  }
+
+  function advance(s) {
+    s.cur++;
+    s.last = null;
+    const n = s.players.length;
+    if (s.cur >= s.deck.length || eligible(s).length === 0) {
+      s.phase = 'over'; s.auction = null; return;
+    }
+    const start = s.cur === 0 ? 0 : (s.opener + 1) % n;
+    for (let k = 0; k < n; k++) {
+      const i = (start + k) % n;
+      if (s.players[i].budget >= 1) { s.opener = i; break; }
+    }
+    if (s.mode === 'open') {
+      s.auction = { bid: 0, bidder: -1, turn: s.opener, passed: {}, bids: [], armed: [] };
+    } else {
+      const order = [];
+      for (let k = 0; k < n; k++) {
+        const i = (s.opener + k) % n;
+        if (s.players[i].budget >= 1) order.push(i);
+      }
+      s.auction = { order, pos: 0, bids: {}, round: 0, best: 0, tied: [], rounds: [], armed: [] };
+    }
+    s.phase = 'bid';
+  }
+
+  const MAX_REBIDS = 2;   // بعد ٣ تعادلات متتالية (الأول + إعادتين) يتحوّل المزاد إلى علني بين المتعادلين
+
+  /* القدرات تتفعّل بالسر أثناء المزايدة، وتنكشف وتُطبَّق هنا لما ينتهي المزاد */
+  function sell(s, w, price, auto, reveal) {
+    const armed = (s.auction && s.auction.armed) || [];
+    for (const p of armed) {                       // فيتو: يلغي العنصر (إلا لو الفائز هو نفسه)
+      const pl = s.players[p];
+      if (p !== w && pl.card === 'veto' && !pl.used) {
+        pl.used = true;
+        noSale(s, reveal);
+        s.last.veto = { by: p, winner: w, price };
+        return;
+      }
+    }
+    let paid = price, coupon = null;
+    const wp = s.players[w];
+    if (armed.indexOf(w) >= 0 && wp.card === 'coupon' && !wp.used) {   // قسيمة: الفائز يدفع النص (تقريب لفوق)
+      const half = Math.ceil(price / 2);
+      if (half < price) { paid = half; wp.used = true; coupon = { by: w, from: price }; }
+    }
+    wp.budget -= paid;
+    wp.roster.push({ item: s.cur, price: paid });
+    s.last = { item: s.cur, winner: w, price: paid, auto: !!auto, bids: reveal };
+    if (coupon) s.last.coupon = coupon;
+    s.phase = 'sold';
+    s.auction = null;
+  }
+
+  function noSale(s, reveal) {
+    s.last = { item: s.cur, winner: -1, price: 0, auto: false, bids: reveal };
+    s.phase = 'sold';
+    s.auction = null;
+  }
+
+  /* ───── المزاد المفتوح ───── */
+  function afterOpenAction(s, p) {
+    const a = s.auction, n = s.players.length;
+    if (a.open && a.bidder === -1) {
+      const rem = a.tied.filter(i => !a.passed[i]);
+      if (rem.length === 1) return finishOpenTie(s, rem[0], a.bid);   // الباقي الوحيد ياخذه بسعر التعادل
+    }
+    for (let k = 1; k <= n; k++) {
+      const i = (p + k) % n;
+      if (i === a.bidder) continue;
+      if (a.passed[i]) continue;
+      if (s.players[i].budget > a.bid) { a.turn = i; return OK; }
+    }
+    if (a.open) {
+      if (a.bidder !== -1) return finishOpenTie(s, a.bidder, a.bid);
+      const rem = a.tied.filter(i => !a.passed[i]);
+      return drawWinner(s, rem.length ? rem : a.tied, a.bid);        // الكل مرّر: قرعة عادلة
+    }
+    if (a.bidder === -1) noSale(s, a.bids.slice());   // الكل مرّر: ما أحد اشترى
+    else sell(s, a.bidder, a.bid, false, a.bids.slice());
+    return OK;
+  }
+
+  function finishOpenTie(s, w, price) {
+    const a = s.auction;
+    a.rounds.push(a.bids.slice());
+    const openIdx = a.rounds.length - 1;
+    finishSecret(s, w, price, false);
+    s.last.openIdx = openIdx;
+    return OK;
+  }
+
+  function isOpenStage(s) {
+    return s.phase === 'bid' && !!s.auction && (s.mode === 'open' || s.auction.open === true);
+  }
+
+  function bid(s, p, amount) {
+    if (!isOpenStage(s)) return bad('phase');
+    const a = s.auction;
+    if (!isInt(p) || p !== a.turn) return bad('turn');
+    if (!isInt(amount) || amount < 1) return bad('amount');
+    if (amount <= a.bid) return bad('low');
+    if (amount > s.players[p].budget) return bad('budget');
+    a.bid = amount; a.bidder = p; a.bids.push({ p, amount });
+    return afterOpenAction(s, p);
+  }
+
+  function pass(s, p) {
+    if (!isOpenStage(s)) return bad('phase');
+    const a = s.auction;
+    if (!isInt(p) || p !== a.turn) return bad('turn');
+    a.passed[p] = true;
+    return afterOpenAction(s, p);
+  }
+
+  /* ───── المزاد السرّي ───── */
+  function submit(s, p, amount) {
+    if (s.phase !== 'bid' || s.mode !== 'secret' || s.auction.open) return bad('phase');
+    const a = s.auction;
+    if (s.sim) {
+      if (!isInt(p) || a.order.indexOf(p) < 0) return bad('turn');
+      if (a.bids[p] != null) return bad('done');          // العرض السرّي يُثبَّت مرة وحدة
+    } else if (!isInt(p) || p !== a.order[a.pos]) return bad('turn');
+    if (!isInt(amount) || amount < 0) return bad('amount');
+    if (amount > s.players[p].budget) return bad('budget');
+    if (a.round > 0 && amount !== 0 && amount <= a.best) return bad('low');   // في إعادة المزايدة: تزيد أو تبقى (٠)
+    a.bids[p] = amount;
+    if (s.sim) {                                           // تنكشف العروض لما يثبّت آخر واحد
+      if (a.order.every(i => a.bids[i] != null)) resolveRound(s);
+      return OK;
+    }
+    a.pos++;
+    if (a.pos >= a.order.length) resolveRound(s);
+    return OK;
+  }
+
+  function finishSecret(s, w, price, drawn) {
+    const rounds = s.auction.rounds;
+    const reveal = rounds[0];
+    if (w < 0) noSale(s, reveal); else sell(s, w, price, false, reveal);
+    s.last.rounds = rounds;
+    s.last.drawn = !!drawn;
+  }
+
+  /* تعادل لم يُحسم بالمزايدة: سحب عادل ومحدّد مسبقًا من بذرة اللعبة */
+  function drawWinner(s, tied, price) {
+    const r = mulberry32((s.seed + s.cur * 7919 + price * 104729) >>> 0)();
+    finishSecret(s, tied[Math.floor(r * tied.length)], price, true);
+  }
+
+  function startRebid(s, price, tied) {
+    const a = s.auction;
+    const order = tied.filter(i => s.players[i].budget > price);
+    if (order.length === 0) return drawWinner(s, tied, price);
+    if (a.round >= MAX_REBIDS) return startOpenTie(s, price, tied);
+    a.round++; a.best = price; a.tied = tied; a.order = order; a.pos = 0; a.bids = {};
+  }
+
+  /* بعد ٣ تعادلات: مزاد علني بين المتعادلين فقط، ويرجع السرّي مع العنصر اللي بعده */
+  function startOpenTie(s, price, tied) {
+    const a = s.auction, passed = {};
+    s.players.forEach((_, i) => { if (tied.indexOf(i) < 0) passed[i] = true; });
+    a.round++; a.best = price; a.tied = tied; a.order = tied.slice(); a.pos = 0; a.bids = [];
+    a.open = true; a.bid = price; a.bidder = -1; a.passed = passed;
+    const first = tied.find(i => s.players[i].budget > price);
+    a.turn = first;
+  }
+
+  function resolveRound(s) {
+    const a = s.auction;
+    const reveal = a.order.map(i => ({ p: i, amount: a.bids[i] }));
+    reveal.sort((x, y) => y.amount - x.amount);
+    a.rounds.push(reveal);
+    let top = 0;
+    for (const i of a.order) if (a.bids[i] > a.best && a.bids[i] > top) top = a.bids[i];
+    if (a.round === 0) {
+      if (top === 0) return finishSecret(s, -1, 0, false);       // الكل صفر
+    } else if (top === 0) {
+      return drawWinner(s, a.tied, a.best);                       // ما أحد زاد: السحب بين المتعادلين
+    }
+    const tied = a.order.filter(i => a.bids[i] === top);
+    if (tied.length === 1) return finishSecret(s, tied[0], top, false);
+    startRebid(s, top, tied);                                      // تعادل: إعادة مزايدة بين المتعادلين فقط
+  }
+
+  /* ───── القدرات ───── */
+  function pick(s, p, key) {
+    if (s.phase !== 'pick') return bad('phase');
+    if (s.sim) {
+      if (!isInt(p) || p < 0 || p >= s.players.length) return bad('turn');
+      if (s.players[p].card) return bad('done');
+      if (ABILITIES.indexOf(key) < 0) return bad('card');
+      s.players[p].card = key;
+      if (s.players.every(x => x.card)) advance(s);
+      return OK;
+    }
+    if (!isInt(p) || p !== s.pickIdx) return bad('turn');
+    if (ABILITIES.indexOf(key) < 0) return bad('card');
+    s.players[p].card = key;
+    s.pickIdx++;
+    if (s.pickIdx >= s.players.length) { delete s.pickIdx; advance(s); }
+    return OK;
+  }
+
+  function arm(s, p, on) {
+    if (s.phase !== 'bid' || !s.auction) return bad('phase');
+    const a = s.auction;
+    if (s.sim && s.mode === 'secret' && !a.open) {
+      // أونلاين: أي مزايد لم يثبّت عرضه بعد يفعّل قدرته (الترتيب = ترتيب وصول التفعيل)
+      if (!isInt(p) || a.order.indexOf(p) < 0 || a.bids[p] != null) return bad('turn');
+    } else {
+      const cur = (s.mode === 'secret' && !a.open) ? a.order[a.pos] : a.turn;
+      if (!isInt(p) || p !== cur) return bad('turn');
+    }
+    if (typeof on !== 'boolean') return bad('arg');
+    const pl = s.players[p];
+    if (!pl.card || pl.used) return bad('card');
+    const k = a.armed.indexOf(p);
+    if (on && k < 0) a.armed.push(p);
+    if (!on && k >= 0) a.armed.splice(k, 1);
+    return OK;
+  }
+
+  function next(s) {
+    if (s.phase !== 'sold') return bad('phase');
+    advance(s);
+    return OK;
+  }
+
+  function isLastStep(s) {
+    return s.cur + 1 >= s.deck.length || eligible(s).length === 0;
+  }
+
+  /* ───── النتيجة (حكم اللعبة) ───── */
+  function result(s) {
+    const rows = s.players.map(p => {
+      let total = 0, spent = 0;
+      for (const r of p.roster) { total += s.deck[r.item].r; spent += r.price; }
+      return { id: p.id, name: p.name, total, count: p.roster.length, spent, left: p.budget };
+    });
+    rows.sort((a, b) => b.total - a.total || b.count - a.count || b.left - a.left || a.id - b.id);
+    rows.forEach((r, i) => {
+      const prev = rows[i - 1];
+      r.rank = (prev && prev.total === r.total && prev.count === r.count && prev.left === r.left) ? prev.rank : i + 1;
+    });
+    return rows;
+  }
+
+  /* من ننتظر منه فعلًا الآن (للسيرفر: المؤقّتات والتشغيل التلقائي · وللعميل: «ننتظر فلان») */
+  function awaiting(s) {
+    if (s.phase === 'pick') {
+      if (s.sim) return s.players.filter(p => !p.card).map(p => p.id);
+      return [s.pickIdx];
+    }
+    if (s.phase !== 'bid' || !s.auction) return [];
+    const a = s.auction;
+    if (isOpenStage(s)) return [a.turn];
+    if (s.sim) return a.order.filter(i => a.bids[i] == null);
+    return [a.order[a.pos]];
+  }
+
+  /* نسخة آمنة للعرض على لاعب معيّن (للأونلاين): لا تسرّب التقييمات ولا العناصر القادمة ولا عروض الآخرين السرّية */
+  function redact(s, viewer) {
+    const c = JSON.parse(JSON.stringify(s));
+    delete c.seed;   // البذرة تحدّد القرعة وتوزيع القدرات: من عرفها حسب النتيجة قبل وقوعها
+    const submitted = (s.sim && s.auction && s.auction.bids && !Array.isArray(s.auction.bids) && !s.auction.open)
+      ? Object.keys(s.auction.bids).map(Number).sort((x, y) => x - y) : null;
+    if (c.phase !== 'over') {
+      c.deck = c.deck.map((d, i) => (i <= c.cur ? { e: d.e, name: d.name } : null));
+    }
+    c.players.forEach(pl => { if (pl.id !== viewer && c.abVis === 'secret' && !pl.used) pl.card = null; });
+    if (c.auction && Array.isArray(c.auction.armed)) c.auction.armed = c.auction.armed.filter(x => x === viewer);
+    if (c.auction && c.auction.bids && !Array.isArray(c.auction.bids)) {
+      const mine = {};
+      if (c.auction.bids[viewer] != null) mine[viewer] = c.auction.bids[viewer];
+      c.auction.bids = mine;
+    }
+    if (submitted) c.auction.submitted = submitted;   // مين ثبّت عرضه (بلا مبالغ)
+    return c;
+  }
+
+  return {
+    MODES, BUDGETS, SIZES, MIN_P, MAX_P, NAME_MAX,
+    mulberry32, shuffle, sanitizeName, pickDeck,
+    ABILITIES, AB_MODES, AB_VIS,
+    create, bid, pass, submit, pick, arm, next, isLastStep, result, redact, eligible, awaiting, isOpenStage
+  };
+});
+/* ===== ENGINE-END ===== */
+  return module.exports;
+})();
+const D20_CATS = (function () {
+  const module = { exports: {} };
+  const self = undefined;
+/* ===== DATA-BEGIN — مستخرج آليًا من src/data.js ===== */
+/* مزاد العشرين — محتوى الفئات
+   كل عنصر: إيموجي|الاسم|التقييم المخفي (١–١٠)
+   التقييم يظهر فقط في النتيجة النهائية (حكم اللعبة) */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.D20_CATS = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+  'use strict';
+
+  const RAW = [
+    {
+      id: 'burger', e: '🍔', title: 'ابنِ أقوى برجر', tag: 'وش تحط في برجرك؟',
+      items: `
+🧀|جبنة شيدر ذايبة|9
+🥓|بيكون مقرمش|9
+🥩|قطعة لحم إضافية (دبل)|9
+🫙|صوص البرجر الخاص|9
+🧅|بصل مكرمل|8
+🧀|جبنة موزاريلا ممطوطة|7
+🧀|جبنة سويسرية|7
+🍳|بيض عيون|7
+🍄|مشروم سوتيه|7
+🧅|حلقات بصل مقرمشة|7
+🍞|خبز بريوش بالزبدة|7
+🔥|صوص باربكيو|7
+🧄|صوص ثوم|7
+🍟|بطاطس جانبية|7
+🥬|خس|6
+🍅|طماطم|6
+🥒|مخلل|6
+🌶️|هالبينو حار|6
+🧅|بصل نيء|5
+🧀|جبنة شرايح أمريكية|6
+🍅|كاتشب|4
+🫙|مايونيز|4
+🫙|خردل|4
+🧂|ملح وفلفل|3`
+    },
+    {
+      id: 'shawarma', e: '🌯', title: 'ابنِ أقوى شاورما', tag: 'وش تحط في ساندويتش الشاورما؟',
+      items: `
+🍟|بطاطس مقلية داخل الساندويتش|9
+🧄|صوص ثوم|9
+🍗|دجاج إضافي|9
+🥩|لحم إضافي|9
+🥒|مخلل|8
+🌶️|شطة حارة|8
+🧀|جبنة شيدر ذايبة|8
+🧀|جبنة موزاريلا|8
+🥬|خس|7
+🫙|مايونيز|7
+🥗|كول سلو (ملفوف)|7
+🥣|طحينة|7
+🍟|بطاطس جانبية|7
+🥒|خيار طازج|6
+🫓|خبز صاج إضافي|6
+🥖|خبز صامولي|6
+🍄|مشروم|6
+🍅|كاتشب|6
+🔥|صوص باربكيو|6
+🍋|ليمون|5
+🥤|بيبسي بارد|5
+🌿|بقدونس|4`
+    },
+    {
+      id: 'series', e: '📺', title: 'مسلسلات عالمية', tag: 'مين يطلع عنده أقوى قائمة؟',
+      items: `
+📺|بريزون بريك|10
+📺|بريكنج باد|10
+📺|فريندز|9
+📺|لا كاسا دي بابيل|8
+📺|بيكي بلايندرز|9
+📺|سترينجر ثينجز|8
+📺|ذا أوفيس|8
+📺|دارك|9
+📺|سكويد جيم|7
+📺|شيرلوك|9
+📺|تشرنوبل|10
+📺|ذا لاست أوف أس|9
+📺|بيتر كول سول|9
+📺|فايكينجز|8
+📺|لوست|8
+📺|ذا بويز|8
+📺|وينزداي|6
+📺|ذا كراون|7
+📺|دكتور هاوس|9
+📺|ذا واكينج ديد|7
+📺|ذا مانداليوريان|7
+📺|أوزارك|8
+📺|هاوس أوف كاردز|8
+📺|جوسيب جيرل|3
+📺|ريفرديل|3`
+    },
+    {
+      id: 'arab_series', e: '🎭', title: 'مسلسلات عربية وخليجية', tag: 'ذكريات رمضان على المحك',
+      items: `
+🎭|طاش ما طاش|10
+🎭|العاصوف|9
+🎭|سيلفي|8
+🎭|شباب البومب|7
+🎭|باب الحارة|9
+🎭|الهيبة|8
+🎭|ضيعة ضايعة|9
+🎭|الزير سالم|9
+🎭|التغريبة الفلسطينية|10
+🎭|ليالي الحلمية|10
+🎭|رأفت الهجان|10
+🎭|لن أعيش في جلباب أبي|9
+🎭|أرابيسك|8
+🎭|الاختيار|7
+🎭|صقر قريش|8
+🎭|ممالك النار|7
+🎭|دموع في عيون وقحة|9
+🎭|بقعة ضوء|8
+🎭|مرايا|9
+🎭|عائلة الحاج متولي|8
+🎭|الملك فاروق|8
+🎭|الفتوة|7`
+    },
+    {
+      id: 'football', e: '⚽', title: 'نجوم كرة القدم', tag: 'ابنِ تشكيلتك الذهبية',
+      items: `
+⚽|ليونيل ميسي|10
+⚽|كريستيانو رونالدو|10
+⚽|دييغو مارادونا|10
+⚽|بيليه|10
+⚽|زين الدين زيدان|9
+⚽|رونالدينيو|9
+⚽|أندريس إنييستا|9
+⚽|تشافي|9
+⚽|لوكا مودريتش|9
+⚽|كريم بنزيما|9
+⚽|كيليان مبابي|9
+⚽|إيرلينغ هالاند|9
+⚽|نيمار|8
+⚽|محمد صلاح|9
+⚽|كيفين دي بروين|9
+⚽|ماجد عبدالله|8
+⚽|سامي الجابر|7
+⚽|ياسر القحطاني|7
+⚽|سعيد العويران|8
+⚽|سالم الدوسري|8
+⚽|محمد نور|7
+⚽|تيري هنري|8`
+    },
+    {
+      id: 'cars', e: '🚗', title: 'كراج الأحلام', tag: 'وش تركّب في كراجك؟',
+      items: `
+🚙|تويوتا لاند كروزر|9
+🚙|لكزس LX|8
+🚙|مرسيدس G63|9
+🚙|رينج روفر|8
+🏎️|فيراري|10
+🏎️|لامبورغيني|10
+🏎️|بوغاتي|10
+🏎️|بورش ٩١١|9
+🚗|تويوتا كامري|6
+🛻|تويوتا هايلكس|8
+🚗|دودج تشارجر|7
+🏎️|فورد موستنج|8
+🏎️|نيسان GTR|9
+🚘|رولز رويس|10
+🚘|بنتلي|9
+🚙|جيب رانجلر|7
+🏎️|كورفيت|8
+🏎️|مكلارين|10
+🚘|بي إم دبليو M5|9
+🚗|هوندا أكورد|5
+🚗|هيونداي سوناتا|5
+🚙|جمس يوكن|8
+🚗|تويوتا يارس|3`
+    },
+    {
+      id: 'villa', e: '🏡', title: 'فيلا الأحلام', tag: 'جهّز بيت العمر',
+      items: `
+🏊|مسبح داخلي|8
+🎬|سينما منزلية|8
+🎾|ملعب بادل|7
+🏋️|جيم مجهز|7
+🛋️|مجلس رجال فخم|8
+🍖|مطبخ خارجي|7
+🌳|حديقة واسعة|7
+🎮|غرفة ألعاب|8
+🛗|مصعد|6
+🌇|سطح مع جلسة|7
+🚘|كراج ٦ سيارات|8
+🧖|ساونا وجاكوزي|8
+📚|مكتبة|5
+🐓|مزرعة صغيرة|6
+🏞️|بحيرة صناعية|7
+⚽|ملعب كرة مصغر|8
+🤖|نظام بيت ذكي|8
+☀️|ألواح شمسية|6
+🕌|مصلى|6
+🧗|جدار تسلق|5
+🏕️|خيمة بر داخل الحوش|7
+🛟|مسبح أطفال|4`
+    },
+    {
+      id: 'games', e: '🎮', title: 'ألعاب الفيديو', tag: 'مكتبتك الذهبية',
+      items: `
+🎮|ماينكرافت|10
+🎮|جي تي أي ٥|10
+🎮|إي إيه إف سي (فيفا)|8
+🎮|فورتنايت|8
+🎮|ببجي|7
+🎮|كول أوف ديوتي|8
+🎮|روبلوكس|8
+🎮|ذا ويتشر ٣|10
+🎮|ريد ديد ريدمبشن ٢|10
+🎮|إلدن رينج|9
+🎮|زيلدا: بريث أوف ذا وايلد|10
+🎮|ماريو كارت|8
+🎮|جود أوف وور|9
+🎮|ذا لاست أوف أس|9
+🎮|أمونج أس|6
+🎮|كلاش أوف كلانس|7
+🎮|براول ستارز|7
+🎮|صب واي سيرفرز|5
+🎮|فلابي بيرد|2
+🎮|روكيت ليج|8
+🎮|أوفرواتش|7
+🎮|ذا سيمز|7`
+    },
+    {
+      id: 'food', e: '🍖', title: 'سفرة سعودية وعربية', tag: 'ابنِ أقوى سفرة',
+      items: `
+🍛|كبسة لحم|10
+🍖|مندي|10
+🍖|مظبي|9
+🍖|حنيذ|9
+🥣|جريش|8
+🍲|سليق|9
+🥘|مرقوق|8
+🍖|مفطح|10
+🍢|كباب|7
+🌯|شاورما|8
+🧆|فلافل|5
+🥣|عصيدة|6
+🫓|مطبق|8
+🍛|مضغوط|9
+🥘|معصوب|7
+🥟|سمبوسة|7
+🫓|قرصان|8
+🍛|برياني|8
+🥘|كبدة|7
+🫘|فول|5
+🌴|تمر سكري|7
+🍩|لقيمات|7
+🥗|سلطة خضراء|3`
+    },
+    {
+      id: 'majlis', e: '☕', title: 'مجلس الضيافة', tag: 'جهّز المجلس كأنك شيخ',
+      items: `
+☕|قهوة سعودية|9
+🫖|دلة نحاس|7
+🌴|تمر سكري|9
+🌴|تمر عجوة|9
+🪔|بخور عود|9
+🧴|دهن عود|8
+🍵|فناجين منقوشة|6
+🍵|شاهي أحمر|6
+🛋️|مجلس عربي أرضي|8
+🛋️|وسائد مريحة|7
+🔥|مدفأة حطب|8
+🍬|حلاوة|6
+🍩|لقيمات|7
+🥛|حليب إبل|7
+🍇|صحن فواكه|5
+🧶|سجادة فارسية|7
+🐑|خروف للذبيحة|10
+☕|ترمس قهوة|5
+🥤|مشروب غازي|3`
+    },
+    {
+      id: 'travel', e: '✈️', title: 'وجهات السفر', tag: 'خطة الإجازة الكبرى',
+      items: `
+🗼|باريس|9
+🗾|طوكيو|10
+🏝️|المالديف|9
+🕌|إسطنبول|8
+🏙️|دبي|8
+🎡|لندن|8
+🏔️|سويسرا|9
+🔺|القاهرة|7
+⛰️|أبها|8
+🪨|العلا|9
+🌴|جدة|7
+🌺|بالي|8
+🏙️|كوالالمبور|7
+🌆|باكو|6
+🗽|نيويورك|9
+🏛️|روما|9
+🏖️|برشلونة|8
+🕌|مراكش|7
+🏙️|سيول|8
+🌃|سنغافورة|8
+🏖️|شرم الشيخ|7
+🌲|تبليسي|6`
+    },
+    {
+      id: 'movies', e: '🎬', title: 'أفلام', tag: 'ليلة سينما للتاريخ',
+      items: `
+🎬|إنسبشن|9
+🎬|إنترستيلر|10
+🎬|فارس الظلام|10
+🎬|جوكر|9
+🎬|المصارع|9
+🎬|تايتانيك|8
+🎬|فورست غامب|9
+🎬|العراب|10
+🎬|الخلاص من شاوشانك|10
+🎬|نادي القتال|9
+🎬|طفيلي|8
+🎬|المنتقمون: نهاية اللعبة|8
+🎬|أفاتار|7
+🎬|الأسد الملك|9
+🎬|توي ستوري|8
+🎬|ماتريكس|9
+🎬|ذا بريستيج|8
+🎬|هاري بوتر|8
+🎬|سيد الخواتم: عودة الملك|10
+🎬|إسماعيلية رايح جاي|8
+🎬|اللمبي|7`
+    },
+    {
+      id: 'anime', e: '🎌', title: 'أنمي وكرتون', tag: 'طفولتك على المحك',
+      items: `
+🎌|ناروتو|9
+🎌|ون بيس|10
+🎌|هجوم العمالقة|10
+🎌|دفتر الموت|9
+🎌|دراغون بول|9
+🎌|قاتل الشياطين|8
+🎌|جوجوتسو كايسن|8
+🎌|الكيميائي المعدني|10
+🎌|هنتر × هنتر|10
+🎌|ون بانش مان|8
+🎌|بليتش|7
+🎌|هايكيو|8
+🎌|المحقق كونان|9
+🎌|كابتن ماجد|9
+🎌|جراندايزر|9
+🎌|عدنان ولينا|9
+🎌|بوكيمون|9
+🎌|ديجيمون|7
+🎌|سلام دانك|8
+🎌|دورايمون|8
+🐭|توم وجيري|8
+🧽|سبونج بوب|7
+🎌|نينجا هتوري|6
+📺|تيليتابيز|2`
+    },
+    {
+      id: 'singers', e: '🎤', title: 'قائمة التشغيل', tag: 'ابنِ بلاي ليست العمر',
+      items: `
+🎤|محمد عبده|10
+🎤|أم كلثوم|10
+🎤|فيروز|10
+🎤|عبدالحليم حافظ|10
+🎤|راشد الماجد|9
+🎤|ماجد المهندس|8
+🎤|عبدالمجيد عبدالله|9
+🎤|رابح صقر|8
+🎤|عمرو دياب|9
+🎤|أصالة|8
+🎤|حسين الجسمي|8
+🎤|كاظم الساهر|10
+🎤|وردة|9
+🎤|محمد منير|9
+🎤|مايكل جاكسون|10
+🎤|إمينيم|9
+🎤|دريك|8
+🎤|ذا ويكند|8
+🎤|تايلور سويفت|8
+🎤|كوين|10
+🎤|بيونسيه|8
+🎤|نانسي عجرم|7`
+    },
+    {
+      id: 'kashta', e: '🏕️', title: 'كشتة البر', tag: 'جهّز الطلعة',
+      items: `
+⛺|خيمة كبيرة|8
+🪵|حطب|7
+☕|دلة قهوة|8
+🔥|شواية فحم|8
+🏍️|دباب رباعي|9
+🚙|سيارة دفع رباعي|9
+🔌|مولد كهرباء|7
+🔊|سماعة بلوتوث|5
+📡|ستارلنك|8
+🧊|ثلاجة بر|7
+🪑|بساط وكراسي|6
+🍖|خروف مشوي|10
+🥔|بطاطس بالفحم|6
+🍵|شاي بالنعناع|7
+🔦|كشاف قوي|5
+🔭|تلسكوب نجوم|7
+🎣|عدة صيد|6
+🧥|بشت|5
+🚁|درون كاميرا|7
+🩹|حقيبة إسعافات|6
+🌀|مروحة بطارية|5`
+    },
+    {
+      id: 'gadgets', e: '📱', title: 'أجهزتك', tag: 'مين يتسلّح بأقوى أجهزة؟',
+      items: `
+📱|آيفون برو ماكس|9
+📱|جالكسي ألترا|9
+🎮|بلايستيشن ٥|9
+💻|ماك بوك برو|9
+🎧|آيربودز برو|8
+⌚|ساعة آبل|7
+📱|آيباد برو|8
+🎮|نينتندو سويتش|8
+🖥️|كمبيوتر ألعاب RTX|10
+📷|كاميرا سوني|8
+🚁|درون DJI|8
+🥽|نظارة واقع افتراضي|7
+💻|لاب توب لينوفو|7
+📺|شاشة ٤K ٥٥ بوصة|7
+❄️|مكيف ذكي|5
+🧹|روبوت مكنسة|6
+⌨️|كيبورد ميكانيكي|5
+🖱️|ماوس قيمنق|4
+🔌|شاحن سريع|3`
+    },
+    {
+      id: 'nba', e: '🏀', title: 'نجوم السلة', tag: 'ابنِ الخمسة الأوائل',
+      items: `
+🏀|مايكل جوردان|10
+🏀|ليبرون جيمس|10
+🏀|كوبي براينت|10
+🏀|ستيفن كاري|9
+🏀|كيفن دورانت|9
+🏀|شاكيل أونيل|9
+🏀|ماجيك جونسون|9
+🏀|لاري بيرد|9
+🏀|تيم دانكان|8
+🏀|ديرك نوفيتسكي|8
+🏀|يانيس أنتيتوكونمبو|9
+🏀|نيكولا يوكيتش|9
+🏀|لوكا دونتشيتش|8
+🏀|كاواي ليونارد|8
+🏀|ألين آيفرسون|8
+🏀|كريس بول|7
+🏀|جيمس هاردن|8
+🏀|كيري إيرفينغ|8
+🏀|دوايت هاورد|7
+🏀|ديريك روز|7
+🏀|هاكيم أولاجوان|8`
+    },
+    {
+      id: 'heroes', e: '🦸', title: 'أبطال خارقون', tag: 'فريق المنتقمين الخاص بك',
+      items: `
+🕷️|سبايدرمان|9
+🦇|باتمان|10
+🦾|أيرون مان|9
+🦸‍♂️|سوبرمان|9
+🔨|ثور|8
+💚|هالك|8
+🛡️|كابتن أمريكا|7
+🐆|بلاك بانثر|8
+⚡|فلاش|7
+🦸‍♀️|ووندر وومان|8
+🔮|دكتور سترينج|8
+🐺|ولفرين|9
+⚔️|ديدبول|8
+🔱|أكوامان|5
+🏹|هوك آي|4
+🐜|أنت مان|4
+🏮|جرين لانترن|4
+🕸️|فينوم|7
+🕷️|بلاك ويدو|6
+🌟|كابتن مارفل|8
+🚀|ستار لورد|7`
+    },
+    {
+      id: 'powers', e: '⚡', title: 'قوى خارقة', tag: 'اختر قواك بذكاء',
+      items: `
+🕊️|الطيران|9
+👻|الخفاء|8
+⚡|السرعة الخارقة|9
+🧠|قراءة الأفكار|9
+⏸️|إيقاف الزمن|10
+⏳|السفر عبر الزمن|10
+💪|القوة الخارقة|8
+🔥|التحكم بالنار|7
+🌊|التحكم بالماء|6
+✨|التنقل الآني|10
+🩹|الشفاء السريع|8
+🍽️|عدم الشعور بالجوع|5
+🗣️|التحدث بكل اللغات|7
+🌌|التحكم بالجاذبية|9
+🔮|رؤية المستقبل|9
+👥|نسخ نفسك|8
+⛈️|التحكم بالطقس|8
+📏|التكبير والتصغير|7
+🛡️|مناعة من كل شي|9
+😴|النوم في أي مكان|3
+🐦|الكلام مع الطيور|4`
+    },
+    {
+      id: 'jobs', e: '💼', title: 'وظائف الأحلام', tag: 'ابنِ مستقبلك',
+      items: `
+✈️|طيار|8
+🫀|جراح قلب|9
+💻|مبرمج ألعاب|9
+⚽|لاعب كرة محترف|10
+📸|مصور سفر|8
+🚀|رائد فضاء|10
+🏢|رجل أعمال ناجح|9
+📹|يوتيوبر مشهور|8
+🛩️|مهندس طيران|8
+⚖️|محامي|7
+📚|معلم|6
+👨‍🍳|طباخ مشهور|7
+👗|مصمم أزياء|6
+🦷|طبيب أسنان|7
+📊|محلل بيانات|6
+🏘️|مستثمر عقاري|9
+🎖️|ضابط|8
+🌲|حارس غابات|6
+🎤|مغني مشهور|9
+🏋️|مدرب شخصي|5`
+    },
+    {
+      id: 'sweets', e: '🍰', title: 'طاولة الحلويات', tag: 'مين أحلى سكّر؟',
+      items: `
+🥧|كنافة نابلسية|10
+🍩|لقيمات|8
+🥧|أم علي|9
+🥮|بقلاوة|8
+🍨|آيس كريم|7
+🍰|تشيز كيك لوتس|9
+🍩|دونات|6
+🥐|كروسان لوز|8
+🍮|مهلبية|6
+🍰|بسبوسة|7
+🎂|كيك شوكولاتة|8
+🍰|تيراميسو|9
+🥞|كريب نوتيلا|8
+🧇|وافل|7
+🍮|حلاوة الجبن|8
+🍪|كليجا|8
+🍪|بسكويت سادة|3
+🍮|هلام|3
+🍚|رز بحليب|6
+🍫|شوكولاتة بلجيكية|9
+🍯|حلاوة طحينية|5
+🍬|سكر ملون|3
+🍯|عسل سدر|9
+🧁|كب كيك|6`
+    },
+    {
+      id: 'drinks', e: '☕', title: 'مقاهي', tag: 'مين يطلع عنده أقوى مقاهي؟',
+      items: `
+☕|بارنز|9
+☕|هاف مليون|9
+🐪|خطوة الجمل|8
+☕|برو ٩٢|8
+🧪|إكسير البُن|7
+☕|كيان|8
+🩺|دكتور كيف|7
+☕|بون كافيه|6
+🔬|كافيين لاب|6
+🌳|أشجار كافيه|6
+🌴|كافيه باتيل|7
+🧜|ستاربكس|9
+🍩|دانكن|8
+🍁|تيم هورتنز|8
+☕|كوستا كوفي|7
+☕|أرابيكا|8
+🍰|إل آند إن|7`
+    },
+    {
+      id: 'pets', e: '🐾', title: 'حيوانات أليفة', tag: 'ابنِ حديقتك الخاصة',
+      items: `
+🦅|صقر|10
+🐎|حصان عربي أصيل|10
+🐈|قطة شيرازي|8
+🐪|جمل سباق|9
+🦜|ببغاء|7
+🐕|كلب حراسة|8
+🐇|أرنب|6
+🐢|سلحفاة|5
+🐹|هامستر|4
+🐠|سمكة زينة|4
+🕊️|حمامة زاجل|6
+🦌|غزال|8
+🐆|فهد|9
+🦊|ثعلب|7
+🐔|دجاجة|3
+🐍|ثعبان|4
+🕷️|عنكبوت|2
+🦎|حرباء|4
+🐒|قرد|5`
+    },
+    {
+      id: 'ksa', e: '🇸🇦', title: 'جولة في المملكة', tag: 'سياحة داخلية بميزانية',
+      items: `
+🪨|العلا|10
+⛰️|أبها|9
+🏘️|الدرعية|9
+🕌|جدة البلد|9
+🏙️|نيوم|8
+🌄|الطائف|8
+🏝️|جزر فرسان|9
+⛰️|جبل فيفاء|9
+🌿|وادي لجب|9
+🌲|الباحة|8
+🏜️|تبوك|7
+🏞️|حائل|8
+☁️|ضباب عسير|8
+🏖️|ينبع|7
+🌊|كورنيش الخبر|7
+🎡|بوليفارد الرياض|8
+🏙️|الدمام|6
+🏞️|نجران|7
+🏜️|الربع الخالي|8
+🏔️|جبل اللوز|8
+🌊|كورنيش جدة|9
+🌴|مهرجان التمور بالقصيم|7
+🌊|كورنيش جازان|8`
+    },
+    {
+      id: 'apps', e: '📲', title: 'تطبيقات جوالك', tag: 'أقوى الشاشة الرئيسية',
+      items: `
+💬|واتساب|9
+🎵|تيك توك|8
+👻|سناب شات|9
+▶️|يوتيوب|10
+📷|إنستقرام|8
+✖️|إكس|7
+🎬|نتفلكس|9
+🎧|سبوتيفاي|8
+🤖|مساعد ذكاء اصطناعي|9
+🗺️|خرائط جوجل|9
+🏛️|أبشر|8
+🚕|أوبر|7
+🍔|هنقرستيشن|7
+✈️|تلغرام|7
+🎙️|ديسكورد|7
+🖼️|تعديل الصور|6
+🍬|كاندي كراش|2`
+    },
+    {
+      id: 'brands', e: '👟', title: 'دولابك', tag: 'ابنِ ستايلك',
+      items: `
+👟|نايكي|8
+👟|أديداس|8
+👜|غوتشي|9
+👜|لوي فيتون|9
+👟|بوما|6
+🧥|أرماني|8
+⌚|ساعة رولكس|10
+⌚|ساعة كاسيو|4
+🥼|ثوب أبيض فاخر|9
+🧥|بشت ملكي|9
+🧣|شماغ أحمر أصلي|8
+🧣|غترة|7
+🧴|عطر ديور|8
+🕶️|نظارة ريبان|7
+👟|حذاء جوردن|9
+🧥|جاكيت جلد|7
+👕|قميص بولو|6
+👖|جينز ليفايز|6
+👕|فنيلة المنتخب|7
+👕|فنيلة النادي المفضل|8`
+    },
+    {
+      id: 'clubs', e: '🏟️', title: 'أندية الكرة', tag: 'ابنِ دوريك الخاص',
+      items: `
+🤍|ريال مدريد|10
+💙❤️|برشلونة|10
+💙🤍|مانشستر سيتي|9
+❤️|ليفربول|9
+❤️🤍|بايرن ميونخ|9
+💙❤️|باريس سان جيرمان|8
+💙🤍|الهلال|9
+💛💙|النصر|8
+💛🖤|الاتحاد|8
+💚🤍|الأهلي السعودي|8
+❤️🖤|ميلان|8
+🖤🤍|يوفنتوس|8
+💙|تشيلسي|8
+❤️🤍|آرسنال|8
+❤️|مانشستر يونايتد|8
+❤️🤍|أتلتيكو مدريد|8
+❤️🤍|الأهلي المصري|8
+🤍❤️|الزمالك|7
+🤍🖤|الشباب|6`
+    },
+    {
+      id: 'pizza', e: '🍕', title: 'بيتزتك', tag: 'وش تحط على بيتزاك؟',
+      items: `
+🍕|ببروني|9
+🧀|موزاريلا|9
+🍄|مشروم|6
+🫒|زيتون أسود|5
+🫑|فلفل رومي|5
+🧅|بصل|4
+🌽|ذرة|4
+🍗|دجاج باربكيو|8
+🥩|لحم مفروم|7
+🌭|سجق|7
+🍍|أناناس|3
+🫙|رانش|8
+🍞|عجينة رقيقة|6
+🧀|حافة محشية جبنة|9
+🥓|سلامي|7
+🧀|بارميزان|8
+🧄|ثوم|5
+🌿|ريحان طازج|6
+🐟|تونة|3
+🍅|صوص طماطم إيطالي|8
+🌶️|هالبينو|7
+🧀|جبنة زرقاء|5`
+    },
+    {
+      id: 'wedding', e: '💍', title: 'ليلة العمر', tag: 'جهّز حفل الزواج',
+      items: `
+🏛️|قاعة فخمة|9
+🎤|مطرب مشهور|10
+🥁|فرقة شعبية|8
+🎥|تصوير سينمائي|8
+🚁|درون تصوير|6
+🍽️|بوفيه عالمي|9
+☕|ضيافة تمر وقهوة|8
+🌹|كوشة فخمة|8
+🚘|زفة سيارات فاخرة|8
+🎆|ألعاب نارية|8
+🪔|بخور وعود|7
+🎂|تورتة ٥ طوابق|8
+💐|ورد طبيعي|7
+🎧|دي جي|6
+📺|شاشة عملاقة|6
+💌|بطاقة دعوة فاخرة|6
+🎁|هدايا للضيوف|7
+🐑|خروف|9`
+    },
+    {
+      id: 'island', e: '🏝️', title: 'جزيرة معزولة', tag: 'وش تاخذ معك؟',
+      items: `
+🛶|قارب نجاة|9
+🎣|صنارة صيد|8
+🔥|ولاعة|9
+🔪|سكين متعددة الاستخدام|9
+⛺|خيمة|8
+🚰|٢٠ لتر ماء صالح للشرب|10
+🍞|فاكهة وخبز|6
+🩹|طقم إسعافات|8
+📡|جهاز إشارة طوارئ|10
+🧭|بوصلة|7
+🔭|مناظير|5
+🪢|حبل طويل|7
+🔌|مولد صغير|6
+📱|جوال بلا شبكة|2
+📖|كتاب|4
+🃏|لعبة ورق|3
+📷|كاميرا|3
+☂️|مظلة|6
+🧥|ملابس إضافية|5
+🗺️|خريطة|6
+🐕|كلب مخلص|8
+🪞|مرآة صغيرة للإشارة|6
+🥁|طبل|2`
+    },
+    {
+      id: 'mars', e: '🚀', title: 'رحلة المريخ', tag: 'جهّز مهمة الفضاء',
+      items: `
+🧑‍🚀|بدلة فضاء|10
+🚙|مركبة سطح|9
+🫧|خزان أكسجين|10
+☢️|مولد نووي صغير|9
+🌱|بيت زجاجي للزراعة|9
+🤖|روبوت مساعد|8
+🖨️|طابعة ثلاثية الأبعاد|8
+💧|مجسات المياه|9
+🚁|طائرة استكشاف مسيّرة|7
+🏥|مختبر طبي|8
+☀️|ألواح شمسية|7
+📡|اتصال بالأرض|8
+🥫|طعام مجفف لسنة|9
+🥬|بذور خضار|7
+🤳|كاميرا سيلفي|3
+🐈|قطة|5
+☕|قهوة سعودية|7
+🪖|خوذة إضافية|6
+📚|كتب|4
+📟|جهاز قياس الإشعاع|8`
+    }
+  ];
+
+  function parse(items) {
+    return items.trim().split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+      const p = l.split('|');
+      return { e: p[0], name: p[1], r: parseInt(p[2], 10) };
+    });
+  }
+
+  return RAW.map(c => ({ id: c.id, e: c.e, title: c.title, tag: c.tag, items: parse(c.items) }));
+});
+/* ===== DATA-END ===== */
+  return module.exports;
+})();
+const MZ_MAX = 8;
+const MZ_MIN = 2;
+const MZ_PICK_MS = 25000;       // اختيار القدرة
+const MZ_TURN_MS = 35000;       // دور مزاد مفتوح
+const MZ_SECRET_MS = 45000;     // العرض السرّي (الجولة الأولى)
+const MZ_REBID_MS = 30000;      // إعادة المزايدة بعد تعادل
+const MZ_SOLD_MS = 14000;       // شاشة «بِيع» قبل الانتقال التلقائي
+const MZ_GONE_MS = 6000;        // المنقطع: نفعل عنه بعد هذي المهلة
+const MZ_LOBBY_GRACE_MS = 60000;
+const MZ_MAX_ROOM_SEATS = 40;   // سقف سجلّ المقاعد (مقاعد الشاشات/الخارجين) — يمنع تضخّم التخزين
+
+function mzRand32() {
+  const b = new Uint32Array(1);
+  crypto.getRandomValues(b);
+  return b[0] >>> 0;
+}
+function mzDefaultCfg() {
+  return { cat: 'random', mode: 'open', budget: 20, size: 10, abilities: 'random', abVis: 'secret' };
+}
+/* إعداد المضيف: كل حقل يُتحقَّق منه منفردًا، والمرفوض يبقى على قيمته */
+function mzApplyCfg(cur, m) {
+  const out = Object.assign({}, cur);
+  if (typeof m.cat === 'string' && (m.cat === 'random' || D20_CATS.some(c => c.id === m.cat))) out.cat = m.cat;
+  if (typeof m.mode === 'string' && D20.MODES.indexOf(m.mode) >= 0) out.mode = m.mode;
+  if (Number.isInteger(m.budget) && D20.BUDGETS.indexOf(m.budget) >= 0) out.budget = m.budget;
+  if (Number.isInteger(m.size) && D20.SIZES.indexOf(m.size) >= 0) out.size = m.size;
+  if (typeof m.abilities === 'string' && D20.AB_MODES.indexOf(m.abilities) >= 0) out.abilities = m.abilities;
+  if (typeof m.abVis === 'string' && D20.AB_VIS.indexOf(m.abVis) >= 0) out.abVis = m.abVis;
+  return out;
+}
+
+export class MazadRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    try {
+      this.state.setWebSocketAutoResponse(
+        new WebSocketRequestResponsePair('{"type":"hb"}', '{"type":"hb-ok"}')
+      );
+    } catch {}
+    this.state.blockConcurrencyWhile(async () => {
+      this.room = (await this.state.storage.get('room')) || null;
+    });
+  }
+
+  /* ── التخزين والمنبّه ── */
+  async persist() {
+    if (!this.room) return;
+    this.room.lastSeen = Date.now();
+    try { await this.state.storage.put('room', this.room); } catch {}
+    await this.arm();
+  }
+  async arm() {
+    if (!this.room) return;
+    const now = Date.now();
+    let next = (this.room.lastSeen || now) + ROOM_TTL_MS;
+    if (next <= now) next = now + ROOM_TTL_MS;
+    if (this.room.tick) next = Math.min(next, Math.max(this.room.tick, now + 20));
+    try { await this.state.storage.setAlarm(next); } catch {}
+  }
+  async alarm() {
+    if (!this.room) return;
+    const now = Date.now();
+    if (this.room.tick && now >= this.room.tick - 60) {
+      this.room.tick = 0;
+      try {
+        if (this.room.phase === 'lobby') await this.pruneLobby();
+        else await this.step();
+      } catch {}
+      if (this.room) {
+        /* موعدٌ لم يتحرّك (حارسٌ رفض الحسم): لا نعيده كل ٢٠ms — نصف دقيقة */
+        if (this.room.tick && this.room.tick <= Date.now() + 20) this.room.tick = Date.now() + 30000;
+        await this.arm();
+      }
+      return;
+    }
+    const idle = now - (this.room.lastSeen || 0);
+    if (idle >= ROOM_TTL_MS && this.state.getWebSockets().length === 0) {
+      await this.state.storage.deleteAll();
+      this.room = null;
+      return;
+    }
+    await this.arm();
+  }
+
+  wsOf(id) {
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() || {};
+      if (a.id === id) return ws;
+    }
+    return null;
+  }
+  send(ws, o) { try { ws.send(JSON.stringify(o)); } catch {} }
+
+  uniqueName(raw) {
+    const n = cleanName(raw) || 'لاعب';
+    const taken = new Set((this.room.players || []).map(p => p.name));
+    if (!taken.has(n)) return n;
+    for (let i = 2; i < 60; i++) if (!taken.has(n + ' ' + i)) return n + ' ' + i;
+    return n + ' ' + (100 + (mzRand32() % 900));
+  }
+  newPlayer(name, url) {
+    const p = {
+      id: crypto.randomUUID().replace(/-/g, '').slice(0, 12),
+      name: this.uniqueName(name),
+      seatToken: crypto.randomUUID().replace(/-/g, ''),
+      connected: true,
+    };
+    this.noteAccount(url, p);
+    return p;
+  }
+  inGame(p) { const G = this.room.G; return !!(G && G.ids.indexOf(p.id) >= 0); }
+  /* من له مكان في الغرفة الآن (يُحسب للسعة): لا المطرود ولا من خرج، وبعد النهاية
+     لا يُحسب المنقطع من مقاعد المباراة (الجولة الجديدة لا تنتظره) */
+  present() {
+    const over = this.room.phase === 'over';
+    return (this.room.players || []).filter(p => !p.kicked && !p.left && !(over && p.connected === false && this.inGame(p)));
+  }
+  /* مقاعد المطرودين والخارجين تُكنس إلا ما تحتاجه المباراة الجارية (فهارسها بمعرّفاتهم) */
+  compact() {
+    const R = this.room;
+    R.players = R.players.filter(p => !(p.kicked || p.left) || (R.phase === 'play' && this.inGame(p)));
+  }
+
+  /* ── الإنشاء والاتصال ── */
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/create' && request.method === 'POST') {
+      let body = {};
+      try { body = await request.json(); } catch {}
+      if (!body || typeof body !== 'object') body = {};
+      if (this.room && (this.room.players || []).some(p => p.connected !== false && !p.kicked && !p.left)) {
+        return new Response('room-exists', { status: 409 });
+      }
+      const code = String(body.roomCode || '').toUpperCase();
+      this.room = {
+        code, phase: 'lobby', players: [], hostId: '', cfg: mzDefaultCfg(),
+        G: null, gameNo: 0, tick: 0, lastSeen: Date.now(),
+      };
+      const host = this.newPlayer(body.name, url);
+      this.room.players.push(host);
+      this.room.hostId = host.id;
+      await this.persist();
+      return Response.json({ roomCode: code, seatToken: host.seatToken, id: host.id });
+    }
+
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('expected-websocket', { status: 426 });
+    }
+    if (!this.room || !this.room.code) {
+      return this.refuse('ما فيه غرفة بهذا الرمز — تأكد منه أو أنشئ غرفة جديدة', 'notfound');
+    }
+
+    const token = url.searchParams.get('token') || '';
+    const name = url.searchParams.get('name') || 'لاعب';
+    let me = token ? this.seatByToken(token) : null;
+    if (me && me.left) me = null;
+
+    if (!me) {
+      if (this.room.phase === 'play') {
+        return this.refuse('المزاد بدأ — انتظر الجولة القادمة', 'started');
+      }
+      this.compact();
+      if (this.present().length >= MZ_MAX) {
+        /* مقعد محفوظ لمنقطع (غير المضيف) لا يقفل الغرفة في وجه داخلٍ حاضر */
+        const ghost = this.room.players.filter(p => p.connected === false && !p.kicked && !p.left && p.id !== this.room.hostId && !this.inGame(p))
+          .sort((a, b) => (a.goneAt || 0) - (b.goneAt || 0))[0];
+        if (ghost) this.room.players.splice(this.room.players.indexOf(ghost), 1);
+      }
+      if (this.present().length >= MZ_MAX || this.room.players.length >= MZ_MAX_ROOM_SEATS) {
+        return this.refuse('الغرفة ممتلئة', 'full');
+      }
+    }
+
+    const pair = new WebSocketPair();
+    const client = pair[0], server = pair[1];
+    this.state.acceptWebSocket(server);
+
+    if (me) {
+      me.connected = true;
+      delete me.goneAt;
+      this.noteAccount(url, me);
+    } else {
+      me = this.newPlayer(name, url);
+      this.room.players.push(me);
+      if (!this.room.hostId) this.room.hostId = me.id;
+    }
+
+    /* استلام المقعد بجيل (sid): حدث إغلاق المقبس القديم يصل متأخرًا فلا يطفئ الجديد */
+    me.sid = ((me.sid || 0) + 1) >>> 0;
+    for (const old of this.state.getWebSockets()) {
+      if (old === server) continue;
+      const oa = old.deserializeAttachment() || {};
+      if (oa.id === me.id) { try { old.close(1000, 'takeover'); } catch {} }
+    }
+    server.serializeAttachment({ id: me.id, sid: me.sid });
+    this.migrateHost();
+    if (this.room.phase === 'lobby') this.scheduleLobby();
+    /* عودة لاعب لغرفة واقفة (غاب الجميع) تعيد تشغيل الإيقاع */
+    if (this.room.phase === 'play' && this.room.G) { this.settle(); this.schedule(); }
+    await this.persist();
+
+    this.send(server, {
+      type: 'welcome',
+      roomCode: this.room.code,
+      seatToken: me.seatToken,
+      id: me.id,
+      seat: this.room.players.indexOf(me),
+      hostId: this.room.hostId,
+    });
+    this.pushAll();
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /* رفضٌ برسالة ثم إغلاق (مقاس على workerd: مقبس السبات يُقفل قبل 101 فلا يصل إغلاقه) */
+  refuse(message, reason) {
+    const p = new WebSocketPair();
+    const client = p[0], server = p[1];
+    server.accept();
+    try { server.send(JSON.stringify({ type: 'error', message })); } catch {}
+    try { server.close(1000, reason); } catch {}
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /* ───────────────────────── منطق المباراة ───────────────────────── */
+  gIdx(p) { const G = this.room.G; return G ? G.ids.indexOf(p.id) : -1; }
+  roomPlayerAt(i) { const G = this.room.G; return G ? (this.room.players || []).filter(p => p.id === G.ids[i])[0] : null; }
+  isAway(i) { const p = this.roomPlayerAt(i); return !p || p.connected === false || !!p.kicked || !!p.left; }
+  aliveCount() { const G = this.room.G; return G.out.filter(o => !o).length; }
+  anyoneHere() {
+    const G = this.room.G;
+    return !!G && G.ids.some((_, i) => !G.out[i] && !this.isAway(i));
+  }
+
+  /* بصمة المرحلة: base تتغيّر بتغيّر (عنصر/مرحلة/جولة تعادل) فيتصفّر «جاهز» ويزيد G.stage؛
+     وfull تضيف الدور والعرض في المزاد المفتوح فتبدأ مهلة كاملة لصاحب الدور الجديد */
+  syncStage() {
+    const G = this.room.G, s = G.s, a = s.auction;
+    const open = D20.isOpenStage(s);
+    const base = s.phase + '|' + s.cur + '|' + (a ? ((a.round || 0) + (open ? 'o' : 's')) : '');
+    const full = base + (open ? '|' + a.turn + '|' + a.bid : '');
+    if (G.base !== base) { G.base = base; G.stage++; G.ready = new Array(G.ids.length).fill(false); }
+    if (G.fp !== full) { G.fp = full; G.stageAt = Date.now(); }
+  }
+  stageMs() {
+    const s = this.room.G.s, a = s.auction;
+    if (s.phase === 'pick') return MZ_PICK_MS;
+    if (s.phase === 'sold') return MZ_SOLD_MS;
+    if (s.phase !== 'bid' || !a) return 0;
+    if (D20.isOpenStage(s)) return MZ_TURN_MS;
+    return a.round > 0 ? MZ_REBID_MS : MZ_SECRET_MS;
+  }
+  deadline() {
+    const G = this.room.G, ms = this.stageMs();
+    return ms ? G.stageAt + ms : 0;
+  }
+  goneSince(i) {
+    const G = this.room.G, p = this.roomPlayerAt(i);
+    return Math.max((p && p.goneAt) || 0, G.stageAt);
+  }
+
+  /* الفعل البديل عن غائب أو خارج: مرّر / عرض صفر / قدرة بالتناوب */
+  autoAct(i) {
+    const G = this.room.G, s = G.s;
+    if (s.phase === 'pick') return D20.pick(s, i, D20.ABILITIES[i % D20.ABILITIES.length]);
+    if (s.phase !== 'bid' || !s.auction) return { ok: false, error: 'phase' };
+    if (D20.isOpenStage(s)) return D20.pass(s, i);
+    return D20.submit(s, i, 0);
+  }
+
+  /* يُشغّل كل ما استحق: خارج ⇒ فورًا · منقطع ⇒ بعد مهلته · الكل ⇒ عند انتهاء المهلة.
+     يتكرر حتى الاستقرار فلا يبقى طور ينتظر من لن يردّ (درس طرد صاحب الدور). */
+  settle() {
+    const R = this.room, G = R.G;
+    if (R.phase !== 'play' || !G) return false;
+    let changed = false;
+    for (let guard = 0; guard < 600; guard++) {
+      const s = G.s;
+      this.syncStage();
+      if (s.phase === 'over') { this.finish(''); changed = true; break; }
+      if (this.aliveCount() < MZ_MIN) { this.finish('alone'); changed = true; break; }
+      if (!this.anyoneHere()) { G.paused = true; break; }
+      if (G.paused) { G.paused = false; G.stageAt = Date.now(); G.fp = ''; this.syncStage(); changed = true; }
+      const now = Date.now(), dl = this.deadline();
+      const late = dl > 0 && now >= dl - 30;
+      let acted = false;
+      if (s.phase === 'sold') {
+        const need = G.ids.map((_, i) => i).filter(i => !G.out[i] && !this.isAway(i));
+        if (late || (need.length && need.every(i => G.ready[i]))) {
+          const r = D20.next(s);
+          acted = !!r.ok;
+        }
+      } else {
+        const aw = D20.awaiting(s);
+        for (const i of aw) {
+          const gone = this.isAway(i) && now >= this.goneSince(i) + MZ_GONE_MS - 30;
+          if (G.out[i] || gone || late) {
+            const r = this.autoAct(i);
+            if (r.ok) { acted = true; break; }
+          }
+        }
+      }
+      if (!acted) break;
+      changed = true;
+    }
+    return changed;
+  }
+
+  /* أقرب موعد عمل: مهلة المرحلة، أو مهلة منقطع ننتظره */
+  nextWake() {
+    const R = this.room, G = R && R.G;
+    if (!R || R.phase !== 'play' || !G || G.paused || !this.anyoneHere()) return 0;
+    let t = this.deadline();
+    const s = G.s;
+    const aw = s.phase === 'sold' ? G.ids.map((_, i) => i).filter(i => !G.out[i] && !G.ready[i]) : D20.awaiting(s);
+    for (const i of aw) {
+      if (G.out[i]) return Date.now();
+      if (this.isAway(i)) {
+        const e = this.goneSince(i) + MZ_GONE_MS;
+        if (!t || e < t) t = e;
+      }
+    }
+    return t;
+  }
+  schedule() {
+    const R = this.room;
+    if (!R) return;
+    R.tick = R.phase === 'play' ? (this.nextWake() || 0) : (R.phase === 'lobby' ? R.tick : 0);
+  }
+
+  finish(ended) {
+    const R = this.room, G = R.G;
+    if (ended) { G.s.phase = 'over'; G.s.auction = null; }
+    G.ended = ended;
+    G.votes = {};
+    R.phase = 'over';
+    R.tick = 0;
+  }
+
+  async step() {
+    const R = this.room;
+    if (!R || !R.G || R.phase !== 'play') return;
+    const changed = this.settle();
+    this.schedule();
+    await this.persist();
+    if (changed) this.pushAll();
+  }
+
+  /* ── العرض ── */
+  votesOf(G) {
+    const n = G.ids.length, counts = new Array(n).fill(0);
+    for (const v of Object.keys(G.votes || {})) {
+      const t = G.votes[v];
+      if (Number.isInteger(t) && t >= 0 && t < n) counts[t]++;
+    }
+    const top = Math.max(0, ...counts);
+    const leaders = top > 0 ? counts.map((c, i) => (c === top ? i : -1)).filter(i => i >= 0) : [];
+    return { counts, leaders };
+  }
+  viewFor(seat) {
+    const R = this.room, G = R.G;
+    const mePl = (R.players || [])[seat];
+    const v = {
+      type: 'state', phase: R.phase, seat, id: mePl ? mePl.id : '', code: R.code, hostId: R.hostId, cfg: R.cfg,
+      players: (R.players || []).filter(p => !p.kicked && !p.left).map(p => ({
+        id: p.id, name: p.name, connected: p.connected !== false,
+      })),
+      g: null,
+    };
+    if (G) {
+      const me = mePl ? G.ids.indexOf(mePl.id) : -1;
+      const vt = this.votesOf(G);
+      const dl = R.phase === 'play' ? this.deadline() : 0;
+      const s = D20.redact(G.s, me);
+      v.g = {
+        no: R.gameNo, stage: G.stage, catId: G.catId, me, ended: G.ended || '',
+        out: G.out.slice(), ready: G.ready.slice(),
+        aw: R.phase === 'play' && G.s.phase !== 'sold' ? D20.awaiting(G.s) : [],   // من ننتظره (لا يكشف شيئًا: غير المثبّتين/غير المختارين/صاحب الدور)
+        conn: G.ids.map((_, i) => !this.isAway(i)),
+        left: dl ? Math.max(0, dl - Date.now()) : 0,
+        votes: vt.counts, leaders: vt.leaders, myVote: me >= 0 && Number.isInteger(G.votes[me]) ? G.votes[me] : -1,
+        s,
+      };
+    }
+    return v;
+  }
+  pushAll() {
+    for (const ws of this.state.getWebSockets()) {
+      const a = ws.deserializeAttachment() || {};
+      const seat = (this.room.players || []).findIndex(p => p.id === a.id);
+      if (seat < 0) continue;
+      this.send(ws, this.viewFor(seat));
+    }
+  }
+
+  /* ── الردهة: مقاعد المنقطعين المحفوظة ── */
+  scheduleLobby() {
+    const R = this.room;
+    let t = 0;
+    for (const p of R.players || []) {
+      if (p.connected !== false || !p.goneAt) continue;
+      const e = p.goneAt + MZ_LOBBY_GRACE_MS;
+      if (!t || e < t) t = e;
+    }
+    R.tick = t;
+  }
+  async pruneLobby() {
+    const R = this.room, now = Date.now();
+    if (R.phase !== 'lobby') return;
+    const before = R.players.length;
+    R.players = R.players.filter(p =>
+      !(p.connected === false && (!p.goneAt || now - p.goneAt >= MZ_LOBBY_GRACE_MS - 60)));
+    this.migrateHost();
+    this.scheduleLobby();
+    await this.persist();
+    if (R.players.length !== before) this.pushAll();
+  }
+
+  /* ── بدء مباراة ── */
+  begin() {
+    const R = this.room;
+    R.players = R.players.filter(p => p.connected !== false && !p.kicked && !p.left);
+    if (R.players.length < MZ_MIN) return false;
+    if (R.players.length > MZ_MAX) {
+      for (const extra of R.players.slice(MZ_MAX)) {
+        const ws = this.wsOf(extra.id);
+        if (ws) { this.send(ws, { type: 'error', message: 'الغرفة ممتلئة' }); try { ws.close(1000, 'full'); } catch {} }
+      }
+      R.players = R.players.slice(0, MZ_MAX);
+    }
+    if (!R.players.some(p => p.id === R.hostId)) this.migrateHost();
+    const cfg = R.cfg;
+    const rnd = D20.mulberry32(mzRand32());
+    const cat = cfg.cat === 'random' ? D20_CATS[Math.floor(rnd() * D20_CATS.length)] : (D20_CATS.find(c => c.id === cfg.cat) || D20_CATS[0]);
+    let s;
+    try {
+      s = D20.create({
+        names: R.players.map(p => p.name), mode: cfg.mode, budget: cfg.budget, seed: mzRand32(),
+        abilities: cfg.abilities, abVis: cfg.abVis, sim: true,
+        deck: D20.pickDeck(cat.items, Math.min(cfg.size, cat.items.length), rnd),
+      });
+    } catch { return false; }
+    R.gameNo = (R.gameNo || 0) + 1;
+    const n = R.players.length;
+    R.G = {
+      s, ids: R.players.map(p => p.id), out: new Array(n).fill(false), ready: new Array(n).fill(false),
+      catId: cat.id, stage: 1, base: '', fp: '', stageAt: Date.now(), paused: false, ended: '', votes: {},
+    };
+    R.phase = 'play';
+    R.tick = 0;
+    this.syncStage();
+    this.settle();
+    this.schedule();
+    return true;
+  }
+
+  /* خروجٌ من اللعبة (طرد أو انسحاب): المقعد يبقى للعرض ويُنفَّذ عنه تلقائيًا ثم تُفحص النهاية */
+  dropFromGame(p) {
+    const R = this.room, G = R.G;
+    const i = R.players.indexOf(p);
+    if (R.phase === 'lobby') {
+      if (i >= 0) R.players.splice(i, 1);
+      this.scheduleLobby();
+      return;
+    }
+    if (!G) return;
+    const gi = G.ids.indexOf(p.id);
+    if (gi < 0) { if (i >= 0) R.players.splice(i, 1); return; }   // دخل بعد النهاية: يُشطب
+    G.out[gi] = true;
+    G.ready[gi] = true;
+    if (G.votes) { delete G.votes[gi]; for (const k of Object.keys(G.votes)) if (G.votes[k] === gi) delete G.votes[k]; }
+    if (R.phase === 'play') { this.settle(); this.schedule(); }
+  }
+
+  async kickPlayer(targetId) {
+    const v = (this.room.players || []).filter(p => p.id === targetId)[0];
+    if (!v) return;
+    v.kicked = true; v.connected = false;
+    v.seatToken = 'kicked-' + crypto.randomUUID().replace(/-/g, '');
+    const ws = this.wsOf(targetId);
+    if (ws) {
+      this.send(ws, { type: 'error', message: 'طردك المضيف من الغرفة' });
+      try { ws.close(1000, 'kicked'); } catch {}
+    }
+    this.dropFromGame(v);
+    this.migrateHost();
+    await this.persist();
+    this.pushAll();
+  }
+
+  /* ── الرسائل ── */
+  async webSocketMessage(ws, raw) {
+    if (!this.room) return;
+    let m; try { m = JSON.parse(raw); } catch { return; }
+    if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.type !== 'string' || m.type === 'hb') return;
+
+    const a = ws.deserializeAttachment() || {};
+    const me = (this.room.players || []).filter(p => p.id === a.id)[0];
+    if (!me || me.kicked || me.left) return;
+    if (a.sid && me.sid && a.sid !== me.sid) return;       // مقبس قديم لنفس المقعد
+    if (!this.allowMsg(me.id)) return;
+
+    const R = this.room;
+    const seat = R.players.indexOf(me);
+    const isHost = R.hostId === me.id;
+
+    if (m.type === 'sync') return this.send(ws, this.viewFor(seat));
+
+    if (m.type === 'cfg') {
+      if (!isHost) return this.send(ws, { type: 'error', message: 'المضيف وحده يغيّر الإعدادات' });
+      if (R.phase === 'play') return;
+      const next = mzApplyCfg(R.cfg, m);
+      if (JSON.stringify(next) === JSON.stringify(R.cfg)) return;
+      R.cfg = next;
+      await this.persist();
+      this.pushAll();
+      return;
+    }
+
+    if (m.type === 'start' || m.type === 'again') {
+      if (!isHost) return this.send(ws, { type: 'error', message: 'المضيف وحده يبدأ' });
+      if ((m.type === 'start' && R.phase !== 'lobby') || (m.type === 'again' && R.phase !== 'over')) return;
+      if (!this.begin()) {
+        if (m.type === 'again') { R.phase = 'lobby'; R.G = null; R.tick = 0; this.scheduleLobby(); }
+        this.send(ws, { type: 'error', message: m.type === 'again' ? 'تحتاج لاعبًا ثانيًا — رجعنا للردهة' : 'تحتاج لاعبًا ثانيًا على الأقل' });
+      }
+      await this.persist();
+      this.pushAll();
+      return;
+    }
+
+    if (m.type === 'lobby') {
+      if (!isHost || R.phase !== 'over') return;
+      R.players = R.players.filter(p => p.connected !== false && !p.kicked && !p.left);
+      this.migrateHost();
+      R.phase = 'lobby'; R.G = null; R.tick = 0;
+      this.scheduleLobby();
+      await this.persist();
+      this.pushAll();
+      return;
+    }
+
+    if (m.type === 'leave') {
+      me.left = true; me.connected = false;
+      me.seatToken = 'left-' + crypto.randomUUID().replace(/-/g, '');
+      this.dropFromGame(me);
+      this.migrateHost();
+      try { ws.close(1000, 'left'); } catch {}
+      await this.persist();
+      this.pushAll();
+      return;
+    }
+
+    if (m.type === 'vote') {
+      const G = R.G;
+      if (R.phase !== 'over' || !G || G.ended) return;
+      const i = G.ids.indexOf(me.id);
+      if (i < 0 || G.out[i]) return;
+      const t = m.to;
+      if (!Number.isInteger(t) || t < -1 || t >= G.ids.length || t === i) return;   // لا صوت لنفسك
+      if (t >= 0 && G.out[t]) return;
+      if (t === -1) delete G.votes[i]; else G.votes[i] = t;
+      await this.persist();
+      this.pushAll();
+      return;
+    }
+
+    if (['bid', 'pass', 'submit', 'pick', 'arm', 'ready'].indexOf(m.type) >= 0) {
+      return this.act(ws, me, seat, m);
+    }
+  }
+
+  async act(ws, me, seat, m) {
+    const R = this.room, G = R.G;
+    if (R.phase !== 'play' || !G) return;
+    const i = G.ids.indexOf(me.id);
+    if (i < 0 || G.out[i]) return;
+    const s = G.s;
+    /* رقم المرحلة يمنع فعلًا متأخرًا من حالة قديمة: عرضٌ سرّي أُرسل للعنصر السابق ووصل
+       بعد ما حسم الخادم عنه كان سيُحسب للعنصر الجديد */
+    if (m.stage !== G.stage) return this.send(ws, this.viewFor(seat));
+    let r;
+    if (m.type === 'bid' || m.type === 'pass') {
+      if (!D20.isOpenStage(s) || m.at !== s.auction.bid) return this.send(ws, this.viewFor(seat));
+      r = m.type === 'bid' ? D20.bid(s, i, m.amount) : D20.pass(s, i);
+    } else if (m.type === 'submit') r = D20.submit(s, i, m.amount);
+    else if (m.type === 'pick') r = D20.pick(s, i, m.key);
+    else if (m.type === 'arm') r = D20.arm(s, i, m.on);
+    else if (m.type === 'ready') {
+      if (s.phase !== 'sold') return;
+      G.ready[i] = true; r = { ok: true };
+    }
+    if (!r || !r.ok) return this.send(ws, Object.assign({}, this.viewFor(seat), { type: 'rejected', code: (r && r.error) || 'bad' }));
+    this.settle();
+    this.schedule();
+    await this.persist();
+    this.pushAll();
+  }
+
+  /* المضيف ينتقل لأقدم حاضر متصل */
+  migrateHost() {
+    const R = this.room, list = R.players || [], now = Date.now();
+    const here = p => p && p.connected !== false && !p.kicked && !p.left && !p.isBot;
+    const waiting = p => p && R.phase === 'lobby' && p.connected === false && !p.kicked && !p.left
+      && p.goneAt && now - p.goneAt < MZ_LOBBY_GRACE_MS;
+    const host = list.filter(p => p.id === R.hostId)[0];
+    if (here(host) || waiting(host)) return false;
+    const next = list.filter(here)[0];
+    if (!next || next.id === this.room.hostId) return false;
+    this.room.hostId = next.id;
+    return true;
+  }
+
+  /* راية «متصل» المحفوظة لا تُصدَّق بعد إعادة الإقلاع (bootSweep): نسجّل لحظة الغياب
+     لتبدأ منها مهلة المنقطع، ثم نعيد حساب المرحلة */
+  onBootGhost(p, now) { if (!p.goneAt) p.goneAt = now; }
+  maybeAdvanceOnDisconnect() {
+    if (!this.room || this.room.phase !== 'play') return null;
+    return this.step();
+  }
+
+  async webSocketClose(ws) {
+    if (!this.room) return;
+    const a = ws.deserializeAttachment() || {};
+    const p = (this.room.players || []).filter(q => q.id === a.id)[0];
+    if (!p) return;
+    if (a.sid && p.sid && a.sid !== p.sid) return;
+    p.connected = false;
+    p.goneAt = Date.now();
+    if (this.room.phase === 'lobby') this.scheduleLobby();
+    this.migrateHost();
+    /* غياب صاحب الدور يقصّر مهلته، وغياب الجميع يوقف المنبّه، وآخر من لم يثبّت قد
+       يكون هذا الغائب فيُحسم بعد مهلته */
+    if (this.room.phase === 'play') { this.settle(); this.schedule(); }
+    await this.persist();
+    this.pushAll();
+  }
+  async webSocketError(ws) { return this.webSocketClose(ws); }
+}
+applyRoomCommon(MazadRoom, 'mazad');
+
+/* ==== MAZAD-END ==== */
 
 /* ============================ Durable Object ============================ */
 export class ShifraRoom {
